@@ -12,7 +12,12 @@ def main() -> None:
     print("[1/6] parsing arguments ...", flush=True)
     parser = argparse.ArgumentParser()
     parser.add_argument("--rgb", required=True)
-    parser.add_argument("--depth", required=True)
+    parser.add_argument("--depth")
+    parser.add_argument("--auto-depth", action="store_true", help="estimate depth from RGB when --depth is not supplied")
+    parser.add_argument("--depth-provider", choices=["distill_base_518", "luma"], default="distill_base_518")
+    parser.add_argument("--depth-cache-dir", default=None)
+    parser.add_argument("--depth-local-only", action="store_true")
+    parser.add_argument("--depth-force-download", action="store_true")
     parser.add_argument("--out-dir", default="outputs/compare")
     parser.add_argument("--device", default=None)
     parser.add_argument("--output-format", choices=["half_sbs", "full_sbs"], default="half_sbs")
@@ -24,6 +29,8 @@ def main() -> None:
     import torch
 
     print("[3/6] importing stereo_lab ...", flush=True)
+    from stereo_lab.auto_depth import estimate_luma_depth
+    from stereo_lab.depth_provider import estimate_distill_any_depth_base_518
     from stereo_lab.io import load_depth, load_rgb, save_depth, save_rgb
     from stereo_lab.report import absdiff, basic_image_metrics, make_contact_sheet, write_json
     from stereo_lab.synthesis import StereoConfig, synthesize_stereo
@@ -34,7 +41,36 @@ def main() -> None:
 
     print("[4/6] loading inputs ...", flush=True)
     rgb = load_rgb(args.rgb, device=device)
-    depth = load_depth(args.depth, device=device)
+    depth_source = args.depth or f"auto_{args.depth_provider}"
+    depth_provider_report = {"provider": "file"}
+    if args.depth:
+        depth = load_depth(args.depth, device=device)
+    elif args.auto_depth:
+        if args.depth_provider == "distill_base_518":
+            print("[info] using Distill-Any-Depth-Base @ 518", flush=True)
+            print("[info] model id: lc700x/Distill-Any-Depth-Base-hf", flush=True)
+            print("[info] load mode: network-enabled", flush=True)
+            depth, provider_info = estimate_distill_any_depth_base_518(
+                rgb,
+                device=device,
+                cache_dir=args.depth_cache_dir,
+                local_files_only=args.depth_local_only,
+                force_download=args.depth_force_download,
+            )
+            depth_provider_report = provider_info.to_report()
+        else:
+            print("[warn] using luma pseudo-depth; this is not a real depth model", flush=True)
+            depth = estimate_luma_depth(rgb)
+            depth_provider_report = {
+                "provider": "luma_pseudo_depth",
+                "model_name": "none",
+                "model_id": "none",
+                "depth_resolution": "input",
+                "cache_dir": "none",
+                "load_mode": "local_math",
+            }
+    else:
+        raise SystemExit("missing --depth. Provide a depth image or pass --auto-depth.")
     out_dir = Path(args.out_dir)
 
     configs = [
@@ -45,7 +81,8 @@ def main() -> None:
     results = {}
     report = {
         "rgb": str(args.rgb),
-        "depth": str(args.depth),
+        "depth": str(depth_source),
+        "depth_provider": depth_provider_report,
         "output_format": args.output_format,
         "depth_strength": args.depth_strength,
         "convergence": args.convergence,
@@ -56,6 +93,7 @@ def main() -> None:
 
     print("[5/6] synthesizing methods ...", flush=True)
     with torch.inference_mode():
+        save_depth(depth.cpu(), out_dir / "used_depth.png")
         for config in configs:
             result = synthesize_stereo(rgb, depth, config)
             key = f"{config.backend}_{args.output_format}"

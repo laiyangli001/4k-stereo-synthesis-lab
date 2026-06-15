@@ -6,6 +6,8 @@ requires-python = ">=3.10"
 dependencies = [
   "torch",
   "pillow",
+  "transformers",
+  "onnx",
 ]
 
 [tool.pytest.ini_options]

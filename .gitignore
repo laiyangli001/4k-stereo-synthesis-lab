@@ -11,6 +11,7 @@ dist/
 *.egg-info/
 outputs/
 benchmarks/output/
+models/
 samples/private/
 *.mp4
 *.mkv
