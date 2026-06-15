@@ -3,11 +3,11 @@ chcp 65001>nul
 setlocal
 
 set "LAB_DIR=%~dp0.."
-set "D2S_DIR=%LAB_DIR%\..\Desktop2Stereo_v2.4.2_Windows_NVIDIA\Desktop2Stereo"
-set "PYTHON_EXE=%D2S_DIR%\python3\python.exe"
+set "PYTHON_EXE=%LAB_DIR%\python3\python.exe"
 
 if not exist "%PYTHON_EXE%" (
   echo [Error] Python not found: %PYTHON_EXE%
+  echo [Hint] Copy Desktop2Stereo\python3 into this lab as python3 first.
   pause
   exit /b 1
 )
@@ -18,7 +18,7 @@ echo        %PYTHON_EXE%
 echo [Info] First torch/CUDA import may take several minutes on low-end machines.
 echo.
 
-pushd "%D2S_DIR%"
+pushd "%LAB_DIR%"
 "%PYTHON_EXE%" "%LAB_DIR%\scripts\smoke_test.py"
 set "EXIT_CODE=%ERRORLEVEL%"
 popd
