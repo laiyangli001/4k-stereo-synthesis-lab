@@ -133,6 +133,86 @@ StereoConfig(
 | `anaglyph_method` | `StereoConfig.anaglyph_method` |
 | OpenXR `pose/fov/roll` | `OpenXREyeView`, `OpenXRFov`, `OpenXRScreenPose`, `OpenXRRenderConfig.screen_roll` |
 
+## Auto Mode 自动模式
+
+GUI 默认应使用 `Auto Mode`，手动选择模式作为高级选项保留。目标是让普通用户不需要理解 Cinema、Game、Still Image/HQ 的差异，也能在多数场景下获得合适参数。
+
+Auto Mode 不应该试图“完全猜中用户意图”，而应该做低风险的场景分类：
+
+```text
+Auto Mode
+-> Cinema
+-> Game / Low Latency
+-> Still Image / HQ
+-> Debug / Export
+```
+
+可检测信号：
+
+- 画面运动强度：连续帧差很小，倾向 Still Image / HQ；中等变化且节奏稳定，倾向 Cinema；高频快速变化，倾向 Game / Low Latency。
+- 前台进程 / 窗口类型：播放器进程倾向 Cinema；游戏、全屏 DirectX/Vulkan/OpenGL 窗口倾向 Game / Low Latency。
+- 帧率和延迟压力：24/30/60fps 稳定视频倾向 Cinema；高 FPS、强交互、低延迟要求倾向 Game / Low Latency。
+- 静止时长：画面静止超过 `1.0-2.0` 秒，倾向 Still Image / HQ；恢复运动后回到 Cinema 或 Game / Low Latency。
+- OpenXR 状态：只要处于 HMD/OpenXR 输出，参数应整体偏保守，避免过强视差、temporal lag 和错深度。
+- 用户动作：进入截图、导出、视觉回归时，倾向 Still Image / HQ 或 Debug / Export。
+
+推荐默认分类规则：
+
+```text
+if user_export_action:
+    mode = Debug / Export
+elif still_duration > 1.0-2.0 seconds:
+    mode = Still Image / HQ
+elif game_or_fast_interaction_detected:
+    mode = Game / Low Latency
+elif player_or_stable_video_detected:
+    mode = Cinema
+else:
+    mode = Cinema
+```
+
+模式切换必须防抖，不能频繁跳变：
+
+- 连续 N 帧满足条件后才切换。
+- 切换后至少保持 `2-5` 秒。
+- 参数使用渐变，不要瞬间跳变。
+- 检测到 scene reset 或剧烈变化时，可以快速降级到 Game / Low Latency。
+- 从 Game / Low Latency 回到 Cinema 或 Still Image / HQ 时应更慢，避免来回振荡。
+
+建议 GUI 暴露：
+
+```text
+模式:
+- Auto 推荐
+- Cinema
+- Game / Low Latency
+- Still Image / HQ
+- Debug / Export
+```
+
+Auto Mode 内部可以维护一个轻量状态机：
+
+```text
+AutoSceneClassifier:
+    frame_motion_score
+    scene_cut_score
+    still_duration
+    foreground_process
+    fullscreen_state
+    openxr_active
+    user_export_action
+```
+
+状态机输出：
+
+```text
+StereoModePreset
+StereoConfig
+OpenXRRenderConfig
+```
+
+原则：默认 Auto，手动模式给高级用户；自动模式负责减少普通用户误选模式导致的画质、延迟或舒适度问题。
+
 ## 视觉回归调参方法
 
 最优参数可以通过视觉回归测试判断，但不能只看一张图。单张 4K 图只能判断当前画面是否更好，不能代表所有视频、播放器和 VR 场景的全局最优。
