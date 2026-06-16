@@ -14,8 +14,10 @@ def main() -> None:
     parser.add_argument("--rgb", required=True)
     parser.add_argument("--depth")
     parser.add_argument("--auto-depth", action="store_true", help="estimate depth from RGB when --depth is not supplied")
-    parser.add_argument("--depth-provider", choices=["distill_base_518", "luma"], default="distill_base_518")
+    parser.add_argument("--depth-provider", choices=["distill_base_518", "distill_base_nvidia", "luma"], default="distill_base_518")
     parser.add_argument("--depth-cache-dir", default=None)
+    parser.add_argument("--depth-onnx", default=None)
+    parser.add_argument("--no-pytorch-fallback", action="store_true")
     parser.add_argument("--depth-local-only", action="store_true")
     parser.add_argument("--depth-force-download", action="store_true")
     parser.add_argument("--out-dir", default="outputs/compare")
@@ -30,6 +32,7 @@ def main() -> None:
 
     print("[3/6] importing stereo_lab ...", flush=True)
     from stereo_lab.auto_depth import estimate_luma_depth
+    from stereo_lab.depth_onnx_provider import estimate_distill_any_depth_base_518_nvidia
     from stereo_lab.depth_provider import estimate_distill_any_depth_base_518
     from stereo_lab.io import load_depth, load_rgb, save_depth, save_rgb
     from stereo_lab.report import absdiff, basic_image_metrics, make_contact_sheet, write_json
@@ -46,7 +49,20 @@ def main() -> None:
     if args.depth:
         depth = load_depth(args.depth, device=device)
     elif args.auto_depth:
-        if args.depth_provider == "distill_base_518":
+        if args.depth_provider == "distill_base_nvidia":
+            print("[info] using Distill-Any-Depth-Base @ 518", flush=True)
+            print("[info] backend priority: onnx_cuda -> pytorch_cuda", flush=True)
+            depth, provider_info = estimate_distill_any_depth_base_518_nvidia(
+                rgb,
+                device=device,
+                cache_dir=args.depth_cache_dir,
+                onnx_path=args.depth_onnx,
+                allow_pytorch_fallback=not args.no_pytorch_fallback,
+                local_files_only=args.depth_local_only,
+                force_download=args.depth_force_download,
+            )
+            depth_provider_report = provider_info.to_report()
+        elif args.depth_provider == "distill_base_518":
             print("[info] using Distill-Any-Depth-Base @ 518", flush=True)
             print("[info] model id: lc700x/Distill-Any-Depth-Base-hf", flush=True)
             print("[info] load mode: network-enabled", flush=True)

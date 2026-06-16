@@ -289,17 +289,194 @@ def rgb_to_stereo(rgb, depth_config, stereo_config):
 
 ## 接下来要实现的功能
 
+## 2026-06-16 追加进度
+
+### 已完成：P0 深度图对比工作流第一步
+
+- `scripts/generate_depth_map.py` 支持重复 `--provider`，当前可选 `distill_base_518` 和 `luma`。
+- `scripts/generate_depth_map.py` 支持重复 `--reference-depth`，也支持 `name=path` 命名参考深度。
+- `depth_report.json` 新增机器可读 `summary`，包含 depth histogram、edge density、foreground/background separation 等指标。
+- `depth_report.json` 仍保留旧版 `depth_provider`、`outputs.depth`、`outputs.depth_color`、`outputs.depth_shape` 字段，避免旧脚本读取失败。
+- 新增 `scripts/batch_generate_depth_maps.py`，支持 `--rgb` 多图或 `--rgb-dir` 批量生成每张图独立 depth 报告。
+- 新增 `scripts/run_visible_batch_generate_depth.bat`，用于可见窗口批量生成 Distill depth。
+
+验证：
+
+```powershell
+.\python3\python.exe -B -c "import ast, pathlib; files=list(pathlib.Path('src').rglob('*.py'))+list(pathlib.Path('scripts').rglob('*.py'))+list(pathlib.Path('tests').rglob('*.py')); [ast.parse(p.read_text(encoding='utf-8'), filename=str(p)) for p in files]; print('syntax ok', len(files), 'files')"
+.\python3\python.exe -B -m pytest -q
+.\python3\python.exe -B scripts\generate_depth_map.py --rgb outputs\demo\fast_half_sbs.png --provider luma --out-dir outputs\depth_luma_smoke --device cpu
+.\python3\python.exe -B scripts\batch_generate_depth_maps.py --rgb outputs\demo\fast_half_sbs.png --provider luma --out-dir outputs\depth_batch_luma_smoke --device cpu
+```
+
+### 已完成：NVIDIA depth backend fallback 骨架
+
+- 新增 `src/stereo_lab/depth_onnx_provider.py`。
+- 新增 `distill_base_nvidia` provider，backend 优先级为：
+
+```text
+onnx_cuda -> pytorch_cuda
+```
+
+- `scripts/generate_depth_map.py`、`scripts/compare_methods.py`、`scripts/batch_generate_depth_maps.py` 已支持 `--provider distill_base_nvidia`。
+- 可见窗口入口 `run_visible_generate_depth.bat` 和 `run_visible_batch_generate_depth.bat` 默认改为 NVIDIA fallback provider。
+- `depth_report.json` 的 `depth_provider` 会记录：
+  - `depth_backend`
+  - `runtime`
+  - `onnx_path`
+  - `execution_provider`
+  - `fallback_reason`
+
+当前验证：
+
+```powershell
+.\python3\python.exe -B scripts\generate_depth_map.py --rgb outputs\demo\fast_half_sbs.png --provider distill_base_nvidia --out-dir outputs\depth_nvidia_provider_smoke --device cuda --depth-local-only
+```
+
+当前环境结果：
+
+```json
+{
+  "depth_backend": "onnx_cuda",
+  "runtime": "onnxruntime",
+  "execution_provider": "CUDAExecutionProvider",
+  "fallback_reason": null
+}
+```
+
+说明：已通过 `onnxruntime-gpu[cuda,cudnn]` 补齐 ONNX Runtime GPU 依赖。pip 当前解析为 `onnxruntime-gpu 1.26.0` + CUDA 12.9/cuDNN 9 runtime，和项目现有 PyTorch CUDA 12.x 环境匹配。`distill_base_nvidia` 已能真正使用 `CUDAExecutionProvider`。
+
+ONNX 与 PyTorch 对齐验证：
+
+```powershell
+.\python3\python.exe -B scripts\test_distill_base_onnx.py --rgb outputs\demo\fast_half_sbs.png --device cuda --out-dir outputs\onnx_distill_smoke
+```
+
+结果：
+
+```json
+{
+  "providers_used": ["CUDAExecutionProvider", "CPUExecutionProvider"],
+  "metrics": {
+    "mae": 0.0013555270852521062,
+    "mse": 0.000003387340484550805,
+    "psnr": 54.701409339904785
+  }
+}
+```
+
+### 已完成：独立 CUDA 13 nightly 实验环境
+
+目的：不污染稳定 `python3` 主环境，单独验证最新 NVIDIA 栈。
+
+独立环境：
+
+```text
+python-cu13/
+```
+
+已安装并验证：
+
+| 组件 | 版本 |
+|---|---|
+| Python | 3.14.6 |
+| PyTorch | 2.14.0.dev20260615+cu130 |
+| TorchVision | 0.29.0.dev20260615+cu130 |
+| TorchAudio | 2.11.0.dev20260615+cu130 |
+| ONNX Runtime GPU | 1.27.0 |
+| Transformers | 5.12.1 |
+| ONNX | 1.22.0 |
+
+RTX 2060 实测：
+
+```text
+torch cuda: 13.0
+cuda available: True
+device: NVIDIA GeForce RTX 2060
+```
+
+ONNX CUDA 对齐测试：
+
+```powershell
+.\python-cu13\python.exe -B scripts\test_distill_base_onnx.py --rgb outputs\demo\fast_half_sbs.png --device cuda --out-dir outputs\onnx_distill_cu13_smoke
+```
+
+结果：
+
+```json
+{
+  "providers_used": ["CUDAExecutionProvider", "CPUExecutionProvider"],
+  "metrics": {
+    "mae": 0.0010626752628013492,
+    "mse": 0.0000019673220776894595,
+    "psnr": 57.06124305725098
+  }
+}
+```
+
+复现脚本：
+
+```powershell
+.\scripts\setup_cuda13_nightly_env.ps1
+.\scripts\run_cuda13_onnx_smoke.ps1
+```
+
+## 当前架构决策
+
+### 1. 运行环境分层
+
+当前保留两条 NVIDIA 环境线：
+
+| 环境 | 目录 | 角色 | 状态 |
+|---|---|---|---|
+| 稳定主线 | `python3/` | CUDA 12.x，日常开发与稳定验证 | 已跑通 PyTorch CUDA、ONNX CUDA |
+| 最新实验线 | `python-cu13/` | Python 3.14.6 + PyTorch nightly cu130 + ORT 1.27 | 已跑通 RTX 2060 + ONNX CUDA |
+
+`python3/` 和 `python-cu13/` 都不上传 GitHub。`models/`、`outputs/`、`downloads/` 也不上传。
+
+### 2. 模型与部署分层
+
+建议最终发布拆成三类包：
+
+| 包 | 是否带 PyTorch | 用途 |
+|---|---|---|
+| Runtime 包 | 否 | 只运行已准备好的 ONNX / TensorRT |
+| Model Prep 包 | 是 | 用户首次下载模型、导出 ONNX、构建 TensorRT |
+| Dev 包 | 是 | 开发、debug、benchmark、对齐测试 |
+
+部署主路径建议：
+
+```text
+TensorRT FP16 -> ONNX CUDA -> PyTorch CUDA fallback
+```
+
+正式 runtime 可以不带 PyTorch；但如果要求用户本地下载模型并导出 ONNX/TensorRT，则需要单独提供 Model Prep 环境或脚本。
+
+### 3. ONNX 与 TensorRT 的关系
+
+- ONNX 不是替代 TensorRT，而是模型交换格式和 TensorRT fallback。
+- ONNX Runtime 普通 `session.run()` 默认输出 CPU numpy；实时路径应补 `IOBinding`，避免 GPU->CPU 拷贝。
+- TensorRT 更适合作为最终全 GPU pipeline 主路径。
+- TensorRT build fail 不代表 ONNX CUDA 必然 fail；两者失败原因不同，因此 ONNX CUDA fallback 仍有价值。
+
+## 剩余工作
+
 ### P0：深度图对比工作流完善
 
 目标：先把“哪个 depth 更适合 3D”判断清楚。
 
-待做：
+已完成：
 
 - 增加批量 depth 生成脚本。
 - 支持同一 RGB 下多个 depth provider 的 contact sheet。
 - 增加 depth histogram、edge consistency、foreground separation 等指标。
-- 支持把 iw3 / Desktop2Stereo 生成的 depth 或参考 depth 放进同一报告。
 - 给 `depth_report.json` 增加机器可读 summary 字段。
+
+待做：
+
+- 支持把 iw3 / Desktop2Stereo 生成的 depth 或参考 depth 放进同一报告并形成固定评测集。
+- 增加跨环境 depth 输出对比：`python3` 稳定线 vs `python-cu13` latest 线。
+- 增加真实图片批量评估样例，不只用 demo 输出图。
 
 ### P0：TensorRT 路线
 
@@ -316,8 +493,20 @@ models/models--lc700x--Distill-Any-Depth-Base-hf/model_fp16_294x518.trt
 ```
 
 - 新增 `src/stereo_lab/depth_trt_provider.py`。
-- 实现优先 TensorRT、失败回退 PyTorch 的 depth provider。
-- 报告中记录 `depth_backend = tensorrt | pytorch`。
+- 实现优先 TensorRT、失败回退 ONNX CUDA、再回退 PyTorch CUDA 的 depth provider。
+- 报告中记录 `depth_backend = tensorrt | onnx_cuda | pytorch_cuda`。
+- 对比 `PyTorch CUDA / ONNX CUDA session.run / ONNX CUDA IOBinding / TensorRT FP16` 的单帧耗时、显存和端到端 FPS。
+
+### P0：ONNX IOBinding
+
+目标：验证 ONNX CUDA fallback 是否能避免 CPU copy。
+
+待做：
+
+- 在 `src/stereo_lab/depth_onnx_provider.py` 增加 IOBinding 路径。
+- 报告中记录 `output_device = cuda | cpu`。
+- benchmark 普通 `session.run()` 与 IOBinding 的耗时差异。
+- 如果后续 stereo synthesis 仍是 PyTorch tensor path，研究 OrtValue/DLPack 或可接受的 GPU tensor 转换方式。
 
 ### P1：Quality 4K 算法增强
 
@@ -386,11 +575,19 @@ Desktop2Stereo_v2.4.2_Windows_NVIDIA/Desktop2Stereo/models/
 
 ```text
 python3/
+python-cu13/
 models/
 outputs/
+downloads/
 ```
 
 后续新增模型、ONNX、TRT、输出图，都应放在这些忽略目录内。
+
+### 2.1 不要把运行库当作源码上传
+
+当前 `python3/` 已超过 10GB，主要原因是 PyTorch CUDA、ONNX Runtime CUDA、TensorRT runtime 各自携带 GPU DLL。`python-cu13/` 也会很大。它们都只作为本机运行环境，不应进 Git。
+
+`requirements*.txt` 记录环境依赖，运行库本体不上传。
 
 ### 3. 低配电脑首次导入很慢
 
@@ -421,12 +618,24 @@ Distill-Any-Depth-Base @ 518
 - 对比 depth、左右眼、SBS、边缘、遮挡、时序。
 - 4K 真实性能测试。
 
+### 6. CUDA 13 nightly 只作为实验线
+
+`python-cu13/` 已在 RTX 2060 上跑通 PyTorch nightly cu130 和 ONNX Runtime GPU 1.27，但它不是当前稳定主线。后续如果要把 CUDA 13 作为主线，必须重测：
+
+- RTX 2060 最低档。
+- RTX 3090 / RTX 5070 目标档。
+- ONNX 导出一致性。
+- TensorRT build / engine load。
+- 端到端 depth + stereo synthesis 性能。
+
 ## 推荐下一步执行顺序
 
-1. 用 `run_visible_generate_depth.bat` 批量看 Distill depth 是否符合 3D 直觉。
-2. 实现 TensorRT build 和 provider。
-3. 把 depth provider API 稳定成 `estimate_depth(rgb, config)`。
-4. 把 one-shot API 稳定成 `rgb_to_stereo(rgb, depth_config, stereo_config)`。
-5. 增强 Quality 4K 的 occlusion/layer/hole fill。
-6. 做 iw3 同场景对比。
-7. 再评估是否接回 `Desktop2Stereo`。
+1. 实现 `depth_trt_provider.py` 和 `build_distill_base_trt.py`，形成 `TensorRT -> ONNX CUDA -> PyTorch CUDA`。
+2. 给 ONNX provider 增加 IOBinding，验证 GPU-resident output。
+3. 做 depth backend benchmark：PyTorch CUDA、ONNX CUDA、ONNX IOBinding、TensorRT FP16。
+4. 把 depth provider API 稳定成 `estimate_depth(rgb, config)`。
+5. 把 one-shot API 稳定成 `rgb_to_stereo(rgb, depth_config, stereo_config)`。
+6. 用真实图片批量评估 Distill depth 是否符合 3D 直觉。
+7. 增强 Quality 4K 的 occlusion/layer/hole fill。
+8. 做 iw3 同场景对比。
+9. 再评估是否接回 `Desktop2Stereo`。

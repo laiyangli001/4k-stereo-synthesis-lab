@@ -5,7 +5,8 @@ from pathlib import Path
 import torch
 import torch.nn.functional as F
 
-from .output import ensure_bchw
+from .layers import depth_edges
+from .output import ensure_b1hw, ensure_bchw
 
 
 def absdiff(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
@@ -24,6 +25,50 @@ def basic_image_metrics(a: torch.Tensor, b: torch.Tensor) -> dict[str, float]:
     mae = float(diff.mean().item())
     psnr = 99.0 if mse <= 1e-12 else float(10.0 * torch.log10(torch.tensor(1.0 / mse)).item())
     return {"mae": mae, "mse": mse, "psnr": psnr}
+
+
+def depth_metrics(depth: torch.Tensor, bins: int = 16, edge_threshold: float = 0.04) -> dict[str, float | list[float]]:
+    depth = ensure_b1hw(depth).float().clamp(0, 1)
+    flat = depth.flatten()
+    histogram = torch.histc(flat.cpu(), bins=bins, min=0.0, max=1.0)
+    histogram = histogram / histogram.sum().clamp_min(1.0)
+
+    foreground = depth >= 0.65
+    background = depth <= 0.35
+    foreground_mean = float(depth[foreground].mean().item()) if foreground.any() else 0.0
+    background_mean = float(depth[background].mean().item()) if background.any() else 0.0
+    edges = depth_edges(depth, threshold=edge_threshold)
+
+    return {
+        "min": float(flat.min().item()),
+        "max": float(flat.max().item()),
+        "mean": float(flat.mean().item()),
+        "std": float(flat.std(unbiased=False).item()),
+        "foreground_ratio": float(foreground.float().mean().item()),
+        "background_ratio": float(background.float().mean().item()),
+        "foreground_mean": foreground_mean,
+        "background_mean": background_mean,
+        "foreground_background_separation": foreground_mean - background_mean,
+        "edge_density": float(edges.mean().item()),
+        "histogram": [float(x) for x in histogram.tolist()],
+    }
+
+
+def depth_comparison_metrics(reference: torch.Tensor, candidate: torch.Tensor) -> dict[str, float]:
+    reference = ensure_b1hw(reference).float().clamp(0, 1)
+    candidate = ensure_b1hw(candidate).float().clamp(0, 1)
+    if candidate.shape[-2:] != reference.shape[-2:]:
+        candidate = F.interpolate(candidate, size=reference.shape[-2:], mode="bilinear", align_corners=False)
+
+    image_metrics = basic_image_metrics(reference.repeat(1, 3, 1, 1), candidate.repeat(1, 3, 1, 1))
+    ref_edges = depth_edges(reference)
+    cand_edges = depth_edges(candidate)
+    edge_overlap = (ref_edges * cand_edges).sum() / (ref_edges.clamp_min(0) + cand_edges.clamp_min(0)).clamp(0, 1).sum().clamp_min(1.0)
+    return {
+        **image_metrics,
+        "mean_bias": float((candidate - reference).mean().item()),
+        "edge_overlap": float(edge_overlap.item()),
+    }
 
 
 def make_contact_sheet(images: list[torch.Tensor], columns: int = 2, pad: int = 8) -> torch.Tensor:

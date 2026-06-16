@@ -1,0 +1,12 @@
+# Extra packages for the isolated CUDA 13 nightly experiment environment.
+
+onnxruntime-gpu==1.27.0
+onnx==1.22.0
+onnxscript==0.7.1.dev20260615
+transformers==5.12.1
+huggingface_hub==1.19.0
+safetensors==0.8.0
+numpy==2.5.0rc1
+pillow==12.2.0
+pytest==9.1.0
+

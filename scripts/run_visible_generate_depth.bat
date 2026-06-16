@@ -27,6 +27,7 @@ title 4K Stereo Lab - Distill Depth Map
 echo [Info] RGB: %RGB%
 echo [Info] Output: %OUT_DIR%
 echo [Info] Depth model: Distill-Any-Depth-Base @ 518
+echo [Info] Backend priority: ONNX CUDA -^> PyTorch CUDA
 echo [Info] Model ID: lc700x/Distill-Any-Depth-Base-hf
 echo [Info] This is the most direct 3D comparison: generated depth map first.
 if not "%REF_DEPTH%"=="" echo [Info] Reference depth: %REF_DEPTH%
@@ -35,9 +36,9 @@ echo.
 
 pushd "%LAB_DIR%"
 if "%REF_DEPTH%"=="" (
-  "%PYTHON_EXE%" "%LAB_DIR%\scripts\generate_depth_map.py" --rgb "%RGB%" --out-dir "%OUT_DIR%" --device cuda
+  "%PYTHON_EXE%" "%LAB_DIR%\scripts\generate_depth_map.py" --rgb "%RGB%" --provider distill_base_nvidia --out-dir "%OUT_DIR%" --device cuda
 ) else (
-  "%PYTHON_EXE%" "%LAB_DIR%\scripts\generate_depth_map.py" --rgb "%RGB%" --reference-depth "%REF_DEPTH%" --out-dir "%OUT_DIR%" --device cuda
+  "%PYTHON_EXE%" "%LAB_DIR%\scripts\generate_depth_map.py" --rgb "%RGB%" --provider distill_base_nvidia --reference-depth "%REF_DEPTH%" --out-dir "%OUT_DIR%" --device cuda
 )
 set "EXIT_CODE=%ERRORLEVEL%"
 if "%EXIT_CODE%"=="0" (

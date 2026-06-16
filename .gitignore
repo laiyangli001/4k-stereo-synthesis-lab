@@ -3,7 +3,10 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.codegraph/
 .venv/
+python-cu13/
+downloads/
 venv/
 python3/
 build/

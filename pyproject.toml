@@ -8,6 +8,7 @@ dependencies = [
   "pillow",
   "transformers",
   "onnx",
+  "onnxruntime-gpu[cuda,cudnn]>=1.26.0",
 ]
 
 [tool.pytest.ini_options]

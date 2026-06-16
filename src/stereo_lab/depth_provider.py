@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, asdict
 from pathlib import Path
+from typing import Any
 
 import torch
 import torch.nn.functional as F
@@ -22,8 +23,13 @@ class DepthProviderInfo:
     depth_resolution: int
     cache_dir: str
     load_mode: str = "online"
+    depth_backend: str = "pytorch_cuda"
+    runtime: str = "transformers"
+    onnx_path: str | None = None
+    execution_provider: str | None = None
+    fallback_reason: str | None = None
 
-    def to_report(self) -> dict[str, str | int | bool]:
+    def to_report(self) -> dict[str, Any]:
         return asdict(self)
 
 
@@ -87,6 +93,8 @@ class DistillAnyDepthBase518:
             depth_resolution=DISTILL_ANY_DEPTH_BASE_RESOLUTION,
             cache_dir=str(self.cache_dir),
             load_mode="local_files_only" if self.local_files_only else "online_force_download" if self.force_download else "online",
+            depth_backend="pytorch_cuda" if self.device.type == "cuda" else "pytorch_cpu",
+            runtime="transformers",
         )
         self._model = None
 
