@@ -70,8 +70,8 @@ Final Base Native TensorRT + `quality_4k` + 2 layers on RTX 3090:
 
 | Output | Depth ms | Synthesis ms | Total ms | FPS |
 |---|---:|---:|---:|---:|
-| Half-SBS | 6.250 | 7.163 | 13.414 | 74.55 |
-| Full-SBS | 6.127 | 7.650 | 13.778 | 72.58 |
+| Half-SBS | 6.253 | 6.088 | 12.342 | 81.02 |
+| Full-SBS | 6.884 | 6.088 | 12.973 | 77.08 |
 
 Final Large Native TensorRT + `quality_4k` + 2 layers on RTX 3090:
 
@@ -83,12 +83,14 @@ Final Large Native TensorRT + `quality_4k` + 2 layers on RTX 3090:
 Current fused synthesis backends:
 
 - `triton_warp_composite2`
+- `triton_occlusion_radius2`
 - `triton_radius3`
 
 Confirmed in benchmark JSON under:
 
 ```text
 formats.<format>.synthesis_debug.warp_composite_backend
+formats.<format>.synthesis_debug.occlusion_mask_backend
 formats.<format>.synthesis_debug.hole_fill_backend
 ```
 
@@ -109,16 +111,16 @@ Important:
 Latest verification:
 
 ```text
-29 passed
-syntax ok 41 files
+32 passed
+syntax ok 43 files
 ```
 
 Latest key outputs:
 
 ```text
-outputs/rtx3090_end_to_end_base_quality_final_fused.json
+outputs/rtx3090_end_to_end_base_quality_occlusion_fused_repeat.json
 outputs/rtx3090_end_to_end_large_quality_final_fused.json
-outputs/visual_regression/rtx3090_base_quality_final_fused
+outputs/visual_regression/rtx3090_base_quality_occlusion_fused
 outputs/visual_regression/rtx3090_large_engine_quality_final_fused
 ```
 

@@ -11,6 +11,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from stereo_lab.hole_fill import box_blur, edge_aware_fill
 from stereo_lab.baseline_shift import ShiftParams, compute_shift_px, make_base_grid, warp_horizontal
 from stereo_lab.layers import composite_layers, depth_edges, make_depth_layers
+from stereo_lab.occlusion import make_occlusion_mask
 from stereo_lab.synthesis import StereoConfig, _try_fused_warp_composite2, synthesize_stereo
 from stereo_lab.temporal import TemporalState
 
@@ -127,6 +128,17 @@ def test_fused_warp_composite_cuda_matches_torch_path_when_available():
     assert torch.allclose(actual_right, expected_right, atol=5e-4, rtol=1e-4)
 
 
+def test_fused_occlusion_cuda_matches_torch_path_when_available():
+    if not torch.cuda.is_available():
+        return
+    rgb, depth = make_inputs(width=40, height=24)
+    depth = depth.cuda()
+    base_shift = compute_shift_px(depth, rgb.shape[-1], ShiftParams())
+    expected = make_occlusion_mask(depth, base_shift, fused=False)
+    actual = make_occlusion_mask(depth, base_shift, fused=True)
+    assert torch.equal(actual, expected)
+
+
 def test_fused_config_false_uses_torch_backends():
     rgb, depth = make_inputs(width=40, height=24)
     result = synthesize_stereo(
@@ -135,6 +147,7 @@ def test_fused_config_false_uses_torch_backends():
         StereoConfig(backend="quality_4k", layers=2, debug_output=True, temporal=False, fused=False),
     )
     assert result.debug_info["warp_composite_backend"] == "torch_grid_sample"
+    assert result.debug_info["occlusion_mask_backend"] == "torch_max_pool"
     assert result.debug_info["hole_fill_backend"] == "torch_avg_pool"
 
 
@@ -147,6 +160,7 @@ def test_disable_triton_env_uses_torch_backends(monkeypatch: pytest.MonkeyPatch)
         StereoConfig(backend="quality_4k", layers=2, debug_output=True, temporal=False),
     )
     assert result.debug_info["warp_composite_backend"] == "torch_grid_sample"
+    assert result.debug_info["occlusion_mask_backend"] == "torch_max_pool"
     assert result.debug_info["hole_fill_backend"] == "torch_avg_pool"
 
 

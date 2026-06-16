@@ -17,10 +17,11 @@ Base Native TensorRT is resident and remains the recommended depth backend.
 
 ### Synthesis
 
-Two optional fused Triton paths are now available:
+Three optional fused Triton paths are now available:
 
 - `triton_radius3` hole fill for CUDA float32, `B x 3 x H x W` image, `B x 1 x H x W` mask, `radius=3`, `strength=1.0`.
 - `triton_warp_composite2` for CUDA float32, 2-layer, symmetric, single-frame `quality_4k` warp + composite.
+- `triton_occlusion_radius2` for CUDA float32, single-frame occlusion mask generation with `edge_threshold=0.04` and `dilation=2`.
 
 Both paths are guarded by strict shape/type/config checks and fall back to the original PyTorch implementation when unsupported.
 
@@ -37,13 +38,13 @@ Fused paths are enabled by default and can be disabled with:
 Command:
 
 ```powershell
-.\python3\python.exe -B scripts\bench_end_to_end_4k.py --rgb 4K.jpg --out outputs\rtx3090_end_to_end_base_quality_final_fused.json --warmup 3 --iters 10 --backend quality_4k --layers 2 --depth-backend tensorrt_native --onnx models\models--lc700x--Distill-Any-Depth-Base-hf\model_fp16_294x518.onnx --trt-engine models\models--lc700x--Distill-Any-Depth-Base-hf\model_fp16_294x518.trt --output-format half_sbs --output-format full_sbs
+.\python3\python.exe -B scripts\bench_end_to_end_4k.py --rgb 4K.jpg --out outputs\rtx3090_end_to_end_base_quality_occlusion_fused_repeat.json --warmup 5 --iters 20 --backend quality_4k --layers 2 --depth-backend tensorrt_native --onnx models\models--lc700x--Distill-Any-Depth-Base-hf\model_fp16_294x518.onnx --trt-engine models\models--lc700x--Distill-Any-Depth-Base-hf\model_fp16_294x518.trt --output-format half_sbs --output-format full_sbs
 ```
 
 | Output | Depth ms | Synthesis ms | Total ms | FPS |
 |---|---:|---:|---:|---:|
-| Half-SBS | 6.250 | 7.163 | 13.414 | 74.55 |
-| Full-SBS | 6.127 | 7.650 | 13.778 | 72.58 |
+| Half-SBS | 6.253 | 6.088 | 12.342 | 81.02 |
+| Full-SBS | 6.884 | 6.088 | 12.973 | 77.08 |
 
 ### Large
 
@@ -69,13 +70,14 @@ Provider metadata for explicit Large ONNX/TRT paths is inferred from the Hugging
 | RTX 3090 initial PyTorch synthesis | 40.47 | 41.32 |
 | Triton hole fill only | 46.57 | 50.50 |
 | Triton warp+composite + Triton hole fill | 74.55 | 72.58 |
+| Triton warp+composite + occlusion + hole fill | 81.02 | 77.08 |
 
 ## Visual Regression
 
 Latest set:
 
 ```text
-outputs/visual_regression/rtx3090_base_quality_final_fused
+outputs/visual_regression/rtx3090_base_quality_occlusion_fused
 ```
 
 Large set:
@@ -95,6 +97,15 @@ Compared with `rtx3090_base_quality_triton_holefill`:
 
 The fused warp path has tiny interpolation/rounding differences from `torch.grid_sample`; no structural mask/depth changes were observed.
 
+Compared with `rtx3090_base_quality_final_fused`, the fused occlusion path produced byte-identical output:
+
+- `used_depth.png`: identical
+- `quality_4k_occlusion_mask.png`: identical
+- `quality_4k_left.png`: identical
+- `quality_4k_right.png`: identical
+- `quality_4k_half_sbs.png`: identical
+- `quality_4k_full_sbs.png`: identical
+
 Manual visual inspection of `contact_sheet_labeled.png` for both Base and Large found:
 
 - Input/depth/left/right/SBS outputs are present and complete.
@@ -110,8 +121,9 @@ Manual visual inspection of `contact_sheet_labeled.png` for both Base and Large 
 - `profile_synthesis_4k.py` now reports both:
   - `end_to_end_mean_ms`, which uses `synthesize_stereo` and includes fused backends when available.
   - `breakdown_mean_ms`, which uses the manual unfused breakdown path for component attribution.
-- Fused paths are not used for `hq_4k` 3+ layers, asymmetric mode, CPU, non-float32 tensors, or unsupported shapes.
-- `bench_end_to_end_4k.py` records `synthesis_debug.warp_composite_backend` and `synthesis_debug.hole_fill_backend`; the final run reports `triton_warp_composite2` and `triton_radius3`.
+- Fused warp/composite is not used for `hq_4k` 3+ layers, asymmetric mode, CPU, non-float32 tensors, or unsupported shapes.
+- Fused occlusion is not used for non-default threshold/dilation, CPU, non-float32 tensors, or unsupported shapes.
+- `bench_end_to_end_4k.py` records `synthesis_debug.warp_composite_backend`, `synthesis_debug.occlusion_mask_backend`, and `synthesis_debug.hole_fill_backend`; the latest Base run reports `triton_warp_composite2`, `triton_occlusion_radius2`, and `triton_radius3`.
 
 ## Next Verification Targets
 

@@ -9,7 +9,7 @@ import torch
 from .baseline_shift import ShiftParams, compute_shift_px, synthesize_baseline, warp_horizontal
 from .hole_fill import edge_aware_fill, edge_aware_fill_backend
 from .layers import composite_layers, make_depth_layers
-from .occlusion import make_occlusion_mask
+from .occlusion import make_occlusion_mask, occlusion_backend
 from .output import OutputFormat, ensure_bchw, make_sbs, match_depth
 from .refine import refine_local
 from .temporal import TemporalState, apply_temporal
@@ -80,7 +80,12 @@ def _layered_synthesis(rgb: torch.Tensor, depth: torch.Tensor, config: StereoCon
 
         left = composite_layers(left_layers, weights)
         right = composite_layers(right_layers, weights)
-    mask = make_occlusion_mask(depth, base_shift) if config.occlusion else torch.zeros_like(depth)
+    if config.occlusion:
+        occlusion_mask_backend = occlusion_backend(depth, base_shift, edge_threshold=0.04, dilation=2, fused=config.fused)
+        mask = make_occlusion_mask(depth, base_shift, fused=config.fused)
+    else:
+        occlusion_mask_backend = "none"
+        mask = torch.zeros_like(depth)
 
     hole_fill_backend = "none"
     if config.hole_fill != "none":
@@ -99,6 +104,7 @@ def _layered_synthesis(rgb: torch.Tensor, depth: torch.Tensor, config: StereoCon
         "shift_px": base_shift,
         "occlusion_mask": mask,
         "warp_composite_backend": warp_composite_backend,
+        "occlusion_mask_backend": occlusion_mask_backend,
         "hole_fill_backend": hole_fill_backend,
     }
 
