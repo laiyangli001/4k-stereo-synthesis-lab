@@ -42,6 +42,7 @@ def composite_layers(warped: list[torch.Tensor], weights: torch.Tensor) -> torch
 
 def depth_edges(depth: torch.Tensor, threshold: float = 0.04) -> torch.Tensor:
     depth = ensure_b1hw(depth).float()
-    dx = F.pad((depth[..., :, 1:] - depth[..., :, :-1]).abs(), (0, 1, 0, 0))
-    dy = F.pad((depth[..., 1:, :] - depth[..., :-1, :]).abs(), (0, 0, 0, 1))
-    return ((dx + dy) > threshold).float()
+    edges = torch.zeros_like(depth)
+    edges[..., :, :-1].add_((depth[..., :, 1:] - depth[..., :, :-1]).abs())
+    edges[..., :-1, :].add_((depth[..., 1:, :] - depth[..., :-1, :]).abs())
+    return (edges > threshold).float()

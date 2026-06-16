@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from stereo_lab.hole_fill import box_blur
+from stereo_lab.layers import depth_edges
 from stereo_lab.synthesis import StereoConfig, synthesize_stereo
 from stereo_lab.temporal import TemporalState
 
@@ -68,3 +69,14 @@ def test_box_blur_matches_2d_kernel():
     expected = F.conv2d(image, weight, padding=radius, groups=3)
     actual = box_blur(image, radius=radius)
     assert torch.allclose(actual, expected, atol=1e-6, rtol=1e-6)
+
+
+def test_depth_edges_matches_padded_gradient_formula():
+    torch.manual_seed(11)
+    depth = torch.rand(2, 1, 12, 14)
+    threshold = 0.04
+    dx = F.pad((depth[..., :, 1:] - depth[..., :, :-1]).abs(), (0, 1, 0, 0))
+    dy = F.pad((depth[..., 1:, :] - depth[..., :-1, :]).abs(), (0, 0, 0, 1))
+    expected = ((dx + dy) > threshold).float()
+    actual = depth_edges(depth, threshold=threshold)
+    assert torch.equal(actual, expected)
