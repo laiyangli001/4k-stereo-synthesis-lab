@@ -33,6 +33,21 @@ def main() -> None:
     parser.add_argument("--layers", type=int, default=2)
     parser.add_argument("--frames", type=int, default=30)
     parser.add_argument("--device", default=None)
+    parser.add_argument("--depth-strength", type=float, default=2.0)
+    parser.add_argument("--convergence", type=float, default=0.0)
+    parser.add_argument("--ipd", type=float, default=0.064)
+    parser.add_argument("--max-shift-ratio", type=float, default=0.05)
+    parser.add_argument("--temporal", action="store_true")
+    parser.add_argument("--temporal-strength", type=float, default=0.85)
+    parser.add_argument("--auto-reset-temporal", action="store_true")
+    parser.add_argument("--scene-reset-threshold", type=float, default=0.22)
+    parser.add_argument("--reset-cooldown-frames", type=int, default=3)
+    parser.add_argument("--foreground-scale", type=float, default=0.0)
+    parser.add_argument("--depth-antialias-strength", type=float, default=0.0)
+    parser.add_argument("--edge-dilation", type=int, default=2)
+    parser.add_argument("--edge-threshold", type=float, default=0.04)
+    parser.add_argument("--cross-eyed", action="store_true")
+    parser.add_argument("--anaglyph-method", choices=["red_cyan", "green_magenta", "amber_blue", "gray"], default="red_cyan")
     args = parser.parse_args()
 
     print("[2/5] importing torch ...", flush=True)
@@ -49,7 +64,27 @@ def main() -> None:
 
     print(f"[4/5] creating synthetic {args.width}x{args.height} frame ...", flush=True)
     rgb, depth = make_synthetic_frame(torch, args.width, args.height, device)
-    config = StereoConfig(backend=args.backend, layers=args.layers, output_format=args.output_format, debug_output=False)
+    config = StereoConfig(
+        backend=args.backend,
+        layers=args.layers,
+        output_format=args.output_format,
+        depth_strength=args.depth_strength,
+        convergence=args.convergence,
+        ipd=args.ipd,
+        max_shift_ratio=args.max_shift_ratio,
+        temporal=args.temporal,
+        temporal_strength=args.temporal_strength,
+        auto_reset_temporal=args.auto_reset_temporal,
+        scene_reset_threshold=args.scene_reset_threshold,
+        reset_cooldown_frames=args.reset_cooldown_frames,
+        foreground_scale=args.foreground_scale,
+        depth_antialias_strength=args.depth_antialias_strength,
+        edge_dilation=args.edge_dilation,
+        edge_threshold=args.edge_threshold,
+        cross_eyed=args.cross_eyed,
+        anaglyph_method=args.anaglyph_method,
+        debug_output=False,
+    )
     reset_peak_memory()
 
     print(f"[5/5] running benchmark frames={args.frames} ...", flush=True)

@@ -7,12 +7,13 @@ from typing import Literal
 import torch
 
 from .baseline_shift import ShiftParams, compute_shift_px, synthesize_baseline, warp_horizontal
+from .depth_postprocess import postprocess_depth
 from .hole_fill import edge_aware_fill, edge_aware_fill_backend
 from .layers import composite_layers, make_depth_layers
 from .occlusion import make_occlusion_mask, occlusion_backend
-from .output import OutputFormat, ensure_bchw, make_sbs, match_depth, sbs_backend
+from .output import AnaglyphMethod, OutputFormat, ensure_bchw, make_sbs, match_depth, sbs_backend
 from .refine import refine_local
-from .temporal import TemporalState, apply_temporal
+from .temporal import TemporalState, apply_temporal, detect_scene_change
 
 Backend = Literal["fast", "quality_4k", "hq_4k"]
 HoleFill = Literal["none", "fast", "edge_aware"]
@@ -33,6 +34,15 @@ class StereoConfig:
     ipd: float = 0.064
     max_shift_ratio: float = 0.05
     temporal_strength: float = 0.85
+    auto_reset_temporal: bool = False
+    scene_reset_threshold: float = 0.22
+    reset_cooldown_frames: int = 3
+    foreground_scale: float = 0.0
+    depth_antialias_strength: float = 0.0
+    edge_dilation: int = 2
+    edge_threshold: float = 0.04
+    cross_eyed: bool = False
+    anaglyph_method: AnaglyphMethod = "red_cyan"
     refine: bool = False
     fused: bool = True
 
@@ -53,7 +63,11 @@ def _layered_synthesis(rgb: torch.Tensor, depth: torch.Tensor, config: StereoCon
         max_shift_ratio=config.max_shift_ratio,
     )
     rgb = ensure_bchw(rgb, name="rgb").float()
-    depth = match_depth(depth, rgb.shape[-2], rgb.shape[-1])
+    depth = postprocess_depth(
+        match_depth(depth, rgb.shape[-2], rgb.shape[-1]),
+        foreground_scale=config.foreground_scale,
+        antialias_strength=config.depth_antialias_strength,
+    )
     base_shift = compute_shift_px(depth, rgb.shape[-1], params)
 
     layer_count = max(1, int(config.layers))
@@ -81,8 +95,20 @@ def _layered_synthesis(rgb: torch.Tensor, depth: torch.Tensor, config: StereoCon
         left = composite_layers(left_layers, weights)
         right = composite_layers(right_layers, weights)
     if config.occlusion:
-        occlusion_mask_backend = occlusion_backend(depth, base_shift, edge_threshold=0.04, dilation=2, fused=config.fused)
-        mask = make_occlusion_mask(depth, base_shift, fused=config.fused)
+        occlusion_mask_backend = occlusion_backend(
+            depth,
+            base_shift,
+            edge_threshold=config.edge_threshold,
+            dilation=config.edge_dilation,
+            fused=config.fused,
+        )
+        mask = make_occlusion_mask(
+            depth,
+            base_shift,
+            edge_threshold=config.edge_threshold,
+            dilation=config.edge_dilation,
+            fused=config.fused,
+        )
     else:
         occlusion_mask_backend = "none"
         mask = torch.zeros_like(depth)
@@ -140,12 +166,27 @@ def synthesize_stereo(
     temporal_state: TemporalState | None = None,
 ) -> StereoResult:
     config = config or StereoConfig()
+    temporal_reset = False
+    if config.temporal and config.auto_reset_temporal and temporal_state is not None:
+        temporal_reset = detect_scene_change(
+            rgb,
+            temporal_state,
+            threshold=config.scene_reset_threshold,
+            cooldown_frames=config.reset_cooldown_frames,
+        )
+        if temporal_reset:
+            temporal_state.reset_stereo()
     if config.backend == "fast":
         params = ShiftParams(
             depth_strength=config.depth_strength,
             convergence=config.convergence,
             ipd=config.ipd,
             max_shift_ratio=config.max_shift_ratio,
+        )
+        depth = postprocess_depth(
+            depth,
+            foreground_scale=config.foreground_scale,
+            antialias_strength=config.depth_antialias_strength,
         )
         left, right, shift_px = synthesize_baseline(rgb, depth, params)
         mask = None
@@ -159,11 +200,37 @@ def synthesize_stereo(
     if config.temporal:
         left, right = apply_temporal(left, right, mask, temporal_state, strength=config.temporal_strength)
 
-    output_depth = match_depth(depth, left.shape[-2], left.shape[-1])
+    output_depth = postprocess_depth(
+        match_depth(depth, left.shape[-2], left.shape[-1]),
+        foreground_scale=config.foreground_scale,
+        antialias_strength=config.depth_antialias_strength,
+    )
+    if config.cross_eyed:
+        left, right = right, left
     if config.debug_output:
         debug["output_depth"] = output_depth
-    debug["sbs_backend"] = sbs_backend(left, right, config.output_format, fused=config.fused, depth=output_depth)
-    sbs = make_sbs(left, right, config.output_format, fused=config.fused, depth=output_depth)
+        debug["temporal_reset"] = int(temporal_reset)
+        if temporal_state is not None:
+            debug["scene_delta"] = float(temporal_state.last_scene_delta)
+            debug["temporal_reset_count"] = int(temporal_state.reset_count)
+    debug["cross_eyed"] = int(config.cross_eyed)
+    debug["anaglyph_method"] = config.anaglyph_method
+    debug["sbs_backend"] = sbs_backend(
+        left,
+        right,
+        config.output_format,
+        fused=config.fused,
+        depth=output_depth,
+        anaglyph_method=config.anaglyph_method,
+    )
+    sbs = make_sbs(
+        left,
+        right,
+        config.output_format,
+        fused=config.fused,
+        depth=output_depth,
+        anaglyph_method=config.anaglyph_method,
+    )
     if not config.debug_output:
         debug = {k: v for k, v in debug.items() if isinstance(v, (float, int, str))}
     return StereoResult(left_eye=left, right_eye=right, sbs=sbs, debug_info=debug)

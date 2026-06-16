@@ -106,6 +106,14 @@ Current core output formats:
 - `interleaved`
 - `leia`
 
+Realtime parameter status:
+
+- P0 GUI/API parameters are implemented with defaults: `depth_strength`, `convergence`, `ipd`, `max_shift_ratio`, `temporal_strength`, `auto_reset_temporal`, `scene_reset_threshold`, `reset_cooldown_frames`, `edge_dilation`, `edge_threshold`, and OpenXR roll-adaptive core parameters.
+- P1 quality parameters are implemented where executable: `foreground_scale`, `depth_antialias_strength`, `cross_eyed`, and `anaglyph_method`.
+- `synthetic_view` should be represented by `backend=fast/quality_4k/hq_4k` or OpenXR mode, not a separate no-op parameter.
+- Offline P2 items are intentionally excluded from realtime: offline video lookahead, TransNetV2 scene detection, and HDR/video codec pipeline.
+- Details: `docs/13-realtime-stereo-parameter-guide.md`
+
 4K is the stress/performance target, not a functional input-size limit. The output API and fast synthesis path are covered by tests for 720p, 1080p, portrait, and odd-size inputs. Unsupported Triton cases fall back to PyTorch instead of restricting input resolution.
 
 OpenXR note: the local environment has pyopenxr available as the `xr` module, but this lab does not yet include a full OpenXR session/swapchain runtime. The rotation-adaptive stereo core has been added in `src/stereo_lab/openxr_render.py`; it accepts arbitrary `screen_roll` angles in radians and should be used by a future runtime integration instead of fixed SBS output. `scripts/generate_openxr_stereo_preview.py` can generate roll-adaptive left/right preview images from RGB+depth inputs.
@@ -116,7 +124,7 @@ OpenXR note: the local environment has pyopenxr available as the `xr` module, bu
 
 Desktop2Stereo also has `Anaglyph`, `Interleaved`, and `Leia`. The lab now exposes these as file/API post-processing formats from already synthesized left/right tensors:
 
-- `anaglyph`: red channel from left, green/blue channels from right.
+- `anaglyph`: default red/cyan mode uses red channel from left and green/blue channels from right. Additional `anaglyph_method` values are available for compatibility: `green_magenta`, `amber_blue`, and `gray`.
 - `interleaved`: even rows from left, odd rows from right.
 - `leia`: even columns from left, odd columns from right.
 
@@ -148,8 +156,8 @@ Important:
 Latest verification:
 
 ```text
-55 passed
-syntax ok 48 files
+61 passed, 1 warning
+compileall syntax ok
 ```
 
 Latest key outputs:

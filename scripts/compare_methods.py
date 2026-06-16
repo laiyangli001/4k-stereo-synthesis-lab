@@ -32,6 +32,19 @@ def main() -> None:
     )
     parser.add_argument("--depth-strength", type=float, default=3.0)
     parser.add_argument("--convergence", type=float, default=0.0)
+    parser.add_argument("--ipd", type=float, default=0.064)
+    parser.add_argument("--max-shift-ratio", type=float, default=0.05)
+    parser.add_argument("--temporal", action="store_true")
+    parser.add_argument("--temporal-strength", type=float, default=0.85)
+    parser.add_argument("--auto-reset-temporal", action="store_true")
+    parser.add_argument("--scene-reset-threshold", type=float, default=0.22)
+    parser.add_argument("--reset-cooldown-frames", type=int, default=3)
+    parser.add_argument("--foreground-scale", type=float, default=0.0)
+    parser.add_argument("--depth-antialias-strength", type=float, default=0.0)
+    parser.add_argument("--edge-dilation", type=int, default=2)
+    parser.add_argument("--edge-threshold", type=float, default=0.04)
+    parser.add_argument("--cross-eyed", action="store_true")
+    parser.add_argument("--anaglyph-method", choices=["red_cyan", "green_magenta", "amber_blue", "gray"], default="red_cyan")
     args = parser.parse_args()
 
     print("[2/6] importing torch ...", flush=True)
@@ -97,10 +110,23 @@ def main() -> None:
         raise SystemExit("missing --depth. Provide a depth image or pass --auto-depth.")
     out_dir = Path(args.out_dir)
 
+    realtime_config = {
+        "temporal": args.temporal,
+        "temporal_strength": args.temporal_strength,
+        "auto_reset_temporal": args.auto_reset_temporal,
+        "scene_reset_threshold": args.scene_reset_threshold,
+        "reset_cooldown_frames": args.reset_cooldown_frames,
+        "foreground_scale": args.foreground_scale,
+        "depth_antialias_strength": args.depth_antialias_strength,
+        "edge_dilation": args.edge_dilation,
+        "edge_threshold": args.edge_threshold,
+        "cross_eyed": args.cross_eyed,
+        "anaglyph_method": args.anaglyph_method,
+    }
     configs = [
-        StereoConfig(backend="fast", output_format=args.output_format, depth_strength=args.depth_strength, convergence=args.convergence),
-        StereoConfig(backend="quality_4k", layers=2, output_format=args.output_format, depth_strength=args.depth_strength, convergence=args.convergence, debug_output=True),
-        StereoConfig(backend="hq_4k", layers=3, output_format=args.output_format, depth_strength=args.depth_strength, convergence=args.convergence, debug_output=True),
+        StereoConfig(backend="fast", output_format=args.output_format, depth_strength=args.depth_strength, convergence=args.convergence, ipd=args.ipd, max_shift_ratio=args.max_shift_ratio, **realtime_config),
+        StereoConfig(backend="quality_4k", layers=2, output_format=args.output_format, depth_strength=args.depth_strength, convergence=args.convergence, ipd=args.ipd, max_shift_ratio=args.max_shift_ratio, debug_output=True, **realtime_config),
+        StereoConfig(backend="hq_4k", layers=3, output_format=args.output_format, depth_strength=args.depth_strength, convergence=args.convergence, ipd=args.ipd, max_shift_ratio=args.max_shift_ratio, debug_output=True, **realtime_config),
     ]
     results = {}
     report = {
@@ -110,6 +136,9 @@ def main() -> None:
         "output_format": args.output_format,
         "depth_strength": args.depth_strength,
         "convergence": args.convergence,
+        "ipd": args.ipd,
+        "max_shift_ratio": args.max_shift_ratio,
+        "realtime": realtime_config,
         "device": str(device),
         "outputs": {},
         "comparisons": {},

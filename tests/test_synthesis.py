@@ -71,6 +71,42 @@ def test_composite_display_output_semantics():
     assert torch.equal(leia[..., :, 1::2], right[..., :, 1::2])
 
 
+def test_anaglyph_methods_have_stable_defaults():
+    left = torch.zeros(1, 3, 4, 6)
+    right = torch.ones(1, 3, 4, 6)
+
+    red_cyan = make_sbs(left, right, "anaglyph", fused=False)
+    green_magenta = make_sbs(left, right, "anaglyph", fused=False, anaglyph_method="green_magenta")
+    amber_blue = make_sbs(left, right, "anaglyph", fused=False, anaglyph_method="amber_blue")
+    gray = make_sbs(left, right, "anaglyph", fused=False, anaglyph_method="gray")
+
+    assert torch.equal(red_cyan[:, 0:1], left[:, 0:1])
+    assert torch.equal(red_cyan[:, 1:], right[:, 1:])
+    assert torch.equal(green_magenta[:, 0:1], right[:, 0:1])
+    assert torch.equal(green_magenta[:, 1:2], left[:, 1:2])
+    assert torch.equal(green_magenta[:, 2:3], right[:, 2:3])
+    assert torch.equal(amber_blue[:, 0:2], left[:, 0:2])
+    assert torch.equal(amber_blue[:, 2:3], right[:, 2:3])
+    assert torch.equal(gray[:, 0:1], left.mean(dim=1, keepdim=True))
+    assert torch.equal(gray[:, 1:], right.mean(dim=1, keepdim=True).expand(-1, 2, -1, -1))
+
+
+def test_cross_eyed_swaps_output_eyes():
+    rgb, depth = make_inputs(width=64, height=32)
+    normal = synthesize_stereo(rgb, depth, StereoConfig(backend="fast", output_format="full_sbs", temporal=False))
+    crossed = synthesize_stereo(
+        rgb,
+        depth,
+        StereoConfig(backend="fast", output_format="full_sbs", temporal=False, cross_eyed=True, debug_output=True),
+    )
+
+    assert torch.equal(crossed.left_eye, normal.right_eye)
+    assert torch.equal(crossed.right_eye, normal.left_eye)
+    assert torch.equal(crossed.sbs[..., :, :64], normal.right_eye)
+    assert torch.equal(crossed.sbs[..., :, 64:], normal.left_eye)
+    assert crossed.debug_info["cross_eyed"] == 1
+
+
 @pytest.mark.parametrize(
     ("width", "height"),
     [
@@ -130,6 +166,67 @@ def test_quality_depth_map_uses_matched_output_depth():
     assert torch.equal(result.sbs[:, 0:1], expected)
 
 
+def test_depth_postprocess_defaults_preserve_output_depth():
+    rgb, depth = make_inputs(width=64, height=32)
+    result = synthesize_stereo(
+        rgb,
+        depth,
+        StereoConfig(backend="quality_4k", layers=2, output_format="depth_map", debug_output=True, temporal=False),
+    )
+    assert torch.equal(result.debug_info["output_depth"], depth)
+
+
+def test_foreground_scale_and_depth_antialias_affect_output_depth():
+    rgb, depth = make_inputs(width=64, height=32)
+    scaled = synthesize_stereo(
+        rgb,
+        depth,
+        StereoConfig(
+            backend="quality_4k",
+            layers=2,
+            output_format="depth_map",
+            debug_output=True,
+            temporal=False,
+            foreground_scale=0.5,
+        ),
+    )
+    assert not torch.equal(scaled.debug_info["output_depth"], depth)
+
+    hard_edge = torch.zeros_like(depth)
+    hard_edge[..., :, depth.shape[-1] // 2 :] = 1.0
+    smoothed = synthesize_stereo(
+        rgb,
+        hard_edge,
+        StereoConfig(
+            backend="quality_4k",
+            layers=2,
+            output_format="depth_map",
+            debug_output=True,
+            temporal=False,
+            depth_antialias_strength=1.0,
+        ),
+    )
+    assert smoothed.debug_info["output_depth"].amin() >= 0
+    assert smoothed.debug_info["output_depth"].amax() <= 1
+    assert not torch.equal(smoothed.debug_info["output_depth"], hard_edge)
+
+
+def test_edge_dilation_parameter_affects_occlusion_mask():
+    rgb, depth = make_inputs(width=64, height=32)
+    depth = (depth > 0.5).float()
+    no_dilation = synthesize_stereo(
+        rgb,
+        depth,
+        StereoConfig(backend="quality_4k", layers=2, debug_output=True, temporal=False, edge_dilation=0, fused=False),
+    )
+    dilation = synthesize_stereo(
+        rgb,
+        depth,
+        StereoConfig(backend="quality_4k", layers=2, debug_output=True, temporal=False, edge_dilation=3, fused=False),
+    )
+    assert dilation.debug_info["occlusion_mask"].sum() >= no_dilation.debug_info["occlusion_mask"].sum()
+
+
 def test_quality_debug_outputs():
     rgb, depth = make_inputs()
     config = StereoConfig(backend="quality_4k", layers=2, output_format="half_sbs", debug_output=True)
@@ -152,6 +249,31 @@ def test_temporal_state_runs_twice():
     first = synthesize_stereo(rgb, depth, config, temporal_state=state)
     second = synthesize_stereo(rgb, depth, config, temporal_state=state)
     assert first.sbs.shape == second.sbs.shape
+
+
+def test_auto_temporal_reset_detects_scene_cut_without_retriggering_during_cooldown():
+    depth = torch.zeros(1, 1, 8, 8)
+    state = TemporalState()
+    config = StereoConfig(
+        backend="fast",
+        temporal=True,
+        temporal_strength=0.75,
+        auto_reset_temporal=True,
+        scene_reset_threshold=0.2,
+        reset_cooldown_frames=2,
+        debug_output=True,
+    )
+    dark = torch.zeros(1, 3, 8, 8)
+    bright = torch.ones(1, 3, 8, 8)
+
+    first = synthesize_stereo(dark, depth, config, temporal_state=state)
+    second = synthesize_stereo(bright, depth, config, temporal_state=state)
+    third = synthesize_stereo(dark, depth, config, temporal_state=state)
+
+    assert first.debug_info["temporal_reset"] == 0
+    assert second.debug_info["temporal_reset"] == 1
+    assert third.debug_info["temporal_reset"] == 0
+    assert state.reset_count == 1
 
 
 def test_box_blur_matches_2d_kernel():

@@ -26,11 +26,22 @@ def main() -> None:
     )
     parser.add_argument("--iters", type=int, default=10)
     parser.add_argument("--no-fused", action="store_true")
+    parser.add_argument("--depth-strength", type=float, default=2.0)
+    parser.add_argument("--convergence", type=float, default=0.0)
+    parser.add_argument("--ipd", type=float, default=0.064)
+    parser.add_argument("--max-shift-ratio", type=float, default=0.05)
+    parser.add_argument("--foreground-scale", type=float, default=0.0)
+    parser.add_argument("--depth-antialias-strength", type=float, default=0.0)
+    parser.add_argument("--edge-dilation", type=int, default=2)
+    parser.add_argument("--edge-threshold", type=float, default=0.04)
+    parser.add_argument("--cross-eyed", action="store_true")
+    parser.add_argument("--anaglyph-method", choices=["red_cyan", "green_magenta", "amber_blue", "gray"], default="red_cyan")
     args = parser.parse_args()
 
     import torch
 
     from stereo_lab.depth_provider import DepthProviderConfig, create_depth_provider
+    from stereo_lab.depth_postprocess import postprocess_depth
     from stereo_lab.io import load_rgb
     from stereo_lab.baseline_shift import ShiftParams, compute_shift_px, warp_horizontal
     from stereo_lab.hole_fill import edge_aware_fill
@@ -44,7 +55,23 @@ def main() -> None:
     provider = create_depth_provider(DepthProviderConfig(backend="tensorrt_native", device=device))
     provider.load()
     depth = provider.predict(rgb)
-    config = StereoConfig(backend=args.backend, layers=args.layers, output_format=args.output_format, temporal=False, fused=not args.no_fused)
+    config = StereoConfig(
+        backend=args.backend,
+        layers=args.layers,
+        output_format=args.output_format,
+        temporal=False,
+        depth_strength=args.depth_strength,
+        convergence=args.convergence,
+        ipd=args.ipd,
+        max_shift_ratio=args.max_shift_ratio,
+        foreground_scale=args.foreground_scale,
+        depth_antialias_strength=args.depth_antialias_strength,
+        edge_dilation=args.edge_dilation,
+        edge_threshold=args.edge_threshold,
+        cross_eyed=args.cross_eyed,
+        anaglyph_method=args.anaglyph_method,
+        fused=not args.no_fused,
+    )
 
     def sync() -> None:
         if device.type == "cuda" and torch.cuda.is_available():
@@ -63,8 +90,17 @@ def main() -> None:
     }
 
     def profile_quality_once():
-        params = ShiftParams()
-        local_depth = match_depth(depth, rgb.shape[-2], rgb.shape[-1])
+        params = ShiftParams(
+            depth_strength=args.depth_strength,
+            convergence=args.convergence,
+            ipd=args.ipd,
+            max_shift_ratio=args.max_shift_ratio,
+        )
+        local_depth = postprocess_depth(
+            match_depth(depth, rgb.shape[-2], rgb.shape[-1]),
+            foreground_scale=args.foreground_scale,
+            antialias_strength=args.depth_antialias_strength,
+        )
         sync()
         start = time.perf_counter()
         base_shift = compute_shift_px(local_depth, rgb.shape[-1], params)
@@ -93,7 +129,13 @@ def main() -> None:
         composite_ms = (time.perf_counter() - start) * 1000.0
 
         start = time.perf_counter()
-        mask = make_occlusion_mask(local_depth, base_shift)
+        mask = make_occlusion_mask(
+            local_depth,
+            base_shift,
+            edge_threshold=args.edge_threshold,
+            dilation=args.edge_dilation,
+            fused=not args.no_fused,
+        )
         sync()
         occlusion_ms = (time.perf_counter() - start) * 1000.0
 
@@ -106,7 +148,16 @@ def main() -> None:
         fill_ms = (time.perf_counter() - start) * 1000.0
 
         start = time.perf_counter()
-        sbs = make_sbs(left, right, args.output_format, depth=local_depth, fused=not args.no_fused)
+        if args.cross_eyed:
+            left, right = right, left
+        sbs = make_sbs(
+            left,
+            right,
+            args.output_format,
+            depth=local_depth,
+            fused=not args.no_fused,
+            anaglyph_method=args.anaglyph_method,
+        )
         sync()
         sbs_ms = (time.perf_counter() - start) * 1000.0
         return sbs, {

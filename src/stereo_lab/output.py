@@ -17,6 +17,7 @@ OutputFormat = Literal[
     "interleaved",
     "leia",
 ]
+AnaglyphMethod = Literal["red_cyan", "green_magenta", "amber_blue", "gray"]
 OUTPUT_FORMAT_CHOICES = (
     "half_sbs",
     "full_sbs",
@@ -61,6 +62,7 @@ def make_sbs(
     output_format: OutputFormat,
     fused: bool = True,
     depth: torch.Tensor | None = None,
+    anaglyph_method: AnaglyphMethod = "red_cyan",
 ) -> torch.Tensor:
     left = ensure_bchw(left, name="left")
     right = ensure_bchw(right, name="right")
@@ -71,14 +73,11 @@ def make_sbs(
         return left
 
     if output_format == "anaglyph":
-        if sbs_backend(left, right, output_format, fused=fused) == "triton_anaglyph":
+        if sbs_backend(left, right, output_format, fused=fused, anaglyph_method=anaglyph_method) == "triton_anaglyph":
             from .output_triton import make_anaglyph
 
             return make_anaglyph(left, right)
-        out = torch.empty_like(left)
-        out[:, 0:1] = left[:, 0:1]
-        out[:, 1:] = right[:, 1:]
-        return out
+        return make_anaglyph_torch(left, right, method=anaglyph_method)
 
     if output_format == "interleaved":
         if sbs_backend(left, right, output_format, fused=fused) == "triton_interleaved":
@@ -157,6 +156,7 @@ def sbs_backend(
     output_format: OutputFormat,
     fused: bool = True,
     depth: torch.Tensor | None = None,
+    anaglyph_method: AnaglyphMethod = "red_cyan",
 ) -> str:
     if output_format in {"full_sbs", "full_tab"} and (not fused or _triton_disabled_by_env()):
         return "torch_cat"
@@ -200,7 +200,7 @@ def sbs_backend(
     if output_format == "depth_map" and depth is not None:
         return "triton_depth_map" if can_use_triton_depth_map(depth, left.shape[1]) else "torch_depth_map"
     if output_format == "anaglyph":
-        return "triton_anaglyph" if can_use_triton_anaglyph(left, right) else "torch_anaglyph"
+        return "triton_anaglyph" if anaglyph_method == "red_cyan" and can_use_triton_anaglyph(left, right) else "torch_anaglyph"
     if output_format == "interleaved":
         return "triton_interleaved" if can_use_triton_interleaved(left, right) else "torch_interleaved"
     if output_format == "leia":
@@ -210,6 +210,35 @@ def sbs_backend(
 
 def _triton_disabled_by_env() -> bool:
     return os.environ.get("STEREO_LAB_DISABLE_TRITON", "").lower() in {"1", "true", "yes", "on"}
+
+
+def make_anaglyph_torch(
+    left: torch.Tensor,
+    right: torch.Tensor,
+    *,
+    method: AnaglyphMethod = "red_cyan",
+) -> torch.Tensor:
+    out = torch.empty_like(left)
+    if method == "red_cyan":
+        out[:, 0:1] = left[:, 0:1]
+        out[:, 1:] = right[:, 1:]
+        return out
+    if method == "green_magenta":
+        out[:, 0:1] = right[:, 0:1]
+        out[:, 1:2] = left[:, 1:2]
+        out[:, 2:3] = right[:, 2:3]
+        return out
+    if method == "amber_blue":
+        out[:, 0:2] = left[:, 0:2]
+        out[:, 2:3] = right[:, 2:3]
+        return out
+    if method == "gray":
+        left_gray = left.mean(dim=1, keepdim=True)
+        right_gray = right.mean(dim=1, keepdim=True)
+        out[:, 0:1] = left_gray
+        out[:, 1:] = right_gray
+        return out
+    raise ValueError(f"unknown anaglyph_method: {method}")
 
 
 def to_uint8_image(x: torch.Tensor) -> torch.Tensor:

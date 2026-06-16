@@ -45,6 +45,21 @@ def main() -> None:
     parser.add_argument("--onnx", default=None)
     parser.add_argument("--trt-engine", default=None)
     parser.add_argument("--no-fused", action="store_true")
+    parser.add_argument("--depth-strength", type=float, default=2.0)
+    parser.add_argument("--convergence", type=float, default=0.0)
+    parser.add_argument("--ipd", type=float, default=0.064)
+    parser.add_argument("--max-shift-ratio", type=float, default=0.05)
+    parser.add_argument("--temporal", action="store_true")
+    parser.add_argument("--temporal-strength", type=float, default=0.85)
+    parser.add_argument("--auto-reset-temporal", action="store_true")
+    parser.add_argument("--scene-reset-threshold", type=float, default=0.22)
+    parser.add_argument("--reset-cooldown-frames", type=int, default=3)
+    parser.add_argument("--foreground-scale", type=float, default=0.0)
+    parser.add_argument("--depth-antialias-strength", type=float, default=0.0)
+    parser.add_argument("--edge-dilation", type=int, default=2)
+    parser.add_argument("--edge-threshold", type=float, default=0.04)
+    parser.add_argument("--cross-eyed", action="store_true")
+    parser.add_argument("--anaglyph-method", choices=["red_cyan", "green_magenta", "amber_blue", "gray"], default="red_cyan")
     args = parser.parse_args()
 
     import torch
@@ -88,7 +103,21 @@ def main() -> None:
             backend=args.backend,
             layers=args.layers,
             output_format=output_format,
-            temporal=False,
+            depth_strength=args.depth_strength,
+            convergence=args.convergence,
+            ipd=args.ipd,
+            max_shift_ratio=args.max_shift_ratio,
+            temporal=args.temporal,
+            temporal_strength=args.temporal_strength,
+            auto_reset_temporal=args.auto_reset_temporal,
+            scene_reset_threshold=args.scene_reset_threshold,
+            reset_cooldown_frames=args.reset_cooldown_frames,
+            foreground_scale=args.foreground_scale,
+            depth_antialias_strength=args.depth_antialias_strength,
+            edge_dilation=args.edge_dilation,
+            edge_threshold=args.edge_threshold,
+            cross_eyed=args.cross_eyed,
+            anaglyph_method=args.anaglyph_method,
             debug_output=False,
             fused=not args.no_fused,
         )

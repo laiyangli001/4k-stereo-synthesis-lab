@@ -29,6 +29,17 @@ def main() -> None:
     parser.add_argument("--max-shift-ratio", type=float, default=0.05)
     parser.add_argument("--quality-layers", type=int, default=2)
     parser.add_argument("--no-fused", action="store_true")
+    parser.add_argument("--temporal", action="store_true")
+    parser.add_argument("--temporal-strength", type=float, default=0.85)
+    parser.add_argument("--auto-reset-temporal", action="store_true")
+    parser.add_argument("--scene-reset-threshold", type=float, default=0.22)
+    parser.add_argument("--reset-cooldown-frames", type=int, default=3)
+    parser.add_argument("--foreground-scale", type=float, default=0.0)
+    parser.add_argument("--depth-antialias-strength", type=float, default=0.0)
+    parser.add_argument("--edge-dilation", type=int, default=2)
+    parser.add_argument("--edge-threshold", type=float, default=0.04)
+    parser.add_argument("--cross-eyed", action="store_true")
+    parser.add_argument("--anaglyph-method", choices=["red_cyan", "green_magenta", "amber_blue", "gray"], default="red_cyan")
     args = parser.parse_args()
 
     print("[1/5] importing torch and stereo_lab ...", flush=True)
@@ -80,7 +91,17 @@ def main() -> None:
         "convergence": args.convergence,
         "ipd": args.ipd,
         "max_shift_ratio": args.max_shift_ratio,
-        "temporal": False,
+        "temporal": args.temporal,
+        "temporal_strength": args.temporal_strength,
+        "auto_reset_temporal": args.auto_reset_temporal,
+        "scene_reset_threshold": args.scene_reset_threshold,
+        "reset_cooldown_frames": args.reset_cooldown_frames,
+        "foreground_scale": args.foreground_scale,
+        "depth_antialias_strength": args.depth_antialias_strength,
+        "edge_dilation": args.edge_dilation,
+        "edge_threshold": args.edge_threshold,
+        "cross_eyed": args.cross_eyed,
+        "anaglyph_method": args.anaglyph_method,
         "debug_output": True,
         "fused": not args.no_fused,
     }
@@ -107,7 +128,17 @@ def main() -> None:
             "ipd": args.ipd,
             "max_shift_ratio": args.max_shift_ratio,
             "quality_layers": args.quality_layers,
-            "temporal": False,
+            "temporal": args.temporal,
+            "temporal_strength": args.temporal_strength,
+            "auto_reset_temporal": args.auto_reset_temporal,
+            "scene_reset_threshold": args.scene_reset_threshold,
+            "reset_cooldown_frames": args.reset_cooldown_frames,
+            "foreground_scale": args.foreground_scale,
+            "depth_antialias_strength": args.depth_antialias_strength,
+            "edge_dilation": args.edge_dilation,
+            "edge_threshold": args.edge_threshold,
+            "cross_eyed": args.cross_eyed,
+            "anaglyph_method": args.anaglyph_method,
             "fused": not args.no_fused,
         },
         "methods": {},
@@ -132,15 +163,15 @@ def main() -> None:
             results[name] = result
             timings[name] = elapsed_ms
 
-            half_sbs = make_sbs(result.left_eye, result.right_eye, "half_sbs")
-            full_sbs = make_sbs(result.left_eye, result.right_eye, "full_sbs")
-            half_tab = make_sbs(result.left_eye, result.right_eye, "half_tab")
-            full_tab = make_sbs(result.left_eye, result.right_eye, "full_tab")
-            mono = make_sbs(result.left_eye, result.right_eye, "mono")
-            depth_map = make_sbs(result.left_eye, result.right_eye, "depth_map", depth=depth)
-            anaglyph = make_sbs(result.left_eye, result.right_eye, "anaglyph")
-            interleaved = make_sbs(result.left_eye, result.right_eye, "interleaved")
-            leia = make_sbs(result.left_eye, result.right_eye, "leia")
+            half_sbs = make_sbs(result.left_eye, result.right_eye, "half_sbs", anaglyph_method=args.anaglyph_method)
+            full_sbs = make_sbs(result.left_eye, result.right_eye, "full_sbs", anaglyph_method=args.anaglyph_method)
+            half_tab = make_sbs(result.left_eye, result.right_eye, "half_tab", anaglyph_method=args.anaglyph_method)
+            full_tab = make_sbs(result.left_eye, result.right_eye, "full_tab", anaglyph_method=args.anaglyph_method)
+            mono = make_sbs(result.left_eye, result.right_eye, "mono", anaglyph_method=args.anaglyph_method)
+            depth_map = make_sbs(result.left_eye, result.right_eye, "depth_map", depth=depth, anaglyph_method=args.anaglyph_method)
+            anaglyph = make_sbs(result.left_eye, result.right_eye, "anaglyph", anaglyph_method=args.anaglyph_method)
+            interleaved = make_sbs(result.left_eye, result.right_eye, "interleaved", anaglyph_method=args.anaglyph_method)
+            leia = make_sbs(result.left_eye, result.right_eye, "leia", anaglyph_method=args.anaglyph_method)
             save_rgb(result.left_eye.cpu(), out_dir / f"{name}_left.png")
             save_rgb(result.right_eye.cpu(), out_dir / f"{name}_right.png")
             save_rgb(half_sbs.cpu(), out_dir / f"{name}_half_sbs.png")
