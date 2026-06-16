@@ -2,10 +2,12 @@ import sys
 from pathlib import Path
 
 import torch
+import torch.nn.functional as F
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from stereo_lab.hole_fill import box_blur
 from stereo_lab.synthesis import StereoConfig, synthesize_stereo
 from stereo_lab.temporal import TemporalState
 
@@ -55,3 +57,14 @@ def test_temporal_state_runs_twice():
     first = synthesize_stereo(rgb, depth, config, temporal_state=state)
     second = synthesize_stereo(rgb, depth, config, temporal_state=state)
     assert first.sbs.shape == second.sbs.shape
+
+
+def test_box_blur_matches_2d_kernel():
+    torch.manual_seed(7)
+    image = torch.rand(2, 3, 16, 18)
+    radius = 3
+    k = radius * 2 + 1
+    weight = torch.ones(3, 1, k, k, dtype=image.dtype) / float(k * k)
+    expected = F.conv2d(image, weight, padding=radius, groups=3)
+    actual = box_blur(image, radius=radius)
+    assert torch.allclose(actual, expected, atol=1e-6, rtol=1e-6)
