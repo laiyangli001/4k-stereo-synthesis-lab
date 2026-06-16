@@ -108,6 +108,8 @@ Current core output formats:
 
 4K is the stress/performance target, not a functional input-size limit. The output API and fast synthesis path are covered by tests for 720p, 1080p, portrait, and odd-size inputs. Unsupported Triton cases fall back to PyTorch instead of restricting input resolution.
 
+OpenXR note: the local environment has pyopenxr available as the `xr` module, but this lab does not yet include a full OpenXR session/swapchain runtime. The rotation-adaptive stereo core has been added in `src/stereo_lab/openxr_render.py`; it accepts arbitrary `screen_roll` angles in radians and should be used by a future runtime integration instead of fixed SBS output. `scripts/generate_openxr_stereo_preview.py` can generate roll-adaptive left/right preview images from RGB+depth inputs.
+
 `depth_map` is the matched output depth repeated to RGB channels. With `debug_output=True`, the exact tensor is also available as `debug_info["output_depth"]`.
 
 `mono` remains a direct left-eye return and does not need a Triton kernel.
@@ -146,8 +148,8 @@ Important:
 Latest verification:
 
 ```text
-47 passed
-syntax ok 45 files
+55 passed
+syntax ok 48 files
 ```
 
 Latest key outputs:
