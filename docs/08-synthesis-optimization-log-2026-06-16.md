@@ -27,7 +27,7 @@ The synthesis changes are limited to stereo generation after RGB + depth are alr
 | `1e2a171` | synthesis | Reduced depth edge allocations. |
 | `5866878` | docs | Added this optimization log. |
 | `85166be` | synthesis | Cache grid components for horizontal warp and avoid cloning the full base grid. |
-| `pending` | evaluation | Add fixed visual regression set generator for baseline vs quality_4k. |
+| `3379512` | evaluation | Add fixed visual regression set generator for baseline vs quality_4k. |
 
 ## Workflow And Evaluation Optimizations
 
@@ -545,7 +545,7 @@ Why it matters:
 Commit:
 
 ```text
-pending
+3379512 feat: add visual regression set generator
 ```
 
 File:
