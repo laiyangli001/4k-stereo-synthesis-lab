@@ -80,7 +80,7 @@ reset_cooldown_frames=2-5
 
 ## P1 参数
 
-P1 建议暴露给质量/HQ 调节，但默认保持兼容行为。
+P1 建议暴露给静态图片/HQ 调节，但默认保持兼容行为。
 
 | 参数 | 默认值 | 状态 |
 |---|---:|---|
@@ -172,7 +172,7 @@ depth_antialias_strength: 0.0 / 0.5 / 1.0
 
 - Cinema 模式：默认观影模式，适合电影、剧集、动画等相对平缓画面。目标是平衡立体强度、画面稳定性和舒适度。
 - Game / Low Latency 模式：适合游戏、桌面操作、快速鼠标移动、UI 高频变化和剧烈画面切换。目标是低延迟、快速响应，降低 temporal lag。
-- Quality / HQ 模式：质量优先模式，适合高质量观影或非极限实时场景。可以适度启用 `foreground_scale` 和 `depth_antialias_strength`，但必须通过视觉回归保护。
+- Still Image / HQ 模式：静态图片、暂停帧、截图、单张 2D -> 3D 生成等质量优先模式。可以追求更清晰、更强立体，也可以适度启用 `foreground_scale` 和 `depth_antialias_strength`，但必须通过视觉回归保护。
 - Debug / Export 模式：用于 SBS/显示器预览、截图、文件导出和算法调试，不代表 HMD/OpenXR 主观舒适默认值。
 
 建议初始参数范围：
@@ -181,15 +181,15 @@ depth_antialias_strength: 0.0 / 0.5 / 1.0
 |---|---:|---:|---:|---:|---:|---:|---:|
 | Cinema | `1.8-2.3` | `0.75-0.85` | `0.18-0.22` | `2-4` | `2` | `0.3-0.7` | `0.0-0.2` |
 | Game / Low Latency | `1.4-1.9` | `0.55-0.70` | `0.16-0.20` | `1-2` | `1-2` | `0.0-0.4` | `0.0` |
-| Quality / HQ | `1.8-2.5` | `0.70-0.85` | `0.18-0.22` | `2-4` | `2-3` | `0.3-1.0` | `0.0-0.4` |
+| Still Image / HQ | `2.0-2.8` | `0.0` | `n/a` | `n/a` | `2-3` | `0.5-1.0` | `0.2-0.5` |
 | Debug / Export | `2.0-3.0` | `0.75-0.85` | `0.20-0.25` | `2-5` | `2-3` | `0.0-1.0` | `0.0-0.4` |
 
-Quality / HQ 中的 `foreground_scale` 和 `depth_antialias_strength` 不能理解成“必开增强”。
+Still Image / HQ 中的 `foreground_scale` 和 `depth_antialias_strength` 不能理解成“必开增强”。
 
 - `foreground_scale` 会改变 depth 分布，让前景或主体更突出。它可能改善人物和主体层次，也可能把脸、墙面、天空、字幕等本应平缓的区域拉出错误深度。
 - `depth_antialias_strength` 会平滑 depth 边缘。它可能减少边缘锯齿、闪烁和遮挡毛刺，也可能让前景边界变软，造成软边、漏深度或细节损失。
 
-因此 Quality / HQ 的后处理必须用固定样本做视觉回归对比：
+因此 Still Image / HQ 的后处理必须用固定样本做视觉回归对比：
 
 ```text
 不开后处理
@@ -198,7 +198,7 @@ depth_antialias_strength=0.5
 foreground_scale=0.2 + depth_antialias_strength=0.5
 ```
 
-重点看人物边缘是否软化、字幕是否变形、遮挡边界是否更干净、墙面/天空是否被错误拉出深度、快速运动是否拖影。
+重点看人物边缘是否软化、字幕是否变形、遮挡边界是否更干净、墙面/天空是否被错误拉出深度。对于暂停帧和单张图片，`temporal` 和 `auto_reset_temporal` 应关闭，因为没有跨帧状态需要平滑或重置。
 
 推荐判定方式：
 
@@ -207,7 +207,7 @@ foreground_scale=0.2 + depth_antialias_strength=0.5
 2. 每次只改变一组参数，生成视觉回归输出。
 3. 对比 contact_sheet_labeled.png、左右眼、depth_map、occlusion_mask、absdiff。
 4. 记录每组参数的可见问题和性能影响。
-5. 选出 Cinema、Game / Low Latency、Quality / HQ、Debug / Export 四套默认值。
+5. 选出 Cinema、Game / Low Latency、Still Image / HQ、Debug / Export 四套默认值。
 ```
 
 视觉回归是调参的主要依据之一，但最终默认值必须同时满足画质、延迟和 VR 舒适度。
