@@ -7,6 +7,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from stereo_lab.output import OUTPUT_FORMAT_CHOICES
+
 
 def main() -> None:
     print("[1/6] parsing arguments ...", flush=True)
@@ -25,7 +27,7 @@ def main() -> None:
     parser.add_argument("--device", default=None)
     parser.add_argument(
         "--output-format",
-        choices=["half_sbs", "full_sbs", "half_tab", "full_tab", "mono", "depth_map"],
+        choices=OUTPUT_FORMAT_CHOICES,
         default="half_sbs",
     )
     parser.add_argument("--depth-strength", type=float, default=3.0)

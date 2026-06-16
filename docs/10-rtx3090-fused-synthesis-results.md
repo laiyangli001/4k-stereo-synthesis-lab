@@ -17,7 +17,7 @@ Base Native TensorRT is resident and remains the recommended depth backend.
 
 ### Synthesis
 
-Eight optional fused Triton paths are now available:
+Eleven optional fused Triton paths are now available:
 
 - `triton_radius3` hole fill for CUDA float32, `B x 3 x H x W` image, `B x 1 x H x W` mask, `radius=3`, `strength=1.0`.
 - `triton_warp_composite2` for CUDA float32, 2-layer, symmetric, single-frame `quality_4k` warp + composite.
@@ -27,6 +27,9 @@ Eight optional fused Triton paths are now available:
 - `triton_half_tab` for CUDA float32, single-frame `B=1, C=3`, even-height Half-TAB resize + pack.
 - `triton_full_tab` for CUDA float32, single-frame `B=1, C=3`, Full-TAB copy + pack.
 - `triton_depth_map` for CUDA float32, single-frame `B=1, C=1` depth repeated to RGB channels.
+- `triton_anaglyph` for CUDA float32, single-frame `B=1, C=3`, red channel from left and green/blue channels from right.
+- `triton_interleaved` for CUDA float32, single-frame `B=1, C=3`, even rows from left and odd rows from right.
+- `triton_leia` for CUDA float32, single-frame `B=1, C=3`, even columns from left and odd columns from right.
 
 All paths are guarded by strict shape/type/config checks and fall back to the original PyTorch implementation when unsupported.
 
@@ -53,10 +56,25 @@ The core output API now covers the file/API formats that map directly from synth
 - `full_tab`: full-height left/right packed top/bottom.
 - `mono`: left-eye output, useful for fallback and debugging.
 - `depth_map`: matched output depth repeated to RGB channels, useful for debug/export. In `debug_output=True`, the exact tensor is also available as `debug_info["output_depth"]`.
+- `anaglyph`: red channel from left, green/blue channels from right.
+- `interleaved`: even rows from left, odd rows from right.
+- `leia`: even columns from left, odd columns from right.
 
 `mono` remains a direct left-eye return and does not need a Triton kernel.
 
-Desktop2Stereo also exposes `Anaglyph`, `Interleaved`, and `Leia`. Those are deferred here because Desktop2Stereo implements them as display/viewer-style shader modes rather than simple tensor packaging from existing left/right images.
+Desktop2Stereo also exposes `Anaglyph`, `Interleaved`, and `Leia` as display/viewer shader modes. The lab implementation is intentionally a file/API post-processing path from already synthesized left/right tensors, not full viewer shader DIBR parity.
+
+Smoke verification for these three display formats:
+
+```text
+outputs/stereo_display_formats_triton_smoke.json
+```
+
+Confirmed `synthesis_debug.sbs_backend` values:
+
+- `anaglyph`: `triton_anaglyph`
+- `interleaved`: `triton_interleaved`
+- `leia`: `triton_leia`
 
 ## End-to-End Results
 
@@ -205,7 +223,7 @@ Manual visual inspection of `contact_sheet_labeled.png` for both Base and Large 
   - `breakdown_mean_ms`, which uses the manual unfused breakdown path for component attribution.
 - Fused warp/composite is not used for `hq_4k` 3+ layers, asymmetric mode, CPU, non-float32 tensors, or unsupported shapes.
 - Fused occlusion is not used for non-default threshold/dilation, CPU, non-float32 tensors, or unsupported shapes.
-- `bench_end_to_end_4k.py` records `synthesis_debug.warp_composite_backend`, `synthesis_debug.occlusion_mask_backend`, `synthesis_debug.hole_fill_backend`, and `synthesis_debug.sbs_backend`; output backends include `triton_half_sbs`, `triton_full_sbs`, `triton_half_tab`, `triton_full_tab`, `triton_depth_map`, and `torch_mono_left`.
+- `bench_end_to_end_4k.py` records `synthesis_debug.warp_composite_backend`, `synthesis_debug.occlusion_mask_backend`, `synthesis_debug.hole_fill_backend`, and `synthesis_debug.sbs_backend`; output backends include `triton_half_sbs`, `triton_full_sbs`, `triton_half_tab`, `triton_full_tab`, `triton_depth_map`, `triton_anaglyph`, `triton_interleaved`, `triton_leia`, and `torch_mono_left`.
 
 ## Next Verification Targets
 

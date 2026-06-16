@@ -138,6 +138,9 @@ def main() -> None:
             full_tab = make_sbs(result.left_eye, result.right_eye, "full_tab")
             mono = make_sbs(result.left_eye, result.right_eye, "mono")
             depth_map = make_sbs(result.left_eye, result.right_eye, "depth_map", depth=depth)
+            anaglyph = make_sbs(result.left_eye, result.right_eye, "anaglyph")
+            interleaved = make_sbs(result.left_eye, result.right_eye, "interleaved")
+            leia = make_sbs(result.left_eye, result.right_eye, "leia")
             save_rgb(result.left_eye.cpu(), out_dir / f"{name}_left.png")
             save_rgb(result.right_eye.cpu(), out_dir / f"{name}_right.png")
             save_rgb(half_sbs.cpu(), out_dir / f"{name}_half_sbs.png")
@@ -146,6 +149,9 @@ def main() -> None:
             save_rgb(full_tab.cpu(), out_dir / f"{name}_full_tab.png")
             save_rgb(mono.cpu(), out_dir / f"{name}_mono.png")
             save_rgb(depth_map.cpu(), out_dir / f"{name}_depth_map.png")
+            save_rgb(anaglyph.cpu(), out_dir / f"{name}_anaglyph.png")
+            save_rgb(interleaved.cpu(), out_dir / f"{name}_interleaved.png")
+            save_rgb(leia.cpu(), out_dir / f"{name}_leia.png")
 
             shift = result.debug_info.get("shift_px")
             if shift is not None:
@@ -167,6 +173,9 @@ def main() -> None:
                 "full_tab_shape": list(full_tab.shape),
                 "mono_shape": list(mono.shape),
                 "depth_map_shape": list(depth_map.shape),
+                "anaglyph_shape": list(anaglyph.shape),
+                "interleaved_shape": list(interleaved.shape),
+                "leia_shape": list(leia.shape),
             }
             print(f"  {name}: {elapsed_ms:.3f} ms", flush=True)
 

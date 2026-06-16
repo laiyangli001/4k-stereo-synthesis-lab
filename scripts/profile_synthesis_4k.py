@@ -9,6 +9,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from stereo_lab.output import OUTPUT_FORMAT_CHOICES
+
 
 def main() -> None:
     parser = argparse.ArgumentParser()
@@ -19,7 +21,7 @@ def main() -> None:
     parser.add_argument("--layers", type=int, default=2)
     parser.add_argument(
         "--output-format",
-        choices=["half_sbs", "full_sbs", "half_tab", "full_tab", "mono", "depth_map"],
+        choices=OUTPUT_FORMAT_CHOICES,
         default="half_sbs",
     )
     parser.add_argument("--iters", type=int, default=10)
@@ -104,7 +106,7 @@ def main() -> None:
         fill_ms = (time.perf_counter() - start) * 1000.0
 
         start = time.perf_counter()
-        sbs = make_sbs(left, right, args.output_format, depth=depth_matched)
+        sbs = make_sbs(left, right, args.output_format, depth=local_depth, fused=not args.no_fused)
         sync()
         sbs_ms = (time.perf_counter() - start) * 1000.0
         return sbs, {

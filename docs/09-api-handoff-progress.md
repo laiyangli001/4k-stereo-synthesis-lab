@@ -90,6 +90,9 @@ Current fused synthesis backends:
 - `triton_half_tab` for Half-TAB output
 - `triton_full_tab` for Full-TAB output
 - `triton_depth_map` for depth-map output
+- `triton_anaglyph` for anaglyph display output
+- `triton_interleaved` for row-interleaved display output
+- `triton_leia` for column-interleaved Leia-style display output
 
 Current core output formats:
 
@@ -99,12 +102,21 @@ Current core output formats:
 - `full_tab`
 - `mono`
 - `depth_map`
+- `anaglyph`
+- `interleaved`
+- `leia`
 
 `depth_map` is the matched output depth repeated to RGB channels. With `debug_output=True`, the exact tensor is also available as `debug_info["output_depth"]`.
 
 `mono` remains a direct left-eye return and does not need a Triton kernel.
 
-Desktop2Stereo also has `Anaglyph`, `Interleaved`, and `Leia`; these are not yet ported because they are viewer/shader-style display modes, not simple left/right tensor pack formats.
+Desktop2Stereo also has `Anaglyph`, `Interleaved`, and `Leia`. The lab now exposes these as file/API post-processing formats from already synthesized left/right tensors:
+
+- `anaglyph`: red channel from left, green/blue channels from right.
+- `interleaved`: even rows from left, odd rows from right.
+- `leia`: even columns from left, odd columns from right.
+
+This is not full Desktop2Stereo viewer shader parity because the reference viewer performs display-time shader DIBR from RGB+depth for these modes.
 
 Confirmed in benchmark JSON under:
 
@@ -132,7 +144,7 @@ Important:
 Latest verification:
 
 ```text
-39 passed
+41 passed
 syntax ok 45 files
 ```
 
@@ -142,6 +154,7 @@ Latest key outputs:
 outputs/rtx3090_end_to_end_base_quality_full_sbs_triton.json
 outputs/rtx3090_end_to_end_large_quality_half_sbs_fused.json
 outputs/stereo_output_formats_triton_smoke.json
+outputs/stereo_display_formats_triton_smoke.json
 outputs/visual_regression/rtx3090_base_quality_full_sbs_triton
 outputs/visual_regression/rtx3090_large_quality_half_sbs_fused
 ```

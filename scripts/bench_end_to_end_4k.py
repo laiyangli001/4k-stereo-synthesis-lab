@@ -10,6 +10,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from stereo_lab.output import OUTPUT_FORMAT_CHOICES
+
 
 def summarize(values: list[float]) -> dict[str, float]:
     if not values:
@@ -33,7 +35,7 @@ def main() -> None:
     parser.add_argument("--layers", type=int, default=2)
     parser.add_argument(
         "--output-format",
-        choices=["half_sbs", "full_sbs", "half_tab", "full_tab", "mono", "depth_map"],
+        choices=OUTPUT_FORMAT_CHOICES,
         action="append",
         default=None,
     )

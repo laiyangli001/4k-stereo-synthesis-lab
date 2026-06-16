@@ -6,7 +6,28 @@ from typing import Literal
 import torch
 import torch.nn.functional as F
 
-OutputFormat = Literal["half_sbs", "full_sbs", "half_tab", "full_tab", "mono", "depth_map"]
+OutputFormat = Literal[
+    "half_sbs",
+    "full_sbs",
+    "half_tab",
+    "full_tab",
+    "mono",
+    "depth_map",
+    "anaglyph",
+    "interleaved",
+    "leia",
+]
+OUTPUT_FORMAT_CHOICES = (
+    "half_sbs",
+    "full_sbs",
+    "half_tab",
+    "full_tab",
+    "mono",
+    "depth_map",
+    "anaglyph",
+    "interleaved",
+    "leia",
+)
 
 
 def ensure_bchw(x: torch.Tensor, *, name: str) -> torch.Tensor:
@@ -48,6 +69,36 @@ def make_sbs(
 
     if output_format == "mono":
         return left
+
+    if output_format == "anaglyph":
+        if sbs_backend(left, right, output_format, fused=fused) == "triton_anaglyph":
+            from .output_triton import make_anaglyph
+
+            return make_anaglyph(left, right)
+        out = torch.empty_like(left)
+        out[:, 0:1] = left[:, 0:1]
+        out[:, 1:] = right[:, 1:]
+        return out
+
+    if output_format == "interleaved":
+        if sbs_backend(left, right, output_format, fused=fused) == "triton_interleaved":
+            from .output_triton import make_interleaved
+
+            return make_interleaved(left, right)
+        out = torch.empty_like(left)
+        out[..., 0::2, :] = left[..., 0::2, :]
+        out[..., 1::2, :] = right[..., 1::2, :]
+        return out
+
+    if output_format == "leia":
+        if sbs_backend(left, right, output_format, fused=fused) == "triton_leia":
+            from .output_triton import make_leia
+
+            return make_leia(left, right)
+        out = torch.empty_like(left)
+        out[..., :, 0::2] = left[..., :, 0::2]
+        out[..., :, 1::2] = right[..., :, 1::2]
+        return out
 
     if output_format == "depth_map":
         if depth is None:
@@ -115,17 +166,24 @@ def sbs_backend(
         return "torch_depth_map"
     if output_format == "mono":
         return "torch_mono_left"
-    if output_format not in {"half_sbs", "full_sbs", "half_tab", "full_tab", "depth_map"}:
+    if output_format in {"anaglyph", "interleaved", "leia"} and (not fused or _triton_disabled_by_env()):
+        return f"torch_{output_format}"
+    if output_format not in {"half_sbs", "full_sbs", "half_tab", "full_tab", "depth_map", "anaglyph", "interleaved", "leia"}:
         return "torch_output"
     try:
         from .output_triton import (
+            can_use_triton_anaglyph,
             can_use_triton_depth_map,
             can_use_triton_full_sbs,
             can_use_triton_full_tab,
             can_use_triton_half_sbs,
             can_use_triton_half_tab,
+            can_use_triton_interleaved,
+            can_use_triton_leia,
         )
     except Exception:
+        if output_format in {"anaglyph", "interleaved", "leia"}:
+            return f"torch_{output_format}"
         if output_format in {"full_sbs", "full_tab"}:
             return "torch_cat"
         if output_format == "depth_map":
@@ -141,6 +199,12 @@ def sbs_backend(
         return "triton_half_tab" if can_use_triton_half_tab(left, right) else "torch_interpolate_vertical"
     if output_format == "depth_map" and depth is not None:
         return "triton_depth_map" if can_use_triton_depth_map(depth, left.shape[1]) else "torch_depth_map"
+    if output_format == "anaglyph":
+        return "triton_anaglyph" if can_use_triton_anaglyph(left, right) else "torch_anaglyph"
+    if output_format == "interleaved":
+        return "triton_interleaved" if can_use_triton_interleaved(left, right) else "torch_interleaved"
+    if output_format == "leia":
+        return "triton_leia" if can_use_triton_leia(left, right) else "torch_leia"
     return "torch_depth_map"
 
 

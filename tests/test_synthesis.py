@@ -54,6 +54,23 @@ def test_tab_mono_and_depth_map_shapes():
     assert torch.equal(depth_map.sbs[:, 0:1], depth)
 
 
+def test_composite_display_output_semantics():
+    left = torch.zeros(1, 3, 4, 6)
+    right = torch.ones(1, 3, 4, 6)
+
+    anaglyph = make_sbs(left, right, "anaglyph", fused=False)
+    assert torch.equal(anaglyph[:, 0:1], left[:, 0:1])
+    assert torch.equal(anaglyph[:, 1:], right[:, 1:])
+
+    interleaved = make_sbs(left, right, "interleaved", fused=False)
+    assert torch.equal(interleaved[..., 0::2, :], left[..., 0::2, :])
+    assert torch.equal(interleaved[..., 1::2, :], right[..., 1::2, :])
+
+    leia = make_sbs(left, right, "leia", fused=False)
+    assert torch.equal(leia[..., :, 0::2], left[..., :, 0::2])
+    assert torch.equal(leia[..., :, 1::2], right[..., :, 1::2])
+
+
 def test_quality_depth_map_uses_matched_output_depth():
     rgb, depth = make_inputs(width=64, height=32)
     low_res_depth = F.interpolate(depth, size=(16, 32), mode="bilinear", align_corners=False)
@@ -220,6 +237,23 @@ def test_fused_depth_map_cuda_matches_torch_path_when_available():
     assert sbs_backend(left, right, "depth_map", fused=True, depth=depth) == "triton_depth_map"
 
 
+def test_fused_composite_display_outputs_cuda_match_torch_path_when_available():
+    if not torch.cuda.is_available():
+        return
+    torch.manual_seed(37)
+    left = torch.rand(1, 3, 24, 40, device="cuda")
+    right = torch.rand(1, 3, 24, 40, device="cuda")
+    for output_format, backend in (
+        ("anaglyph", "triton_anaglyph"),
+        ("interleaved", "triton_interleaved"),
+        ("leia", "triton_leia"),
+    ):
+        expected = make_sbs(left, right, output_format, fused=False)
+        actual = make_sbs(left, right, output_format, fused=True)
+        assert torch.equal(actual, expected)
+        assert sbs_backend(left, right, output_format, fused=True) == backend
+
+
 def test_depth_map_requires_depth():
     left = torch.rand(1, 3, 8, 10)
     right = torch.rand(1, 3, 8, 10)
@@ -260,6 +294,14 @@ def test_fused_config_false_uses_torch_backends():
     )
     assert depth_map_result.debug_info["sbs_backend"] == "torch_depth_map"
 
+    for output_format in ("anaglyph", "interleaved", "leia"):
+        format_result = synthesize_stereo(
+            rgb,
+            depth,
+            StereoConfig(backend="quality_4k", layers=2, output_format=output_format, debug_output=True, temporal=False, fused=False),
+        )
+        assert format_result.debug_info["sbs_backend"] == f"torch_{output_format}"
+
 
 def test_disable_triton_env_uses_torch_backends(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("STEREO_LAB_DISABLE_TRITON", "1")
@@ -294,6 +336,14 @@ def test_disable_triton_env_uses_torch_backends(monkeypatch: pytest.MonkeyPatch)
         StereoConfig(backend="quality_4k", layers=2, output_format="depth_map", debug_output=True, temporal=False),
     )
     assert depth_map_result.debug_info["sbs_backend"] == "torch_depth_map"
+
+    for output_format in ("anaglyph", "interleaved", "leia"):
+        format_result = synthesize_stereo(
+            rgb,
+            depth,
+            StereoConfig(backend="quality_4k", layers=2, output_format=output_format, debug_output=True, temporal=False),
+        )
+        assert format_result.debug_info["sbs_backend"] == f"torch_{output_format}"
 
 
 def test_warp_horizontal_matches_cached_grid_formula():

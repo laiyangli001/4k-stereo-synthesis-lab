@@ -7,6 +7,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from stereo_lab.output import OUTPUT_FORMAT_CHOICES
+
 
 def make_synthetic_frame(torch, width: int, height: int, device):
     y = torch.linspace(0, 1, height, device=device)
@@ -25,7 +27,7 @@ def main() -> None:
     parser.add_argument("--backend", choices=["fast", "quality_4k", "hq_4k"], default="quality_4k")
     parser.add_argument(
         "--output-format",
-        choices=["half_sbs", "full_sbs", "half_tab", "full_tab", "mono", "depth_map"],
+        choices=OUTPUT_FORMAT_CHOICES,
         default="half_sbs",
     )
     parser.add_argument("--layers", type=int, default=2)

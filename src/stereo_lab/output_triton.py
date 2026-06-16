@@ -100,6 +100,32 @@ def can_use_triton_depth_map(depth: torch.Tensor, channels: int) -> bool:
     )
 
 
+def _can_use_triton_postprocess(left: torch.Tensor, right: torch.Tensor) -> bool:
+    return (
+        left.is_cuda
+        and right.is_cuda
+        and left.dtype == torch.float32
+        and right.dtype == torch.float32
+        and left.ndim == 4
+        and right.ndim == 4
+        and left.shape == right.shape
+        and left.shape[0] == 1
+        and left.shape[1] == 3
+    )
+
+
+def can_use_triton_anaglyph(left: torch.Tensor, right: torch.Tensor) -> bool:
+    return _can_use_triton_postprocess(left, right)
+
+
+def can_use_triton_interleaved(left: torch.Tensor, right: torch.Tensor) -> bool:
+    return _can_use_triton_postprocess(left, right)
+
+
+def can_use_triton_leia(left: torch.Tensor, right: torch.Tensor) -> bool:
+    return _can_use_triton_postprocess(left, right)
+
+
 def make_half_sbs(left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
     left = left.contiguous()
     right = right.contiguous()
@@ -277,3 +303,60 @@ def make_depth_map(depth: torch.Tensor, channels: int) -> torch.Tensor:
     grid = (triton.cdiv(total, block),)
     _depth_map_kernel[grid](depth, out, total, pixels, block)
     return out
+
+
+@triton.jit
+def _stereo_postprocess_kernel(
+    left,
+    right,
+    out,
+    total: tl.constexpr,
+    width: tl.constexpr,
+    pixels: tl.constexpr,
+    mode: tl.constexpr,
+    block: tl.constexpr,
+):
+    offsets = tl.program_id(0) * block + tl.arange(0, block)
+    active = offsets < total
+    pixel = offsets % pixels
+    y = pixel // width
+    x = pixel - y * width
+    channel = offsets // pixels
+
+    use_left = channel == 0
+    if mode == 1:
+        use_left = (y % 2) == 0
+    if mode == 2:
+        use_left = (x % 2) == 0
+
+    value = tl.where(
+        use_left,
+        tl.load(left + offsets, mask=active, other=0.0),
+        tl.load(right + offsets, mask=active, other=0.0),
+    )
+    tl.store(out + offsets, value, mask=active)
+
+
+def _make_stereo_postprocess(left: torch.Tensor, right: torch.Tensor, mode: int) -> torch.Tensor:
+    left = left.contiguous()
+    right = right.contiguous()
+    out = torch.empty_like(left)
+    _, _, height, width = left.shape
+    pixels = height * width
+    total = left.numel()
+    block = 256
+    grid = (triton.cdiv(total, block),)
+    _stereo_postprocess_kernel[grid](left, right, out, total, width, pixels, mode, block)
+    return out
+
+
+def make_anaglyph(left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
+    return _make_stereo_postprocess(left, right, mode=0)
+
+
+def make_interleaved(left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
+    return _make_stereo_postprocess(left, right, mode=1)
+
+
+def make_leia(left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
+    return _make_stereo_postprocess(left, right, mode=2)
