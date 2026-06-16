@@ -17,13 +17,17 @@ https://github.com/laiyangli001/4k-stereo-synthesis-lab
 Latest pushed commit at handoff:
 
 ```text
-428eb80 feat: add labeled visual regression sheets
+79244af docs: add auto stereo mode guidance
 ```
 
 Important docs:
 
 - `docs/07-depth-backend-benchmark-2026-06-16.md`
 - `docs/08-synthesis-optimization-log-2026-06-16.md`
+- `docs/10-rtx3090-fused-synthesis-results-2026-06-17.md`
+- `docs/11-visual-regression-guide.md`
+- `docs/12-openxr-stereo-runtime-plan.md`
+- `docs/13-realtime-stereo-parameter-guide.md`
 - This file: `docs/09-handoff-2026-06-16.md`
 
 Note:
@@ -109,9 +113,13 @@ Current core output formats:
 Realtime parameter status:
 
 - P0 GUI/API parameters are implemented with defaults: `depth_strength`, `convergence`, `ipd`, `max_shift_ratio`, `temporal_strength`, `auto_reset_temporal`, `scene_reset_threshold`, `reset_cooldown_frames`, `edge_dilation`, `edge_threshold`, and OpenXR roll-adaptive core parameters.
-- P1 quality parameters are implemented where executable: `foreground_scale`, `depth_antialias_strength`, `cross_eyed`, and `anaglyph_method`.
+- P1 still-image/HQ parameters are implemented where executable: `foreground_scale`, `depth_antialias_strength`, `cross_eyed`, and `anaglyph_method`.
 - `synthetic_view` should be represented by `backend=fast/quality_4k/hq_4k` or OpenXR mode, not a separate no-op parameter.
 - Offline P2 items are intentionally excluded from realtime: offline video lookahead, TransNetV2 scene detection, and HDR/video codec pipeline.
+- GUI mode taxonomy is now: `Auto`, `Cinema`, `Game / Low Latency`, `Still Image / HQ`, and `Debug / Export`.
+- `Auto Mode` is the recommended GUI default. It should classify by frame motion, still duration, foreground process/window type, frame-rate/latency pressure, OpenXR state, and user export/debug actions.
+- Auto mode must use hysteresis: require consecutive frames before switching, hold mode for `2-5` seconds, blend parameters instead of jumping, and quickly downgrade to `Game / Low Latency` on scene reset or violent motion.
+- `Still Image / HQ` is for static images, screenshots, paused frames, and single-image 2D-to-3D generation. It should disable `temporal` and `auto_reset_temporal`.
 - Details: `docs/13-realtime-stereo-parameter-guide.md`
 
 4K is the stress/performance target, not a functional input-size limit. The output API and fast synthesis path are covered by tests for 720p, 1080p, portrait, and odd-size inputs. Unsupported Triton cases fall back to PyTorch instead of restricting input resolution.
@@ -361,7 +369,8 @@ Tests:
 Current latest result:
 
 ```text
-24 passed
+61 passed, 1 warning
+compileall syntax ok
 ```
 
 Synthesis profile:
@@ -384,16 +393,24 @@ Visual regression:
 
 ## Recommended Next Steps
 
-1. Before any further synthesis optimization, generate a visual regression set for the current baseline.
-2. Optimize `hole_fill` only with visual regression checks.
-3. Do not change hole fill radius/strategy unless the user approves visual quality evaluation.
-4. Investigate semantically equivalent lower-bandwidth hole fill or a fused CUDA/shader path.
-5. Re-run formal benchmarks on RTX 3090 / RTX 5070 when available:
+1. Implement GUI-side `Auto Mode` state machine:
+   - `frame_motion_score`
+   - `scene_cut_score`
+   - `still_duration`
+   - `foreground_process`
+   - `fullscreen_state`
+   - `openxr_active`
+   - `user_export_action`
+2. Map `Auto Mode` output to `StereoModePreset`, `StereoConfig`, and `OpenXRRenderConfig`.
+3. Generate visual regression sets for representative Cinema, Game / Low Latency, Still Image / HQ, and Debug / Export samples.
+4. Use visual regression to finalize default preset values.
+5. Optimize `hole_fill` only with visual regression checks.
+6. Re-run formal benchmarks on RTX 3090 / RTX 5070 when available:
    - `bench_depth_backends.py`
    - `profile_synthesis_4k.py`
    - `bench_end_to_end_4k.py`
    - `generate_visual_regression_set.py`
-6. Add true iw3 same-scene comparison later, after fixed RGB/depth/output format is locked.
+7. Add true iw3 same-scene comparison later, after fixed RGB/depth/output format is locked.
 
 ## Current Bottleneck
 
