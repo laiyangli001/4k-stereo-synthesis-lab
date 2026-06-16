@@ -17,7 +17,7 @@ https://github.com/laiyangli001/4k-stereo-synthesis-lab
 Latest pushed commit at handoff:
 
 ```text
-79244af docs: add auto stereo mode guidance
+f3569c6 docs: update handoff with auto mode plan
 ```
 
 Important docs:
@@ -28,7 +28,7 @@ Important docs:
 - `docs/11-visual-regression-guide.md`
 - `docs/12-openxr-stereo-runtime-plan.md`
 - `docs/13-realtime-stereo-parameter-guide.md`
-- This file: `docs/09-handoff-2026-06-16.md`
+- This file: `docs/00-api-handoff-progress.md`
 
 Note:
 
