@@ -106,6 +106,8 @@ Current core output formats:
 - `interleaved`
 - `leia`
 
+4K is the stress/performance target, not a functional input-size limit. The output API and fast synthesis path are covered by tests for 720p, 1080p, portrait, and odd-size inputs. Unsupported Triton cases fall back to PyTorch instead of restricting input resolution.
+
 `depth_map` is the matched output depth repeated to RGB channels. With `debug_output=True`, the exact tensor is also available as `debug_info["output_depth"]`.
 
 `mono` remains a direct left-eye return and does not need a Triton kernel.
@@ -144,7 +146,7 @@ Important:
 Latest verification:
 
 ```text
-41 passed
+47 passed
 syntax ok 45 files
 ```
 

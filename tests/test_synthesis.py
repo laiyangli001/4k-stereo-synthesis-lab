@@ -12,7 +12,7 @@ from stereo_lab.hole_fill import box_blur, edge_aware_fill
 from stereo_lab.baseline_shift import ShiftParams, compute_shift_px, make_base_grid, warp_horizontal
 from stereo_lab.layers import composite_layers, depth_edges, make_depth_layers
 from stereo_lab.occlusion import make_occlusion_mask
-from stereo_lab.output import make_sbs, match_depth, sbs_backend
+from stereo_lab.output import OUTPUT_FORMAT_CHOICES, make_sbs, match_depth, sbs_backend
 from stereo_lab.synthesis import StereoConfig, _try_fused_warp_composite2, synthesize_stereo
 from stereo_lab.temporal import TemporalState
 
@@ -69,6 +69,51 @@ def test_composite_display_output_semantics():
     leia = make_sbs(left, right, "leia", fused=False)
     assert torch.equal(leia[..., :, 0::2], left[..., :, 0::2])
     assert torch.equal(leia[..., :, 1::2], right[..., :, 1::2])
+
+
+@pytest.mark.parametrize(
+    ("width", "height"),
+    [
+        (1280, 720),
+        (1920, 1080),
+        (720, 1280),
+        (641, 359),
+    ],
+)
+def test_output_formats_support_non_4k_resolutions(width: int, height: int):
+    left = torch.zeros(1, 3, height, width)
+    right = torch.ones(1, 3, height, width)
+    depth = torch.linspace(0, 1, width).view(1, 1, 1, width).expand(1, 1, height, width)
+
+    expected_shapes = {
+        "half_sbs": (1, 3, height, width),
+        "full_sbs": (1, 3, height, width * 2),
+        "half_tab": (1, 3, height, width),
+        "full_tab": (1, 3, height * 2, width),
+        "mono": (1, 3, height, width),
+        "depth_map": (1, 3, height, width),
+        "anaglyph": (1, 3, height, width),
+        "interleaved": (1, 3, height, width),
+        "leia": (1, 3, height, width),
+    }
+
+    for output_format in OUTPUT_FORMAT_CHOICES:
+        kwargs = {"depth": depth} if output_format == "depth_map" else {}
+        actual = make_sbs(left, right, output_format, fused=False, **kwargs)
+        assert actual.shape == expected_shapes[output_format]
+
+
+def test_fast_synthesis_supports_odd_and_portrait_resolutions():
+    for width, height in ((641, 359), (360, 641)):
+        rgb, depth = make_inputs(width=width, height=height)
+        for output_format in OUTPUT_FORMAT_CHOICES:
+            result = synthesize_stereo(rgb, depth, StereoConfig(backend="fast", output_format=output_format))
+            if output_format == "full_sbs":
+                assert result.sbs.shape == (1, 3, height, width * 2)
+            elif output_format == "full_tab":
+                assert result.sbs.shape == (1, 3, height * 2, width)
+            else:
+                assert result.sbs.shape == rgb.shape
 
 
 def test_quality_depth_map_uses_matched_output_depth():
@@ -252,6 +297,21 @@ def test_fused_composite_display_outputs_cuda_match_torch_path_when_available():
         actual = make_sbs(left, right, output_format, fused=True)
         assert torch.equal(actual, expected)
         assert sbs_backend(left, right, output_format, fused=True) == backend
+
+
+def test_odd_resolution_cuda_output_backends_fall_back_when_required():
+    if not torch.cuda.is_available():
+        return
+    left = torch.rand(1, 3, 23, 39, device="cuda")
+    right = torch.rand(1, 3, 23, 39, device="cuda")
+
+    assert sbs_backend(left, right, "half_sbs", fused=True) == "torch_interpolate"
+    assert sbs_backend(left, right, "half_tab", fused=True) == "torch_interpolate_vertical"
+    assert sbs_backend(left, right, "full_sbs", fused=True) == "triton_full_sbs"
+    assert sbs_backend(left, right, "full_tab", fused=True) == "triton_full_tab"
+    assert sbs_backend(left, right, "anaglyph", fused=True) == "triton_anaglyph"
+    assert sbs_backend(left, right, "interleaved", fused=True) == "triton_interleaved"
+    assert sbs_backend(left, right, "leia", fused=True) == "triton_leia"
 
 
 def test_depth_map_requires_depth():
