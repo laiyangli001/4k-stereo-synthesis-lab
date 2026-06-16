@@ -63,15 +63,15 @@ Backend fields:
 Command:
 
 ```powershell
-.\python3\python.exe -B scripts\bench_end_to_end_4k.py --rgb 4K.jpg --out outputs\rtx3090_end_to_end_large_quality_final_fused.json --warmup 3 --iters 10 --backend quality_4k --layers 2 --depth-backend tensorrt_native --onnx models\models--xingyang1--Distill-Any-Depth-Large-hf\model_fp16_294x518.onnx --trt-engine models\models--xingyang1--Distill-Any-Depth-Large-hf\model_fp16_294x518.trt --output-format half_sbs --output-format full_sbs
+.\python3\python.exe -B scripts\bench_end_to_end_4k.py --rgb 4K.jpg --out outputs\rtx3090_end_to_end_large_quality_half_sbs_fused.json --warmup 5 --iters 20 --backend quality_4k --layers 2 --depth-backend tensorrt_native --onnx models\models--xingyang1--Distill-Any-Depth-Large-hf\model_fp16_294x518.onnx --trt-engine models\models--xingyang1--Distill-Any-Depth-Large-hf\model_fp16_294x518.trt --output-format half_sbs --output-format full_sbs
 ```
 
 | Output | Depth ms | Synthesis ms | Total ms | FPS |
 |---|---:|---:|---:|---:|
-| Half-SBS | 13.588 | 7.732 | 21.322 | 46.90 |
-| Full-SBS | 12.845 | 7.441 | 20.287 | 49.29 |
+| Half-SBS | 12.441 | 5.561 | 18.003 | 55.55 |
+| Full-SBS | 12.543 | 5.819 | 18.363 | 54.46 |
 
-The Large model is visually usable for quality comparison on RTX 3090, but it is not a 4K 60 FPS end-to-end target in this current path because depth inference is the bottleneck.
+The Large model is visually usable for quality comparison on RTX 3090 and now lands near 55 FPS in this path. It is still below the 4K 60 FPS target because depth inference is the bottleneck.
 
 Provider metadata for explicit Large ONNX/TRT paths is inferred from the Hugging Face cache-style directory name, so JSON reports should show `xingyang1/Distill-Any-Depth-Large-hf` instead of the Base default.
 
@@ -102,7 +102,7 @@ outputs/visual_regression/rtx3090_base_quality_half_sbs_fused
 Large set:
 
 ```text
-outputs/visual_regression/rtx3090_large_engine_quality_final_fused
+outputs/visual_regression/rtx3090_large_quality_half_sbs_fused
 ```
 
 Compared with `rtx3090_base_quality_triton_holefill`:
@@ -135,6 +135,16 @@ Compared with `rtx3090_base_quality_occlusion_fused`, the fused Half-SBS path pr
 - `quality_4k_half_sbs.png`: max uint8 diff 1, mean 0.000026
 
 The Half-SBS differences are limited to 1/255-level rounding differences from the fused linear resize path.
+
+The same pattern holds for Large when compared with `rtx3090_large_engine_quality_final_fused`:
+
+- `used_depth.png`: identical
+- `quality_4k_left.png`: identical
+- `quality_4k_right.png`: identical
+- `quality_4k_full_sbs.png`: identical
+- `quality_4k_occlusion_mask.png`: identical
+- `baseline_half_sbs.png`: max uint8 diff 1, mean 0.000015
+- `quality_4k_half_sbs.png`: max uint8 diff 1, mean 0.000033
 
 Manual visual inspection of `contact_sheet_labeled.png` for both Base and Large found:
 

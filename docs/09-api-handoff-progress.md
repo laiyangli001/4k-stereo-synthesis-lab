@@ -77,8 +77,8 @@ Final Large Native TensorRT + `quality_4k` + 2 layers on RTX 3090:
 
 | Output | Depth ms | Synthesis ms | Total ms | FPS |
 |---|---:|---:|---:|---:|
-| Half-SBS | 13.588 | 7.732 | 21.322 | 46.90 |
-| Full-SBS | 12.845 | 7.441 | 20.287 | 49.29 |
+| Half-SBS | 12.441 | 5.561 | 18.003 | 55.55 |
+| Full-SBS | 12.543 | 5.819 | 18.363 | 54.46 |
 
 Current fused synthesis backends:
 
@@ -121,9 +121,9 @@ Latest key outputs:
 
 ```text
 outputs/rtx3090_end_to_end_base_quality_half_sbs_fused.json
-outputs/rtx3090_end_to_end_large_quality_final_fused.json
+outputs/rtx3090_end_to_end_large_quality_half_sbs_fused.json
 outputs/visual_regression/rtx3090_base_quality_half_sbs_fused
-outputs/visual_regression/rtx3090_large_engine_quality_final_fused
+outputs/visual_regression/rtx3090_large_quality_half_sbs_fused
 ```
 
 ### Depth Backend
