@@ -51,29 +51,34 @@ def write_markdown(reports: dict[str, dict], output_path: Path) -> None:
             "",
             "## Backend Timings",
             "",
-            "| Env | Backend | Status | Setup ms | Warmup mean ms | Inference mean ms | Inference median ms | Inference p90 ms | Depth backend | Runtime | Execution provider | IOBinding | Output device | TensorRT DLL dirs | Error |",
-            "|---|---|---:|---:|---:|---:|---:|---:|---|---|---|---|---|---|---|",
+            "| Env | Backend | Status | Setup ms | Warmup mean ms | Inference mean ms | Preprocess mean ms | Model mean ms | Postprocess mean ms | Inference median ms | Inference p90 ms | Depth backend | Runtime | Execution provider | IOBinding | DLPack | Output device | TensorRT DLL dirs | Error |",
+            "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|---|---|---|---|---|",
         ]
     )
     for name, report in reports.items():
         for backend, result in report.get("backends", {}).items():
             timings = result.get("timings", {})
+            profile = result.get("profile") or {}
             provider = result.get("provider") or {}
             warmup = result.get("warmup", {})
             lines.append(
-                "| {env} | `{backend}` | {status} | {setup} | {warmup_mean} | {mean} | {median} | {p90} | `{depth_backend}` | `{runtime}` | `{ep}` | `{iob}` | `{outdev}` | `{trt_dirs}` | {error} |".format(
+                "| {env} | `{backend}` | {status} | {setup} | {warmup_mean} | {mean} | {preprocess} | {model} | {postprocess} | {median} | {p90} | `{depth_backend}` | `{runtime}` | `{ep}` | `{iob}` | `{dlpack}` | `{outdev}` | `{trt_dirs}` | {error} |".format(
                     env=name,
                     backend=backend,
                     status=result.get("status"),
                     setup=format_float(result.get("setup_ms")),
                     warmup_mean=format_float(warmup.get("mean_ms")),
                     mean=format_float(timings.get("mean_ms")),
+                    preprocess=format_float((profile.get("preprocess") or {}).get("mean_ms")),
+                    model=format_float((profile.get("model") or {}).get("mean_ms")),
+                    postprocess=format_float((profile.get("postprocess") or {}).get("mean_ms")),
                     median=format_float(timings.get("median_ms")),
                     p90=format_float(timings.get("p90_ms")),
                     depth_backend=provider.get("depth_backend"),
                     runtime=provider.get("runtime"),
                     ep=provider.get("execution_provider"),
                     iob=provider.get("io_binding"),
+                    dlpack=provider.get("dlpack"),
                     outdev=provider.get("output_device"),
                     trt_dirs=", ".join(provider.get("trt_lib_dirs") or []),
                     error=(result.get("error") or "").replace("|", "\\|"),
@@ -88,6 +93,7 @@ def write_markdown(reports: dict[str, dict], output_path: Path) -> None:
             "- `tensorrt` is expected to use `TensorrtExecutionProvider`; if it fails, the failure is a real blocker for the TensorRT path.",
             "- TensorRT DLLs are auto-discovered from the active Python env and from `python3/Lib/site-packages/tensorrt_libs`, then prepended to `PATH` before ORT session creation.",
             "- `setup_ms` includes provider/session creation and TensorRT engine build/load. `Inference mean ms` reuses the same provider/session.",
+            "- `preprocess`, `model`, and `postprocess` are measured inside provider prediction. For ORT backends, CPU numpy conversion is currently included in preprocess, and output retrieval is included in model.",
             "- `onnx_cuda_iobinding` must use ONNX Runtime CUDA with IOBinding enabled.",
             "- `pytorch_cuda` is the correctness and fallback baseline.",
         ]

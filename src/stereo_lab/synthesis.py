@@ -5,7 +5,7 @@ from typing import Literal
 
 import torch
 
-from .baseline_shift import ShiftParams, synthesize_baseline, warp_horizontal
+from .baseline_shift import ShiftParams, compute_shift_px, synthesize_baseline, warp_horizontal
 from .hole_fill import edge_aware_fill
 from .layers import composite_layers, make_depth_layers
 from .occlusion import make_occlusion_mask
@@ -52,7 +52,7 @@ def _layered_synthesis(rgb: torch.Tensor, depth: torch.Tensor, config: StereoCon
     )
     rgb = ensure_bchw(rgb, name="rgb").float()
     depth = match_depth(depth, rgb.shape[-2], rgb.shape[-1])
-    _, _, base_shift = synthesize_baseline(rgb, depth, params)
+    base_shift = compute_shift_px(depth, rgb.shape[-1], params)
 
     layer_count = max(1, int(config.layers))
     weights = make_depth_layers(depth, layers=layer_count)
@@ -71,8 +71,10 @@ def _layered_synthesis(rgb: torch.Tensor, depth: torch.Tensor, config: StereoCon
     if config.hole_fill != "none":
         radius = 2 if config.hole_fill == "fast" else 3
         strength = 0.65 if config.hole_fill == "fast" else 1.0
-        left = edge_aware_fill(left, mask, radius=radius, strength=strength)
-        right = edge_aware_fill(right, mask, radius=radius, strength=strength)
+        eyes = torch.cat([left, right], dim=0)
+        fill_mask = mask.expand(eyes.shape[0], -1, -1, -1)
+        eyes = edge_aware_fill(eyes, fill_mask, radius=radius, strength=strength)
+        left, right = eyes.chunk(2, dim=0)
 
     left = refine_local(left, mask, enabled=config.refine)
     right = refine_local(right, mask, enabled=config.refine)

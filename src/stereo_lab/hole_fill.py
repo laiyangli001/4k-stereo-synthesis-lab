@@ -5,13 +5,19 @@ import torch.nn.functional as F
 
 from .output import ensure_bchw, ensure_b1hw
 
+_BOX_KERNEL_CACHE: dict[tuple[int, int, str, torch.dtype], torch.Tensor] = {}
+
 
 def box_blur(x: torch.Tensor, radius: int) -> torch.Tensor:
     if radius <= 0:
         return x
     k = radius * 2 + 1
     channels = x.shape[1]
-    weight = torch.ones(channels, 1, k, k, device=x.device, dtype=x.dtype) / float(k * k)
+    key = (channels, k, str(x.device), x.dtype)
+    weight = _BOX_KERNEL_CACHE.get(key)
+    if weight is None:
+        weight = torch.ones(channels, 1, k, k, device=x.device, dtype=x.dtype) / float(k * k)
+        _BOX_KERNEL_CACHE[key] = weight
     return F.conv2d(x, weight, padding=radius, groups=channels)
 
 

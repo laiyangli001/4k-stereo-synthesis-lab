@@ -11,6 +11,7 @@ from .depth_provider import (
     DISTILL_ANY_DEPTH_BASE_NAME,
     DISTILL_ANY_DEPTH_BASE_RESOLUTION,
     DISTILL_ANY_DEPTH_PATCH_SIZE,
+    DepthProfileResult,
     DepthProviderInfo,
     DistillAnyDepthBase518,
     _model_input_size,
@@ -46,6 +47,42 @@ def _preprocess_distill_rgb(rgb: torch.Tensor, *, device: torch.device, dtype: t
     return (tensor - mean) / std
 
 
+class DistillPreprocessor:
+    def __init__(self, *, device: torch.device, dtype: torch.dtype) -> None:
+        self.device = device
+        self.dtype = dtype
+        self._shape_cache: dict[tuple[int, int], tuple[int, int]] = {}
+        self._mean = torch.tensor([0.485, 0.456, 0.406], device=device, dtype=dtype).view(1, 3, 1, 1)
+        self._std = torch.tensor([0.229, 0.224, 0.225], device=device, dtype=dtype).view(1, 3, 1, 1)
+
+    def input_size(self, height: int, width: int) -> tuple[int, int]:
+        key = (height, width)
+        cached = self._shape_cache.get(key)
+        if cached is not None:
+            return cached
+        size = _model_input_size(
+            height,
+            width,
+            DISTILL_ANY_DEPTH_BASE_RESOLUTION,
+            DISTILL_ANY_DEPTH_PATCH_SIZE,
+        )
+        self._shape_cache[key] = size
+        return size
+
+    def __call__(self, rgb: torch.Tensor) -> torch.Tensor:
+        rgb = ensure_bchw(rgb, name="rgb").to(self.device).float().clamp(0, 1)
+        _, _, height, width = rgb.shape
+        input_h, input_w = self.input_size(height, width)
+        tensor = F.interpolate(
+            rgb,
+            size=(input_h, input_w),
+            mode="bicubic" if self.device.type == "cuda" else "bilinear",
+            align_corners=False,
+            antialias=True if self.device.type == "cuda" else False,
+        ).to(self.dtype)
+        return (tensor - self._mean) / self._std
+
+
 class DistillAnyDepthBaseOnnxCuda:
     def __init__(
         self,
@@ -53,17 +90,23 @@ class DistillAnyDepthBaseOnnxCuda:
         device: str | torch.device = "cuda",
         cache_dir: str | Path | None = None,
         onnx_path: str | Path | None = None,
+        model_id: str = DISTILL_ANY_DEPTH_BASE_MODEL_ID,
+        model_name: str = DISTILL_ANY_DEPTH_BASE_NAME,
         use_iobinding: bool = True,
+        use_dlpack: bool = False,
     ) -> None:
         self.device = torch.device(device)
         self.cache_dir = Path(cache_dir) if cache_dir is not None else default_lab_cache_dir()
         self.onnx_path = Path(onnx_path) if onnx_path is not None else default_distill_base_onnx_path(self.cache_dir)
         self.dtype = torch.float16 if self.device.type == "cuda" else torch.float32
+        self.model_id = model_id
+        self.model_name = model_name
         self.use_iobinding = bool(use_iobinding and self.device.type == "cuda")
+        self.use_dlpack = bool(use_dlpack and self.use_iobinding)
         self.info = DepthProviderInfo(
             provider="onnxruntime.InferenceSession",
-            model_name=DISTILL_ANY_DEPTH_BASE_NAME,
-            model_id=DISTILL_ANY_DEPTH_BASE_MODEL_ID,
+            model_name=self.model_name,
+            model_id=self.model_id,
             depth_resolution=DISTILL_ANY_DEPTH_BASE_RESOLUTION,
             cache_dir=str(self.cache_dir),
             load_mode="local_onnx",
@@ -71,9 +114,11 @@ class DistillAnyDepthBaseOnnxCuda:
             runtime="onnxruntime",
             onnx_path=str(self.onnx_path),
             io_binding=self.use_iobinding,
+            dlpack=self.use_dlpack,
             output_device="cuda" if self.use_iobinding else "cpu",
         )
         self._session = None
+        self._preprocessor = DistillPreprocessor(device=self.device, dtype=self.dtype)
 
     def load(self):
         if self._session is not None:
@@ -95,32 +140,60 @@ class DistillAnyDepthBaseOnnxCuda:
         return session
 
     def predict(self, rgb: torch.Tensor) -> torch.Tensor:
+        return self.predict_profile(rgb).depth
+
+    def predict_profile(self, rgb: torch.Tensor) -> DepthProfileResult:
+        import time
+
+        def sync() -> None:
+            if self.device.type == "cuda" and torch.cuda.is_available():
+                torch.cuda.synchronize()
+
+        sync()
+        start = time.perf_counter()
         rgb = ensure_bchw(rgb, name="rgb")
         _, _, height, width = rgb.shape
-        tensor = _preprocess_distill_rgb(rgb, device=self.device, dtype=self.dtype)
-        ort_input = tensor.detach().cpu().numpy()
+        tensor = self._preprocessor(rgb)
+        ort_input = tensor if self.use_dlpack else tensor.detach().cpu().numpy()
+        sync()
+        preprocess_ms = (time.perf_counter() - start) * 1000.0
 
         session = self.load()
+        sync()
+        start = time.perf_counter()
         if self.use_iobinding:
             predicted = self._run_iobinding(session, ort_input)
         else:
             predicted = session.run(["predicted_depth"], {"pixel_values": ort_input})[0]
             predicted = torch.from_numpy(predicted)
+        sync()
+        model_ms = (time.perf_counter() - start) * 1000.0
+
+        start = time.perf_counter()
         depth = predicted.float()
         depth = ensure_b1hw(depth)
         depth = _normalize_depth(depth)
-        return match_depth(depth, height, width)
+        depth = match_depth(depth, height, width)
+        sync()
+        postprocess_ms = (time.perf_counter() - start) * 1000.0
+        return DepthProfileResult(depth, preprocess_ms, model_ms, postprocess_ms)
 
     def _run_iobinding(self, session, ort_input) -> torch.Tensor:
         import numpy as np
         import onnxruntime as ort
+        import torch
 
-        input_ort = ort.OrtValue.ortvalue_from_numpy(ort_input, "cuda", 0)
+        if isinstance(ort_input, torch.Tensor):
+            input_ort = ort.OrtValue.from_dlpack(torch.utils.dlpack.to_dlpack(ort_input.contiguous()))
+        else:
+            input_ort = ort.OrtValue.ortvalue_from_numpy(ort_input, "cuda", 0)
         io_binding = session.io_binding()
         io_binding.bind_ortvalue_input("pixel_values", input_ort)
         io_binding.bind_output("predicted_depth", "cuda")
         session.run_with_iobinding(io_binding)
         output_ort = io_binding.get_outputs()[0]
+        if isinstance(ort_input, torch.Tensor):
+            return torch.utils.dlpack.from_dlpack(output_ort)
         output_np = output_ort.numpy()
         if not isinstance(output_np, np.ndarray):
             output_np = np.asarray(output_np)
@@ -171,6 +244,7 @@ def estimate_distill_any_depth_base_518_onnx_cuda(
             cache_dir=cache_dir,
             onnx_path=onnx_path,
             use_iobinding=use_iobinding,
+            use_dlpack=False,
         )
         return provider.predict(rgb), provider.info
     except Exception as exc:

@@ -9,13 +9,14 @@ import torch
 
 from .depth_onnx_provider import (
     DistillAnyDepthBaseOnnxCuda,
-    _preprocess_distill_rgb,
+    DistillPreprocessor,
     default_distill_base_onnx_path,
 )
 from .depth_provider import (
     DISTILL_ANY_DEPTH_BASE_MODEL_ID,
     DISTILL_ANY_DEPTH_BASE_NAME,
     DISTILL_ANY_DEPTH_BASE_RESOLUTION,
+    DepthProfileResult,
     DepthProviderInfo,
     DistillAnyDepthBase518,
     _normalize_depth,
@@ -77,6 +78,8 @@ class DistillAnyDepthBaseTensorRtOrt:
         cache_dir: str | Path | None = None,
         onnx_path: str | Path | None = None,
         trt_cache_dir: str | Path | None = None,
+        model_id: str = DISTILL_ANY_DEPTH_BASE_MODEL_ID,
+        model_name: str = DISTILL_ANY_DEPTH_BASE_NAME,
     ) -> None:
         self.device = torch.device(device)
         if self.device.type != "cuda":
@@ -85,10 +88,12 @@ class DistillAnyDepthBaseTensorRtOrt:
         self.onnx_path = Path(onnx_path) if onnx_path is not None else default_distill_base_onnx_path(self.cache_dir)
         self.trt_cache_dir = Path(trt_cache_dir) if trt_cache_dir is not None else default_distill_base_trt_cache_dir(self.cache_dir)
         self.dtype = torch.float16
+        self.model_id = model_id
+        self.model_name = model_name
         self.info = DepthProviderInfo(
             provider="onnxruntime.InferenceSession",
-            model_name=DISTILL_ANY_DEPTH_BASE_NAME,
-            model_id=DISTILL_ANY_DEPTH_BASE_MODEL_ID,
+            model_name=self.model_name,
+            model_id=self.model_id,
             depth_resolution=DISTILL_ANY_DEPTH_BASE_RESOLUTION,
             cache_dir=str(self.cache_dir),
             load_mode="local_onnx_tensorrt_ep",
@@ -99,6 +104,7 @@ class DistillAnyDepthBaseTensorRtOrt:
             output_device="cuda",
         )
         self._session = None
+        self._preprocessor = DistillPreprocessor(device=self.device, dtype=self.dtype)
 
     def load(self):
         if self._session is not None:
@@ -137,15 +143,31 @@ class DistillAnyDepthBaseTensorRtOrt:
         return session
 
     def predict(self, rgb: torch.Tensor) -> torch.Tensor:
+        return self.predict_profile(rgb).depth
+
+    def predict_profile(self, rgb: torch.Tensor) -> DepthProfileResult:
+        import time
+
+        def sync() -> None:
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+
+        sync()
+        start = time.perf_counter()
         rgb = ensure_bchw(rgb, name="rgb")
         _, _, height, width = rgb.shape
-        tensor = _preprocess_distill_rgb(rgb, device=self.device, dtype=self.dtype)
+        tensor = self._preprocessor(rgb)
         ort_input = tensor.detach().cpu().numpy()
+        sync()
+        preprocess_ms = (time.perf_counter() - start) * 1000.0
+
         session = self.load()
 
         import numpy as np
         import onnxruntime as ort
 
+        sync()
+        start = time.perf_counter()
         input_ort = ort.OrtValue.ortvalue_from_numpy(ort_input, "cuda", 0)
         io_binding = session.io_binding()
         io_binding.bind_ortvalue_input("pixel_values", input_ort)
@@ -154,10 +176,17 @@ class DistillAnyDepthBaseTensorRtOrt:
         output_np = io_binding.get_outputs()[0].numpy()
         if not isinstance(output_np, np.ndarray):
             output_np = np.asarray(output_np)
+        sync()
+        model_ms = (time.perf_counter() - start) * 1000.0
+
+        start = time.perf_counter()
         depth = torch.from_numpy(output_np).float()
         depth = ensure_b1hw(depth)
         depth = _normalize_depth(depth)
-        return match_depth(depth, height, width)
+        depth = match_depth(depth, height, width)
+        sync()
+        postprocess_ms = (time.perf_counter() - start) * 1000.0
+        return DepthProfileResult(depth, preprocess_ms, model_ms, postprocess_ms)
 
 
 def estimate_distill_any_depth_base_518_nvidia(

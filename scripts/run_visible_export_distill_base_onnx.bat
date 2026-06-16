@@ -4,7 +4,7 @@ setlocal
 
 set "LAB_DIR=%~dp0.."
 set "PYTHON_EXE=%LAB_DIR%\python3\python.exe"
-set "ONNX_OUT=%LAB_DIR%\models\models--lc700x--Distill-Any-Depth-Base-hf\model_fp16_294x518.onnx"
+set "ONNX_DIR=%LAB_DIR%\models\models--lc700x--Distill-Any-Depth-Base-hf"
 
 if not exist "%PYTHON_EXE%" (
   echo [Error] Python not found: %PYTHON_EXE%
@@ -14,22 +14,22 @@ if not exist "%PYTHON_EXE%" (
 )
 
 title 4K Stereo Lab - Export Distill ONNX
-echo [Info] Export target: %ONNX_OUT%
+echo [Info] Export target folder: %ONNX_DIR%
 echo [Info] Model: Distill-Any-Depth-Base
 echo [Info] Model ID: lc700x/Distill-Any-Depth-Base-hf
 echo [Info] ONNX input: 1x3x294x518
-echo [Info] DType: fp16
+echo [Info] DType: auto
 echo [Info] The script forces network-enabled model download/cache by default.
 echo [Info] This may take several minutes.
 echo.
 
 pushd "%LAB_DIR%"
-"%PYTHON_EXE%" "%LAB_DIR%\scripts\export_distill_base_onnx.py" --output "%ONNX_OUT%" --device cuda
+"%PYTHON_EXE%" "%LAB_DIR%\scripts\export_distill_base_onnx.py" --device cuda --dtype auto
 set "EXIT_CODE=%ERRORLEVEL%"
 if "%EXIT_CODE%"=="0" (
   echo.
   echo [Info] Opening ONNX output folder ...
-  explorer "%LAB_DIR%\models\models--lc700x--Distill-Any-Depth-Base-hf"
+  explorer "%ONNX_DIR%"
 )
 popd
 

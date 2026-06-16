@@ -16,12 +16,21 @@ class ShiftParams:
     max_shift_ratio: float = 0.05
 
 
+_GRID_CACHE: dict[tuple[int, int, int, str, torch.dtype], torch.Tensor] = {}
+
+
 def make_base_grid(batch: int, height: int, width: int, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+    key = (batch, height, width, str(device), dtype)
+    cached = _GRID_CACHE.get(key)
+    if cached is not None:
+        return cached
     y = torch.linspace(-1.0, 1.0, height, device=device, dtype=dtype)
     x = torch.linspace(-1.0, 1.0, width, device=device, dtype=dtype)
     yy, xx = torch.meshgrid(y, x, indexing="ij")
     grid = torch.stack([xx, yy], dim=-1)
-    return grid.unsqueeze(0).expand(batch, height, width, 2)
+    grid = grid.unsqueeze(0).expand(batch, height, width, 2)
+    _GRID_CACHE[key] = grid
+    return grid
 
 
 def compute_shift_px(depth: torch.Tensor, width: int, params: ShiftParams) -> torch.Tensor:

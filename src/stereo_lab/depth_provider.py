@@ -29,11 +29,54 @@ class DepthProviderInfo:
     execution_provider: str | None = None
     fallback_reason: str | None = None
     io_binding: bool = False
+    dlpack: bool = False
     output_device: str | None = None
     trt_lib_dirs: list[str] | None = None
 
     def to_report(self) -> dict[str, Any]:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class DepthProfileResult:
+    depth: torch.Tensor
+    preprocess_ms: float
+    model_ms: float
+    postprocess_ms: float
+
+    @property
+    def total_ms(self) -> float:
+        return self.preprocess_ms + self.model_ms + self.postprocess_ms
+
+    def to_report(self) -> dict[str, float]:
+        return {
+            "preprocess_ms": float(self.preprocess_ms),
+            "model_ms": float(self.model_ms),
+            "postprocess_ms": float(self.postprocess_ms),
+            "total_ms": float(self.total_ms),
+        }
+
+
+@dataclass(frozen=True)
+class DepthProviderConfig:
+    backend: str = "distill_base_nvidia"
+    device: str | torch.device = "cuda"
+    cache_dir: str | Path | None = None
+    onnx_path: str | Path | None = None
+    trt_cache_dir: str | Path | None = None
+    engine_path: str | Path | None = None
+    local_files_only: bool = True
+    force_download: bool = False
+    prefer_tensorrt: bool = True
+    prefer_native_tensorrt: bool = False
+    prefer_onnx: bool = True
+    allow_pytorch_fallback: bool = True
+    require_tensorrt: bool = False
+    use_iobinding: bool = True
+    use_dlpack: bool = False
+    build_engine: bool = False
+    force_rebuild: bool = False
+    use_cuda_graph: bool = False
 
 
 def default_lab_cache_dir() -> Path:
@@ -123,6 +166,17 @@ class DistillAnyDepthBase518:
         return self._model
 
     def predict(self, rgb: torch.Tensor) -> torch.Tensor:
+        return self.predict_profile(rgb).depth
+
+    def predict_profile(self, rgb: torch.Tensor) -> DepthProfileResult:
+        import time
+
+        def sync() -> None:
+            if self.device.type == "cuda" and torch.cuda.is_available():
+                torch.cuda.synchronize()
+
+        sync()
+        start = time.perf_counter()
         rgb = ensure_bchw(rgb, name="rgb").to(self.device).float().clamp(0, 1)
         _, _, height, width = rgb.shape
         input_h, input_w = _model_input_size(
@@ -143,15 +197,86 @@ class DistillAnyDepthBase518:
         mean = torch.tensor([0.485, 0.456, 0.406], device=self.device, dtype=self.dtype).view(1, 3, 1, 1)
         std = torch.tensor([0.229, 0.224, 0.225], device=self.device, dtype=self.dtype).view(1, 3, 1, 1)
         tensor = (tensor - mean) / std
+        sync()
+        preprocess_ms = (time.perf_counter() - start) * 1000.0
 
         model = self.load()
         use_autocast = self.device.type == "cuda" and self.dtype == torch.float16
+        sync()
+        start = time.perf_counter()
         with torch.inference_mode(), torch.autocast(device_type=self.device.type, enabled=use_autocast):
             predicted = model(pixel_values=tensor).predicted_depth
+        sync()
+        model_ms = (time.perf_counter() - start) * 1000.0
 
+        start = time.perf_counter()
         depth = ensure_b1hw(predicted)
         depth = _normalize_depth(depth)
-        return match_depth(depth, height, width)
+        depth = match_depth(depth, height, width)
+        sync()
+        postprocess_ms = (time.perf_counter() - start) * 1000.0
+        return DepthProfileResult(depth, preprocess_ms, model_ms, postprocess_ms)
+
+
+def create_depth_provider(config: DepthProviderConfig | dict[str, Any] | None = None):
+    cfg = config if isinstance(config, DepthProviderConfig) else DepthProviderConfig(**(config or {}))
+    backend = cfg.backend
+    device = torch.device(cfg.device)
+
+    if backend in {"tensorrt_native", "native_tensorrt", "tensorrt_native_graph"} or (
+        backend in {"distill_base_nvidia", "nvidia_chain"} and cfg.prefer_native_tensorrt
+    ):
+        from .depth_trt_native_provider import DistillAnyDepthBaseNativeTensorRt
+
+        return DistillAnyDepthBaseNativeTensorRt(
+            device=device,
+            cache_dir=cfg.cache_dir,
+            onnx_path=cfg.onnx_path,
+            engine_path=cfg.engine_path,
+            build_engine=cfg.build_engine,
+            force_rebuild=cfg.force_rebuild,
+            use_cuda_graph=cfg.use_cuda_graph or backend == "tensorrt_native_graph",
+        )
+
+    if backend in {"distill_base_nvidia", "nvidia_chain", "tensorrt", "tensorrt_ort"} and cfg.prefer_tensorrt:
+        from .depth_trt_provider import DistillAnyDepthBaseTensorRtOrt
+
+        return DistillAnyDepthBaseTensorRtOrt(
+            device=device,
+            cache_dir=cfg.cache_dir,
+            onnx_path=cfg.onnx_path,
+            trt_cache_dir=cfg.trt_cache_dir,
+        )
+
+    if backend in {"distill_base_nvidia", "nvidia_chain", "onnx_cuda", "onnx_cuda_iobinding"} and cfg.prefer_onnx:
+        from .depth_onnx_provider import DistillAnyDepthBaseOnnxCuda
+
+        return DistillAnyDepthBaseOnnxCuda(
+            device=device,
+            cache_dir=cfg.cache_dir,
+            onnx_path=cfg.onnx_path,
+            use_iobinding=cfg.use_iobinding,
+            use_dlpack=cfg.use_dlpack,
+        )
+
+    if backend in {"distill_base_518", "pytorch_cuda", "pytorch"}:
+        return DistillAnyDepthBase518(
+            device=device,
+            cache_dir=cfg.cache_dir,
+            local_files_only=cfg.local_files_only,
+            force_download=cfg.force_download,
+        )
+
+    raise ValueError(f"unknown depth backend: {backend}")
+
+
+def estimate_depth(
+    rgb: torch.Tensor,
+    config: DepthProviderConfig | dict[str, Any] | None = None,
+) -> tuple[torch.Tensor, DepthProviderInfo]:
+    provider = create_depth_provider(config)
+    depth = provider.predict(rgb)
+    return depth, provider.info
 
 
 def estimate_distill_any_depth_base_518(

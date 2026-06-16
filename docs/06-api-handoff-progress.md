@@ -518,9 +518,37 @@ docs/07-depth-backend-benchmark-2026-06-16.md
 
 剩余细化：
 
-- 如果后续需要 native TensorRT engine API，再新增独立 build/run 脚本。
-- 继续拆分 `preprocess_ms / model_ms / postprocess_ms`，确认 4K 约 `25 ms` 内部瓶颈。
-- 在实时 API 中保持 provider/session 常驻。
+- native TensorRT `data_ptr()` 路线已新增并跑通，当前 4K mean 最好约 `15.287 ms`，明显快于 ORT TensorRT EP。
+- ONNX CUDA DLPack 路线已新增并跑通，当前 4K mean 约 `32.215 ms`，快于 numpy IOBinding 的约 `39.379 ms`。
+- native TensorRT 输出 buffer 预分配已新增；同一输入连续推理 `depth_absdiff_mean=0.0`、`depth_absdiff_max=0.0`。
+- native TensorRT CUDA Graph 实验后端已新增并跑通，但当前 4K mean 约 `19.156 ms`，慢于普通 native TensorRT 的约 `16.143 ms`，暂不作为默认。
+- safe preprocess cache 已新增，缓存 mean/std CUDA tensor 和固定输入尺寸计算；不改变 `294x518`、resize mode、antialias、normalize 语义，`depth_absdiff_mean=0.0`、`depth_absdiff_max=0.0`。
+- 继续优化 native TensorRT 的 preprocess，当前约 `5.679 ms`，主要仍是 4K RGB bicubic+antialias resize。
+- 最终 4K depth backend 对比已完成：`tensorrt_native` mean `16.425 ms` / median `15.641 ms`，`onnx_cuda_dlpack` mean `27.706 ms`，`onnx_cuda_iobinding` mean `35.905 ms`，`pytorch_cuda` mean `42.324 ms`。
+
+当前推荐后端顺序：
+
+```text
+Native TensorRT -> ONNX CUDA DLPack -> ONNX CUDA IOBinding -> PyTorch CUDA
+```
+
+Distill-Any-Depth-Large @ 518 极限测试已加入：
+
+```text
+model_id: xingyang1/Distill-Any-Depth-Large-hf
+input: 1x3x294x518
+Large Native TensorRT: mean 33.616 ms / 29.75 FPS
+Large ONNX CUDA DLPack: mean 62.590 ms / 15.98 FPS
+```
+
+ONNX 导出脚本已加入智能 `--dtype auto`：
+
+```text
+先按候选 dtype 做 dummy forward probe。
+fp16 输出异常 / NaN / Inf / 全零 / 动态范围过小时，自动 fallback fp32。
+fp32 也失败则停止并报告。
+```
+- 在实时 API 中保持 provider/session/engine 常驻。
 
 ### P0：ONNX IOBinding
 
@@ -658,11 +686,13 @@ Distill-Any-Depth-Base @ 518
 
 ## 推荐下一步执行顺序
 
-1. 把 depth benchmark 拆成 `preprocess_ms / model_ms / postprocess_ms`，确认 4K 约 `25 ms` 里面到底哪部分最贵。
-2. 做常驻 provider/session 的实时 API，避免每帧重复初始化；目标形态是 `create_depth_provider(config) -> provider.load() -> provider.predict(rgb)`。
-3. 开始实现并增强 2-layer occlusion-aware stereo synthesis，重点是 layer 分离、occlusion mask、edge-aware hole fill。
-4. 用同一张 RGB + depth 输出 `baseline` / `quality_4k` 对比图，固定输入，避免把 depth 差异误判为 stereo synthesis 差异。
-5. 测完整 4K `RGB -> depth -> stereo -> Half-SBS/Full-SBS` 端到端 FPS。
-6. 用真实图片批量评估 Distill depth 是否符合 3D 直觉。
-7. 做 iw3 同场景对比。
-8. 再评估是否接回 `Desktop2Stereo`。
+1. 完成并维护 depth benchmark 三段拆分：`preprocess_ms / model_ms / postprocess_ms`，持续确认 4K 约 `25 ms` 内部瓶颈。
+2. 完成并维护常驻 provider/session 实时 API，避免每帧重复初始化；目标形态是 `create_depth_provider(config) -> provider.load() -> provider.predict(rgb)`。
+3. 优先做 native TensorRT `data_ptr()` 路线，参考 Desktop2Stereo 的 `TensorRTEngine`，消除当前 ORT 路线的 `torch.Tensor -> CPU numpy -> ORT` 和 `ORT output -> numpy -> torch.Tensor` 往返。
+4. native TensorRT / ONNX DLPack 生成后重新跑 4K depth benchmark，对比 `tensorrt_native`、`tensorrt`、`onnx_cuda_dlpack`、`onnx_cuda_iobinding`、`pytorch_cuda` 的 `preprocess_ms / model_ms / postprocess_ms`。
+5. 开始实现并增强 2-layer occlusion-aware stereo synthesis，重点是 layer 分离、occlusion mask、edge-aware hole fill。
+6. 用同一张 RGB + depth 输出 `baseline` / `quality_4k` 对比图，固定输入，避免把 depth 差异误判为 stereo synthesis 差异。
+7. 测完整 4K `RGB -> depth -> stereo -> Half-SBS/Full-SBS` 端到端 FPS。
+8. 用真实图片批量评估 Distill depth 是否符合 3D 直觉。
+9. 做 iw3 同场景对比。
+10. 再评估是否接回 `Desktop2Stereo`。
