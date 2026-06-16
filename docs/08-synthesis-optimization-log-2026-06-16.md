@@ -27,6 +27,7 @@ The synthesis changes are limited to stereo generation after RGB + depth are alr
 | `1e2a171` | synthesis | Reduced depth edge allocations. |
 | `5866878` | docs | Added this optimization log. |
 | `85166be` | synthesis | Cache grid components for horizontal warp and avoid cloning the full base grid. |
+| `pending` | evaluation | Add fixed visual regression set generator for baseline vs quality_4k. |
 
 ## Workflow And Evaluation Optimizations
 
@@ -538,6 +539,68 @@ Why it matters:
 
 - Showed that after native TensorRT depth became fast, the bottleneck moved from depth to synthesis.
 - Prevented optimizing depth further while the actual end-to-end bottleneck was already synthesis.
+
+### Fixed Visual Regression Set Generator
+
+Commit:
+
+```text
+pending
+```
+
+File:
+
+- `scripts/generate_visual_regression_set.py`
+
+What changed:
+
+- Added a repeatable visual regression generator for a fixed RGB + fixed depth pair.
+- It emits both `baseline` and `quality_4k` outputs from the same depth:
+  - `left`
+  - `right`
+  - `half_sbs`
+  - `full_sbs`
+  - `occlusion_mask`
+  - `shift_px`
+  - absdiff images
+  - contact sheet
+  - `visual_regression_report.json`
+
+Why it matters:
+
+- Future synthesis optimizations can be checked against the same visual baseline.
+- This prevents optimizing only for milliseconds while silently hurting edges, holes, UI text, or left/right consistency.
+- The script defaults `temporal=False` so single-frame regression output is deterministic.
+- The script timing is only a coarse smoke value because it also performs first-use work and image output; use `profile_synthesis_4k.py` and `bench_end_to_end_4k.py` for performance claims.
+
+Example:
+
+```powershell
+.\python3\python.exe -B scripts\generate_visual_regression_set.py --rgb 4K.jpg --auto-depth --depth-backend tensorrt_native --out-dir outputs\visual_regression\4k_native_base_quality
+```
+
+Verified output set:
+
+```text
+outputs/visual_regression/4k_native_base_quality/
+```
+
+Key outputs:
+
+- `input_rgb.png`
+- `used_depth.png`
+- `baseline_left.png`
+- `baseline_right.png`
+- `baseline_half_sbs.png`
+- `baseline_full_sbs.png`
+- `quality_4k_left.png`
+- `quality_4k_right.png`
+- `quality_4k_half_sbs.png`
+- `quality_4k_full_sbs.png`
+- `quality_4k_occlusion_mask.png`
+- `baseline_vs_quality_4k_*_absdiff.png`
+- `contact_sheet.png`
+- `visual_regression_report.json`
 
 ### Base Grid Cache
 
