@@ -26,7 +26,7 @@ The synthesis changes are limited to stereo generation after RGB + depth are alr
 | `49da1fc` | synthesis | Reduced quality synthesis allocations. |
 | `1e2a171` | synthesis | Reduced depth edge allocations. |
 | `5866878` | docs | Added this optimization log. |
-| `pending` | synthesis | Cache grid components for horizontal warp and avoid cloning the full base grid. |
+| `85166be` | synthesis | Cache grid components for horizontal warp and avoid cloning the full base grid. |
 
 ## Workflow And Evaluation Optimizations
 
@@ -821,7 +821,7 @@ outputs/end_to_end_4k/quality_native_synthesis_edges_opt.json
 Commit:
 
 ```text
-pending
+85166be perf: cache warp grid components
 ```
 
 Files:
