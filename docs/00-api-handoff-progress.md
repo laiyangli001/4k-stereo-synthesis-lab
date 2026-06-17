@@ -34,7 +34,7 @@ Important docs:
 
 Note:
 
-- `docs/archive/06-api-handoff-progress.md` contains useful history but may display mojibake in some viewers. Prefer this UTF-8 handoff plus docs `07/08`.
+- This file is the single current handoff entry point. Early design documents are archived under `docs/archive/`, and benchmark/optimization reports live under `docs/benchmark/`.
 
 ## Hard Boundaries
 
