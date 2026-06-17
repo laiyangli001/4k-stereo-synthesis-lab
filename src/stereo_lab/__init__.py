@@ -10,18 +10,40 @@ from .openxr_render import (
     is_pyopenxr_available,
     render_openxr_stereo,
 )
+from .presets import (
+    AutoModeDecision,
+    AutoModeSignals,
+    PRESET_CHOICES,
+    StereoModePreset,
+    classify_auto_mode,
+    openxr_config_for_auto_mode,
+    openxr_config_for_preset,
+    preset_summary,
+    stereo_config_for_auto_mode,
+    stereo_config_for_preset,
+)
 from .synthesis import StereoConfig, StereoResult, synthesize_stereo
 
 __all__ = [
+    "AutoModeDecision",
+    "AutoModeSignals",
     "OpenXREyeView",
     "OpenXRFov",
     "OpenXRRenderConfig",
     "OpenXRScreenPose",
     "OpenXRStereoResult",
+    "PRESET_CHOICES",
     "StereoConfig",
+    "StereoModePreset",
     "StereoResult",
     "build_openxr_eye_mvp",
+    "classify_auto_mode",
     "is_pyopenxr_available",
+    "openxr_config_for_auto_mode",
+    "openxr_config_for_preset",
+    "preset_summary",
     "render_openxr_stereo",
+    "stereo_config_for_auto_mode",
+    "stereo_config_for_preset",
     "synthesize_stereo",
 ]

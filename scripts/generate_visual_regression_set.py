@@ -23,6 +23,12 @@ def main() -> None:
     parser.add_argument("--onnx", default=None)
     parser.add_argument("--trt-engine", default=None)
     parser.add_argument("--out-dir", default="outputs/visual_regression")
+    parser.add_argument(
+        "--preset",
+        choices=["cinema", "game_low_latency", "still_image_hq", "debug_export"],
+        default=None,
+        help="Use a named preset for the non-baseline method. Manual parameter flags are used when omitted.",
+    )
     parser.add_argument("--depth-strength", type=float, default=3.0)
     parser.add_argument("--convergence", type=float, default=0.0)
     parser.add_argument("--ipd", type=float, default=0.064)
@@ -49,6 +55,7 @@ def main() -> None:
     from stereo_lab.depth_provider import DepthProviderConfig, create_depth_provider
     from stereo_lab.io import load_depth, load_rgb, save_depth, save_rgb
     from stereo_lab.output import make_sbs
+    from stereo_lab.presets import stereo_config_for_preset
     from stereo_lab.report import absdiff, basic_image_metrics, make_contact_sheet, make_labeled_contact_sheet, write_json
     from stereo_lab.synthesis import StereoConfig, synthesize_stereo
 
@@ -105,14 +112,27 @@ def main() -> None:
         "debug_output": True,
         "fused": not args.no_fused,
     }
-    configs = {
-        "baseline": StereoConfig(backend="fast", output_format="full_sbs", **base_config),
-        "quality_4k": StereoConfig(
+    if args.preset:
+        preset_overrides = {
+            "debug_output": True,
+            "fused": not args.no_fused,
+            "cross_eyed": args.cross_eyed,
+            "anaglyph_method": args.anaglyph_method,
+        }
+        target_key = args.preset
+        target_config = stereo_config_for_preset(args.preset, output_format="full_sbs", overrides=preset_overrides)
+    else:
+        target_key = "quality_4k"
+        target_config = StereoConfig(
             backend="quality_4k",
             layers=args.quality_layers,
             output_format="full_sbs",
             **base_config,
-        ),
+        )
+
+    configs = {
+        "baseline": StereoConfig(backend="fast", output_format="full_sbs", **base_config),
+        target_key: target_config,
     }
 
     report: dict[str, object] = {
@@ -140,12 +160,13 @@ def main() -> None:
             "cross_eyed": args.cross_eyed,
             "anaglyph_method": args.anaglyph_method,
             "fused": not args.no_fused,
+            "preset": args.preset,
         },
         "methods": {},
         "comparisons": {},
     }
 
-    print("[4/5] synthesizing baseline and quality_4k ...", flush=True)
+    print(f"[4/5] synthesizing baseline and {target_key} ...", flush=True)
     results = {}
     timings = {}
     with torch.inference_mode():
@@ -211,13 +232,13 @@ def main() -> None:
             print(f"  {name}: {elapsed_ms:.3f} ms", flush=True)
 
         baseline = results["baseline"]
-        quality = results["quality_4k"]
+        quality = results[target_key]
         for target in ("left_eye", "right_eye"):
             base_eye = getattr(baseline, target)
             quality_eye = getattr(quality, target)
             diff = absdiff(base_eye.cpu(), quality_eye.cpu())
-            save_rgb(diff, out_dir / f"baseline_vs_quality_4k_{target}_absdiff.png")
-            report["comparisons"][f"baseline_vs_quality_4k_{target}"] = basic_image_metrics(base_eye.cpu(), quality_eye.cpu())
+            save_rgb(diff, out_dir / f"baseline_vs_{target_key}_{target}_absdiff.png")
+            report["comparisons"][f"baseline_vs_{target_key}_{target}"] = basic_image_metrics(base_eye.cpu(), quality_eye.cpu())
 
         baseline_half = make_sbs(baseline.left_eye, baseline.right_eye, "half_sbs").cpu()
         quality_half = make_sbs(quality.left_eye, quality.right_eye, "half_sbs").cpu()
@@ -225,10 +246,10 @@ def main() -> None:
         quality_full = make_sbs(quality.left_eye, quality.right_eye, "full_sbs").cpu()
         half_diff = absdiff(baseline_half, quality_half)
         full_diff = absdiff(baseline_full, quality_full)
-        save_rgb(half_diff, out_dir / "baseline_vs_quality_4k_half_sbs_absdiff.png")
-        save_rgb(full_diff, out_dir / "baseline_vs_quality_4k_full_sbs_absdiff.png")
-        report["comparisons"]["baseline_vs_quality_4k_half_sbs"] = basic_image_metrics(baseline_half, quality_half)
-        report["comparisons"]["baseline_vs_quality_4k_full_sbs"] = basic_image_metrics(baseline_full, quality_full)
+        save_rgb(half_diff, out_dir / f"baseline_vs_{target_key}_half_sbs_absdiff.png")
+        save_rgb(full_diff, out_dir / f"baseline_vs_{target_key}_full_sbs_absdiff.png")
+        report["comparisons"][f"baseline_vs_{target_key}_half_sbs"] = basic_image_metrics(baseline_half, quality_half)
+        report["comparisons"][f"baseline_vs_{target_key}_full_sbs"] = basic_image_metrics(baseline_full, quality_full)
 
         sheet_items = [
             rgb.cpu(),
@@ -246,11 +267,11 @@ def main() -> None:
             ("input_rgb", rgb.cpu()),
             ("used_depth", depth.repeat(1, 3, 1, 1).cpu()),
             ("baseline_half_sbs", baseline_half),
-            ("quality_4k_half_sbs", quality_half),
-            ("baseline_vs_quality_4k_half_absdiff", half_diff),
+            (f"{target_key}_half_sbs", quality_half),
+            (f"baseline_vs_{target_key}_half_absdiff", half_diff),
         ]
         if quality_mask is not None:
-            labeled_items.append(("quality_4k_occlusion_mask", quality_mask.repeat(1, 3, 1, 1).cpu()))
+            labeled_items.append((f"{target_key}_occlusion_mask", quality_mask.repeat(1, 3, 1, 1).cpu()))
         labeled_contact = make_labeled_contact_sheet(labeled_items, columns=2)
         save_rgb(labeled_contact, out_dir / "contact_sheet_labeled.png")
         write_json(report, out_dir / "visual_regression_report.json")

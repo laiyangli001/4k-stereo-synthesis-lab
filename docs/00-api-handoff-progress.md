@@ -28,6 +28,8 @@ Important docs:
 - `docs/11-visual-regression-guide.md`
 - `docs/12-openxr-stereo-runtime-plan.md`
 - `docs/13-realtime-stereo-parameter-guide.md`
+- `docs/14-host-api-preset-examples.md`
+- `docs/15-host-api-contract.md`
 - This file: `docs/00-api-handoff-progress.md`
 
 Note:
@@ -425,33 +427,38 @@ Visual regression:
 .\python3\python.exe -B scripts\generate_visual_regression_set.py --rgb 4K.jpg --auto-depth --depth-backend tensorrt_native --out-dir outputs\visual_regression\<name>
 ```
 
+Host API smoke:
+
+```powershell
+.\python3\python.exe -B scripts\host_api_smoke.py --preset cinema --output-format half_sbs --out outputs\host_api_smoke_cinema.json
+.\python3\python.exe -B scripts\host_api_smoke.py --preset cinema --output-format half_sbs --out -
+.\python3\python.exe -B scripts\host_api_smoke.py --rgb 4K.jpg --auto-depth --depth-backend tensorrt_native --preset cinema --output-format half_sbs --out outputs\host_api_smoke_4k_native.json
+```
+
 ## Recommended Next Steps
 
-1. Formalize the external API/preset layer for host applications:
-   - `StereoConfig`
-   - `OpenXRRenderConfig`
+1. Use the new external API/preset layer from `src/stereo_lab/presets.py`:
    - `StereoModePreset`
-   - helper functions that map mode presets to config objects
-2. Define preset outputs for:
-   - `Cinema`
-   - `Game / Low Latency`
-   - `Still Image / HQ`
-   - `Debug / Export`
-   - `Auto` classifier output schema
-3. Provide clear API examples for a GUI/OpenXR host project:
-   - RGB + depth -> stereo output
-   - RGB -> depth provider -> stereo output
-   - OpenXR per-eye pose/FOV/roll -> roll-adaptive stereo core
-   - Auto mode classifier output -> config mapping
-4. Generate visual regression sets for representative Cinema, Game / Low Latency, Still Image / HQ, and Debug / Export samples.
-5. Use visual regression to finalize default preset values.
-6. Optimize `hole_fill` only with visual regression checks.
-7. Re-run formal benchmarks on RTX 3090 / RTX 5070 when available:
+   - `AutoModeSignals`
+   - `AutoModeDecision`
+   - `stereo_config_for_preset`
+   - `openxr_config_for_preset`
+   - `stereo_config_for_auto_mode`
+   - `openxr_config_for_auto_mode`
+2. Review host integration examples in `docs/14-host-api-preset-examples.md` and the host boundary contract in `docs/15-host-api-contract.md`.
+3. Lock the host integration boundary before tuning visual defaults:
+   - GUI/OpenXR hosts should call preset helpers instead of writing every config field manually.
+   - Depth providers and runtime sessions must be persistent, not recreated per frame.
+   - Presets must not lower depth inference resolution or silently change model paths.
+4. Re-run API and preset unit tests after host-facing changes, plus `scripts/host_api_smoke.py` for a synthetic no-model smoke check.
+5. Optimize `hole_fill` only after the API/preset boundary is stable.
+6. Re-run formal benchmarks on RTX 3090 / RTX 5070 when available:
    - `bench_depth_backends.py`
    - `profile_synthesis_4k.py`
    - `bench_end_to_end_4k.py`
    - `generate_visual_regression_set.py`
-8. Add true iw3 same-scene comparison later, after fixed RGB/depth/output format is locked.
+7. Add true iw3 same-scene comparison later, after fixed RGB/depth/output format is locked.
+8. Final locking step: generate visual regression sets for representative Cinema, Game / Low Latency, Still Image / HQ, and Debug / Export samples, then use those results to finalize preset default values.
 
 ## Current Bottleneck
 
