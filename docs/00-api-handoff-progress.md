@@ -17,7 +17,7 @@ https://github.com/laiyangli001/4k-stereo-synthesis-lab
 Latest pushed commit at handoff:
 
 ```text
-f3569c6 docs: update handoff with auto mode plan
+d6e77e2 docs: add auto mode runtime host demo
 ```
 
 Important docs:
@@ -84,11 +84,79 @@ Current completion estimate for this repository:
 
 ```text
 Core algorithm and performance validation: 85-90%
-External API/preset stability: 75-85%
+External API/preset stability: 90-95%
 Product runtime pipeline: out of scope for this repository
 ```
 
 ## Current Status
+
+### 2026-06-17 API / Preset / Auto Runtime Update
+
+The external preset/API layer is now implemented and pushed.
+
+Latest pushed commit:
+
+```text
+d6e77e2 docs: add auto mode runtime host demo
+```
+
+Implemented host-facing API:
+
+- `StereoModePreset`
+- `PRESET_CHOICES`
+- `AutoModeSignals`
+- `AutoModeDecision`
+- `AutoModeRuntime`
+- `AutoModeRuntimeState`
+- `auto_detection_required`
+- `auto_mode_scores`
+- `classify_auto_mode`
+- `stereo_config_for_preset`
+- `openxr_config_for_preset`
+- `stereo_config_for_auto_mode`
+- `openxr_config_for_auto_mode`
+- `preset_summary`
+
+Preset modes:
+
+- `auto`
+- `cinema`
+- `game_low_latency`
+- `still_image_hq`
+- `debug_export`
+
+Important Auto behavior:
+
+- Scene detection is only required when the user selected `auto`.
+- Manual presets such as `cinema`, `game_low_latency`, `still_image_hq`, and `debug_export` should not start scene detection.
+- System metrics must be sampled asynchronously by the GUI/runtime host, not inside capture, depth inference, or stereo synthesis.
+- `AutoModeRuntime` only consumes pre-aggregated `AutoModeSignals` snapshots.
+- Behavior scoring prioritizes GPU 3D, Video Decode, input activity, idle time, audio, fullscreen/maximized state, and frame motion.
+- Foreground process name is only a low-weight hint; the implementation does not rely on a large game/application whitelist.
+- `AutoModeRuntime` handles consecutive-sample confirmation and hold time. Host code should still apply parameter blending using `blend_seconds`.
+
+Host/API docs:
+
+- `docs/14-host-api-preset-examples.md`
+- `docs/15-host-api-contract.md`
+
+Host/API scripts:
+
+- `scripts/host_api_smoke.py`
+- `scripts/auto_mode_runtime_demo.py`
+
+Host/API tests:
+
+- `tests/test_presets.py`
+- `tests/test_host_api_smoke.py`
+- `tests/test_auto_mode_runtime_demo.py`
+
+Latest targeted verification:
+
+```text
+tests/test_auto_mode_runtime_demo.py + tests/test_presets.py + tests/test_host_api_smoke.py:
+15 passed
+```
 
 ### 2026-06-17 RTX 3090 Update
 
@@ -439,20 +507,18 @@ Host API smoke:
 
 ## Recommended Next Steps
 
-1. Use the new external API/preset layer from `src/stereo_lab/presets.py`:
-   - `StereoModePreset`
-   - `AutoModeSignals`
-   - `AutoModeDecision`
-   - `stereo_config_for_preset`
-   - `openxr_config_for_preset`
-   - `stereo_config_for_auto_mode`
-   - `openxr_config_for_auto_mode`
-2. Review host integration examples in `docs/14-host-api-preset-examples.md` and the host boundary contract in `docs/15-host-api-contract.md`.
-3. Lock the host integration boundary before tuning visual defaults:
-   - GUI/OpenXR hosts should call preset helpers instead of writing every config field manually.
-   - Depth providers and runtime sessions must be persistent, not recreated per frame.
-   - Presets must not lower depth inference resolution or silently change model paths.
-4. Re-run API and preset unit tests after host-facing changes, plus `scripts/host_api_smoke.py` for a synthetic no-model smoke check.
+1. Keep GUI/OpenXR host integration aligned with:
+   - `docs/14-host-api-preset-examples.md`
+   - `docs/15-host-api-contract.md`
+   - `scripts/host_api_smoke.py`
+   - `scripts/auto_mode_runtime_demo.py`
+2. When implementing a real GUI/runtime host, start async scene detection only when `auto_detection_required(selected_preset)` is true.
+3. Real system metric collection remains out of scope for this core repo:
+   - GPU 3D / Video Decode sampling
+   - keyboard/mouse activity sampling
+   - audio activity sampling
+   - foreground window/fullscreen detection
+4. Re-run API and preset unit tests after host-facing changes:
    - `tests/test_host_api_smoke.py` locks the CLI JSON report contract for stereo and OpenXR host smoke paths.
    - `tests/test_auto_mode_runtime_demo.py` locks the simulated Auto host state-machine integration path.
 5. Optimize `hole_fill` only after the API/preset boundary is stable.
