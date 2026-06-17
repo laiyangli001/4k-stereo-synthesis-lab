@@ -65,6 +65,8 @@ def main() -> None:
     parser.add_argument("--online", action="store_true", help="Allow online model loading for PyTorch fallback providers.")
     parser.add_argument("--preset", default="cinema", choices=["auto", "cinema", "game_low_latency", "still_image_hq", "debug_export"])
     parser.add_argument("--output-format", default="half_sbs", choices=["half_sbs", "full_sbs", "half_tab", "full_tab", "mono", "depth_map", "anaglyph", "interleaved", "leia"])
+    parser.add_argument("--openxr", action="store_true", help="Smoke-test the OpenXR per-eye core instead of packed stereo output.")
+    parser.add_argument("--screen-roll", type=float, default=0.0, help="OpenXR screen roll in radians when --openxr is used.")
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--width", type=int, default=1280)
     parser.add_argument("--height", type=int, default=720)
@@ -74,7 +76,7 @@ def main() -> None:
 
     import torch
 
-    from stereo_lab import stereo_config_for_preset, synthesize_stereo
+    from stereo_lab import openxr_config_for_preset, render_openxr_stereo, stereo_config_for_preset, synthesize_stereo
     from stereo_lab.temporal import TemporalState
 
     device = args.device
@@ -94,7 +96,8 @@ def main() -> None:
             _, synthetic_depth = _synthetic_rgb_depth(rgb.shape[-2], rgb.shape[-1], device)
         depth = synthetic_depth
 
-    config = stereo_config_for_preset(args.preset, output_format=args.output_format)
+    stereo_config = stereo_config_for_preset(args.preset, output_format=args.output_format)
+    openxr_config = openxr_config_for_preset(args.preset, screen_roll=args.screen_roll)
     temporal_state = TemporalState()
 
     timings = []
@@ -102,14 +105,20 @@ def main() -> None:
     for _ in range(max(1, args.iters)):
         _sync_if_cuda(device)
         start = time.perf_counter()
-        result = synthesize_stereo(rgb, depth, config, temporal_state=temporal_state)
+        if args.openxr:
+            result = render_openxr_stereo(rgb, depth, openxr_config)
+        else:
+            result = synthesize_stereo(rgb, depth, stereo_config, temporal_state=temporal_state)
         _sync_if_cuda(device)
         timings.append((time.perf_counter() - start) * 1000.0)
 
     assert result is not None
+    sbs_shape = None if args.openxr else list(result.sbs.shape)
     report = {
+        "mode": "openxr" if args.openxr else "stereo",
         "preset": args.preset,
-        "output_format": args.output_format,
+        "output_format": None if args.openxr else args.output_format,
+        "screen_roll": args.screen_roll if args.openxr else None,
         "device": device,
         "auto_depth": bool(args.auto_depth),
         "depth_provider": getattr(getattr(depth_provider, "info", None), "depth_backend", None),
@@ -117,9 +126,9 @@ def main() -> None:
         "depth_shape": list(depth.shape),
         "left_eye_shape": list(result.left_eye.shape),
         "right_eye_shape": list(result.right_eye.shape),
-        "sbs_shape": list(result.sbs.shape),
+        "sbs_shape": sbs_shape,
         "timings_ms": timings,
-        "mean_synthesis_ms": sum(timings) / len(timings),
+        "mean_render_ms": sum(timings) / len(timings),
         "debug_info": {k: v for k, v in result.debug_info.items() if isinstance(v, (float, int, str))},
     }
 

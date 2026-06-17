@@ -432,6 +432,7 @@ Host API smoke:
 ```powershell
 .\python3\python.exe -B scripts\host_api_smoke.py --preset cinema --output-format half_sbs --out outputs\host_api_smoke_cinema.json
 .\python3\python.exe -B scripts\host_api_smoke.py --preset cinema --output-format half_sbs --out -
+.\python3\python.exe -B scripts\host_api_smoke.py --openxr --preset cinema --screen-roll 0.25 --out -
 .\python3\python.exe -B scripts\host_api_smoke.py --rgb 4K.jpg --auto-depth --depth-backend tensorrt_native --preset cinema --output-format half_sbs --out outputs\host_api_smoke_4k_native.json
 ```
 
