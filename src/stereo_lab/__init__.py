@@ -10,6 +10,12 @@ from .openxr_render import (
     is_pyopenxr_available,
     render_openxr_stereo,
 )
+from .adapter import (
+    StereoLabRuntimeConfig,
+    depth_provider_config_from_runtime,
+    preset_for_runtime_mode,
+    stereo_config_from_runtime,
+)
 from .presets import (
     AutoModeDecision,
     AutoModeRuntime,
@@ -39,6 +45,7 @@ __all__ = [
     "OpenXRScreenPose",
     "OpenXRStereoResult",
     "PRESET_CHOICES",
+    "StereoLabRuntimeConfig",
     "StereoConfig",
     "StereoModePreset",
     "StereoResult",
@@ -51,6 +58,9 @@ __all__ = [
     "openxr_config_for_preset",
     "preset_summary",
     "render_openxr_stereo",
+    "depth_provider_config_from_runtime",
+    "preset_for_runtime_mode",
+    "stereo_config_from_runtime",
     "stereo_config_for_auto_mode",
     "stereo_config_for_preset",
     "synthesize_stereo",

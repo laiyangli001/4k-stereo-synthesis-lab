@@ -44,21 +44,42 @@ packed = result.sbs
 ## 只有 RGB 时的常驻 depth provider
 
 ```python
-from stereo_lab import stereo_config_for_preset, synthesize_stereo
-from stereo_lab.depth_provider import DepthProviderConfig, create_depth_provider
+from stereo_lab import (
+    StereoLabRuntimeConfig,
+    depth_provider_config_from_runtime,
+    stereo_config_from_runtime,
+    synthesize_stereo,
+)
+from stereo_lab.depth_provider import create_depth_provider
 from stereo_lab.temporal import TemporalState
 
-provider = create_depth_provider(
-    DepthProviderConfig(
-        backend="tensorrt_native",
-        device="cuda",
-        onnx_path="models/models--lc700x--Distill-Any-Depth-Base-hf/model_fp16_294x518.onnx",
-        engine_path="models/models--lc700x--Distill-Any-Depth-Base-hf/model_fp16_294x518.trt",
-    )
+runtime_config = StereoLabRuntimeConfig(
+    model_id="lc700x/Distill-Any-Depth-Base-hf",
+    model_dir=r"D:\Desktop2Stereo\models\models--lc700x--Distill-Any-Depth-Base-hf",
+    mode="movie",
+    stereo_quality="quality_4k",
+    output_format="half_sbs",
+    depth_backend="auto",
+    depth_strength=2.0,
+    convergence=0.0,
+    ipd=0.064,
+    max_shift_ratio=0.05,
+    layers=2,
+    occlusion=True,
+    symmetric=True,
+    hole_fill="edge_aware",
+    temporal=True,
+    temporal_strength=0.75,
+    auto_reset_temporal=True,
+    edge_threshold=0.04,
+    edge_dilation=2,
+    fused=True,
 )
+
+provider = create_depth_provider(depth_provider_config_from_runtime(runtime_config))
 provider.load()
 
-config = stereo_config_for_preset("cinema", output_format="half_sbs")
+config = stereo_config_from_runtime(runtime_config)
 temporal_state = TemporalState()
 
 for rgb in frames:
@@ -67,6 +88,14 @@ for rgb in frames:
 ```
 
 不要每帧创建 provider 或重新加载 engine/session。
+
+Desktop2Stereo 侧只需要传 `model_id` 和下载后的 `model_dir`。ONNX 和 TensorRT artifact 默认放在同一个 `model_dir` 下：
+
+```text
+model_fp16_294x518.onnx
+model_fp32_294x518.onnx
+model_fp16_294x518.trt
+```
 
 ## Auto 模式
 

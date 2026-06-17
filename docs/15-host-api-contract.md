@@ -53,22 +53,45 @@ result = synthesize_stereo(rgb, depth, config, temporal_state=temporal_state)
 
 ## 数据流 2：Host 只有 RGB
 
+推荐外部 host 使用 `StereoLabRuntimeConfig` 作为边界对象。Desktop2Stereo 负责下载模型并确定 `model_id` / `model_dir`，本仓库从 `model_dir` 推导 ONNX 与 TensorRT artifact 路径，并负责后续转换、构建、预处理、推理和立体合成。
+
 ```python
-from stereo_lab import stereo_config_for_preset, synthesize_stereo
-from stereo_lab.depth_provider import DepthProviderConfig, create_depth_provider
+from stereo_lab import (
+    StereoLabRuntimeConfig,
+    depth_provider_config_from_runtime,
+    stereo_config_from_runtime,
+    synthesize_stereo,
+)
+from stereo_lab.depth_provider import create_depth_provider
 from stereo_lab.temporal import TemporalState
 
-depth_provider = create_depth_provider(
-    DepthProviderConfig(
-        backend="tensorrt_native",
-        device="cuda",
-        onnx_path="models/models--lc700x--Distill-Any-Depth-Base-hf/model_fp16_294x518.onnx",
-        engine_path="models/models--lc700x--Distill-Any-Depth-Base-hf/model_fp16_294x518.trt",
-    )
+runtime_config = StereoLabRuntimeConfig(
+    model_id="lc700x/Distill-Any-Depth-Base-hf",
+    model_dir=r"D:\Desktop2Stereo\models\models--lc700x--Distill-Any-Depth-Base-hf",
+    mode="movie",
+    stereo_quality="quality_4k",
+    output_format="half_sbs",
+    depth_backend="auto",
+    depth_strength=2.0,
+    convergence=0.0,
+    ipd=0.064,
+    max_shift_ratio=0.05,
+    layers=2,
+    occlusion=True,
+    symmetric=True,
+    hole_fill="edge_aware",
+    temporal=True,
+    temporal_strength=0.75,
+    auto_reset_temporal=True,
+    edge_threshold=0.04,
+    edge_dilation=2,
+    fused=True,
 )
+
+depth_provider = create_depth_provider(depth_provider_config_from_runtime(runtime_config))
 depth_provider.load()
 
-config = stereo_config_for_preset("cinema", output_format="half_sbs")
+config = stereo_config_from_runtime(runtime_config)
 temporal_state = TemporalState()
 
 for rgb in frames:
@@ -81,7 +104,8 @@ for rgb in frames:
 | 对象 | 创建频率 | 说明 |
 |---|---|---|
 | `DepthProvider` | 进程启动或模型切换时创建一次 | 内部持有模型、ONNX session 或 TensorRT engine |
-| `StereoConfig` | 模式或参数改变时创建 | 不需要每帧创建 |
+| `StereoLabRuntimeConfig` | 模型、模式或参数改变时创建 | Host 传 `model_id` 和 `model_dir`，artifact 路径由本仓库推导 |
+| `StereoConfig` | 由 runtime config 转换生成 | 不需要每帧创建 |
 | `TemporalState` | 每条输入流一个 | 源切换或场景重置时可 reset |
 | OpenXR session/swapchain | Host runtime 管理 | 本仓库不创建完整 runtime |
 
@@ -90,7 +114,19 @@ for rgb in frames:
 - 不要每帧调用 `create_depth_provider()`。
 - 不要每帧重新 load ONNX session 或 TensorRT engine。
 - 不要为了提速降低 `depth_resolution=518` 或修改 `294x518` 输入路径。
-- 不要把模型产物写入 Desktop2Stereo 原项目模型目录。
+- 不要让 GUI 直接拼 ONNX / TensorRT 文件名；GUI 只传 `model_id` 和 `model_dir`。
+
+Artifact 推导规则：
+
+| 输入 | 规则 |
+|---|---|
+| `model_id` | Desktop2Stereo 模型列表/下载逻辑给出的 Hugging Face ID |
+| `model_dir` | Desktop2Stereo 下载完成后的本地模型目录 |
+| ONNX fp16 | `{model_dir}/model_fp16_294x518.onnx` |
+| ONNX fp32 | `{model_dir}/model_fp32_294x518.onnx` |
+| TensorRT engine | `{model_dir}/model_fp16_294x518.trt` |
+
+ONNX dtype 默认使用 `onnx_dtype="auto"`：优先 fp16 dummy forward 检查，失败则回退 fp32；fp32 也失败时停止并报告错误。
 
 ## 输出格式
 
