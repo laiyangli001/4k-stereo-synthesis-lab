@@ -147,33 +147,52 @@ Preset 不允许控制：
 
 ## Auto 模式边界
 
-核心库提供低风险分类器：
+核心库提供低风险分类器和轻量状态机。场景信号采集必须由宿主异步完成，不能放在桌面捕获、depth 推理或 stereo synthesis 热路径里同步执行。
+
+重要限制：只有用户选择 `auto` 模式时，宿主才应该启动异步场景检测。用户手动选择 `cinema`、`game_low_latency`、`still_image_hq` 或 `debug_export` 时，宿主应直接使用对应 preset，不启动检测线程，也不调用 `AutoModeRuntime.update()`。
 
 ```python
-from stereo_lab import AutoModeSignals, stereo_config_for_auto_mode
+from stereo_lab import AutoModeRuntime, AutoModeSignals, auto_detection_required, stereo_config_for_preset
 
-signals = AutoModeSignals(
-    frame_motion_score=motion,
-    scene_cut_score=scene_cut,
-    still_duration_s=still_seconds,
-    foreground_process=process_name,
-    fullscreen=is_fullscreen,
-    openxr_active=is_openxr,
-    user_export_action=is_export,
-    latency_pressure=latency_pressure,
-    target_fps=target_fps,
-)
-
-decision, config = stereo_config_for_auto_mode(signals, output_format="half_sbs")
+if auto_detection_required(user_selected_preset):
+    auto_runtime = AutoModeRuntime()
+    signals = AutoModeSignals(
+        frame_motion_score=motion,
+        scene_cut_score=scene_cut,
+        still_duration_s=still_seconds,
+        gpu_3d_util=gpu_3d_2s_avg,
+        gpu_video_decode_util=video_decode_2s_avg,
+        input_activity=input_activity_2s_avg,
+        idle_seconds=idle_seconds,
+        audio_active=audio_active,
+        foreground_process=process_name,
+        fullscreen=is_fullscreen,
+        maximized=is_maximized,
+        openxr_active=is_openxr,
+        user_export_action=is_export,
+        latency_pressure=latency_pressure,
+        target_fps=target_fps,
+    )
+    decision = auto_runtime.update(signals, dt_s=sample_dt)
+    config = stereo_config_for_preset(decision.preset, output_format="half_sbs")
+else:
+    config = stereo_config_for_preset(user_selected_preset, output_format="half_sbs")
 ```
 
-宿主必须负责：
+异步采集要求：
 
-- 连续多帧确认后再切换模式。
-- 切换后保持当前模式 `2-5` 秒。
-- 参数变化使用渐变，不要单帧跳变。
-- scene reset 或高速运动时可以快速降级到 `game_low_latency`。
-- 从 `game_low_latency` 回到 `cinema` 或 `still_image_hq` 时应更慢，避免来回抖动。
+- GPU 3D、Video Decode、键鼠输入、音频、窗口状态等系统指标由宿主后台线程采集。
+- 采集线程只在 `auto` 模式启动；离开 `auto` 模式时应停止或休眠。
+- 建议采样周期 `100-250 ms`，用 `2-3` 秒滑动平均或指数平均后生成 `AutoModeSignals`。
+- 渲染/推理线程只读取最新信号快照，调用 `AutoModeRuntime.update()`，不得同步查询系统 API。
+- 前台进程名只作为低权重 hint，不能依赖大白名单。
+- 信号冲突时保持上一次模式或回到 `cinema`，不要频繁跳变。
+
+状态机行为：
+
+- `AutoModeRuntime` 内部执行连续样本确认、hold 时间和快速升级到 `game_low_latency/debug_export`。
+- 从 `game_low_latency` 回到 `cinema` 或 `still_image_hq` 会受 hold 限制，避免来回抖动。
+- 参数渐变仍由宿主执行；核心库返回 `blend_seconds` 作为建议。
 
 ## OpenXR 边界
 

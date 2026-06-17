@@ -8,8 +8,11 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from stereo_lab.openxr_render import OpenXRRenderConfig
 from stereo_lab.presets import (
+    AutoModeRuntime,
     AutoModeSignals,
     PRESET_CHOICES,
+    auto_detection_required,
+    auto_mode_scores,
     classify_auto_mode,
     openxr_config_for_auto_mode,
     openxr_config_for_preset,
@@ -71,7 +74,7 @@ def test_openxr_presets_map_shared_stereo_params():
 def test_auto_mode_classifier_priority():
     export = classify_auto_mode(AutoModeSignals(user_export_action=True, frame_motion_score=1.0))
     still = classify_auto_mode(AutoModeSignals(still_duration_s=2.0, frame_motion_score=0.01))
-    game = classify_auto_mode(AutoModeSignals(frame_motion_score=0.5))
+    game = classify_auto_mode(AutoModeSignals(gpu_3d_util=0.7, input_activity=0.8))
     cinema = classify_auto_mode(AutoModeSignals(frame_motion_score=0.05))
 
     assert export.preset == "debug_export"
@@ -81,7 +84,7 @@ def test_auto_mode_classifier_priority():
 
 
 def test_auto_mode_config_helpers_return_decision_and_config():
-    decision, stereo = stereo_config_for_auto_mode(AutoModeSignals(foreground_process="SteamGame.exe"), output_format="half_tab")
+    decision, stereo = stereo_config_for_auto_mode(AutoModeSignals(gpu_3d_util=0.65, input_activity=0.8), output_format="half_tab")
     openxr_decision, openxr = openxr_config_for_auto_mode(AutoModeSignals(openxr_active=True), screen_roll=0.25)
 
     assert decision.preset == "game_low_latency"
@@ -113,3 +116,45 @@ def test_presets_do_not_control_depth_provider_or_model_paths():
     for preset in summary.values():
         assert forbidden.isdisjoint(preset["stereo"])
         assert forbidden.isdisjoint(preset["openxr"])
+
+
+def test_auto_mode_scores_use_behavior_before_process_name():
+    generic_game = auto_mode_scores(AutoModeSignals(gpu_3d_util=0.75, input_activity=0.8, foreground_process="UnknownApp.exe"))
+    video = auto_mode_scores(AutoModeSignals(gpu_video_decode_util=0.35, gpu_3d_util=0.05, input_activity=0.02, idle_seconds=8.0, audio_active=True))
+
+    assert generic_game["game"] >= 5.0
+    assert generic_game["game"] > generic_game["video"]
+    assert video["video"] >= 4.0
+    assert video["video"] > video["game"]
+
+
+def test_auto_mode_runtime_requires_consecutive_samples_and_holds():
+    runtime = AutoModeRuntime()
+    game_signals = AutoModeSignals(gpu_3d_util=0.75, input_activity=0.9, fullscreen=True, target_fps=120.0)
+
+    for _ in range(3):
+        decision = runtime.update(game_signals, dt_s=0.5)
+        assert decision.preset == "cinema"
+        assert "confirming game_low_latency" in decision.reason
+
+    decision = runtime.update(game_signals, dt_s=0.5)
+    assert decision.preset == "game_low_latency"
+    assert runtime.state.active_preset == "game_low_latency"
+
+    still_signals = AutoModeSignals(gpu_3d_util=0.0, gpu_video_decode_util=0.0, input_activity=0.0, idle_seconds=40.0, still_duration_s=2.0)
+    held = runtime.update(still_signals, dt_s=0.5)
+    assert held.preset == "game_low_latency"
+    assert "holding game_low_latency" in held.reason
+
+
+def test_manual_presets_bypass_auto_runtime_contract():
+    manual = stereo_config_for_preset("game_low_latency", output_format="half_sbs")
+    auto_default = stereo_config_for_preset("auto", output_format="half_sbs")
+
+    assert manual.backend == "quality_4k"
+    assert manual.hole_fill == "fast"
+    assert auto_default.backend == "quality_4k"
+    assert auto_default.hole_fill == "edge_aware"
+    assert auto_detection_required("auto") is True
+    assert auto_detection_required("cinema") is False
+    assert auto_detection_required("game_low_latency") is False

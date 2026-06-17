@@ -12,9 +12,13 @@ from .openxr_render import (
 )
 from .presets import (
     AutoModeDecision,
+    AutoModeRuntime,
+    AutoModeRuntimeState,
     AutoModeSignals,
     PRESET_CHOICES,
     StereoModePreset,
+    auto_detection_required,
+    auto_mode_scores,
     classify_auto_mode,
     openxr_config_for_auto_mode,
     openxr_config_for_preset,
@@ -26,6 +30,8 @@ from .synthesis import StereoConfig, StereoResult, synthesize_stereo
 
 __all__ = [
     "AutoModeDecision",
+    "AutoModeRuntime",
+    "AutoModeRuntimeState",
     "AutoModeSignals",
     "OpenXREyeView",
     "OpenXRFov",
@@ -36,7 +42,9 @@ __all__ = [
     "StereoConfig",
     "StereoModePreset",
     "StereoResult",
+    "auto_detection_required",
     "build_openxr_eye_mvp",
+    "auto_mode_scores",
     "classify_auto_mode",
     "is_pyopenxr_available",
     "openxr_config_for_auto_mode",

@@ -51,28 +51,43 @@ debug -> debug_export
 
 ## Auto 模式
 
-核心库提供一个低风险分类器。GUI/runtime host 应负责 hysteresis、防抖、模式保持时间和参数 blending。
+核心库提供一个低风险分类器和轻量状态机。GPU、键鼠、音频、窗口状态等系统指标必须由宿主后台线程异步采集并做 `2-3` 秒滑动平均；捕获/推理线程只读取最新快照，不能同步查询系统 API。
+
+只有用户选择 `auto` 模式时才启动检测。手动选择 `cinema`、`game_low_latency`、`still_image_hq` 或 `debug_export` 时，直接使用固定 preset，不启动检测线程。
 
 ```python
-from stereo_lab import AutoModeSignals, stereo_config_for_auto_mode
+from stereo_lab import AutoModeRuntime, AutoModeSignals, auto_detection_required, stereo_config_for_preset
 
-signals = AutoModeSignals(
-    frame_motion_score=0.42,
-    scene_cut_score=0.1,
-    still_duration_s=0.0,
-    foreground_process="Game.exe",
-    fullscreen=True,
-    openxr_active=False,
-    user_export_action=False,
-    latency_pressure=0.8,
-    target_fps=120.0,
-)
+user_selected_preset = "auto"
 
-decision, config = stereo_config_for_auto_mode(signals, output_format="half_sbs")
+if auto_detection_required(user_selected_preset):
+    auto_runtime = AutoModeRuntime()
+    signals = AutoModeSignals(
+        frame_motion_score=0.42,
+        scene_cut_score=0.1,
+        still_duration_s=0.0,
+        gpu_3d_util=0.72,
+        gpu_video_decode_util=0.03,
+        input_activity=0.85,
+        idle_seconds=0.2,
+        audio_active=True,
+        foreground_process="Unknown3DApp.exe",
+        fullscreen=True,
+        maximized=True,
+        openxr_active=False,
+        user_export_action=False,
+        latency_pressure=0.8,
+        target_fps=120.0,
+    )
+    decision = auto_runtime.update(signals, dt_s=0.25)
+    config = stereo_config_for_preset(decision.preset, output_format="half_sbs")
+else:
+    config = stereo_config_for_preset(user_selected_preset, output_format="half_sbs")
 
 print(decision.preset)
 print(decision.reason)
 print(decision.hold_seconds)
+print(decision.scores)
 ```
 
 分类器输出示例：
@@ -80,19 +95,21 @@ print(decision.hold_seconds)
 ```python
 AutoModeDecision(
     preset="game_low_latency",
-    reason="fast motion or latency pressure",
+    reason="high 3d/input/latency behavior",
     hold_seconds=2.0,
     blend_seconds=0.2,
     require_consecutive_frames=4,
+    scores={"game": 6.7, "video": 0.7, "still": 1.0},
 )
 ```
 
 宿主 runtime 规则：
 
 ```text
-不要因为单帧信号立刻切换模式。
-需要连续多帧满足条件，切换后保持当前模式 2-5 秒，并对参数做渐变。
-检测到 scene reset 或剧烈运动时，可以快速降级到 Game / Low Latency。
+只有 Auto 模式启动异步场景检测；手动 preset 不启动检测。
+系统指标异步低频采样，不要阻塞捕获、depth 推理或 stereo synthesis。
+不要因为单次采样立刻切换模式。需要连续多次满足条件，切换后保持当前模式 2-5 秒，并对参数做渐变。
+检测到高 GPU 3D / 高频输入 / 高延迟压力时，可以快速切到 Game / Low Latency。
 从 Game / Low Latency 回到 Cinema 或 Still Image / HQ 时应更慢，避免来回抖动。
 ```
 

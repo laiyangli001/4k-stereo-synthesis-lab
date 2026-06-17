@@ -40,9 +40,22 @@ _PRESET_ALIASES: dict[str, StereoModePreset] = {
 
 @dataclass(frozen=True)
 class AutoModeSignals:
+    """Pre-aggregated host/runtime signals.
+
+    Hosts should collect GPU/input/audio/window metrics asynchronously and pass
+    a smoothed snapshot here. This library never polls OS metrics in the
+    capture or inference hot path.
+    """
+
     frame_motion_score: float = 0.0
     scene_cut_score: float = 0.0
     still_duration_s: float = 0.0
+    gpu_3d_util: float = 0.0
+    gpu_video_decode_util: float = 0.0
+    input_activity: float = 0.0
+    idle_seconds: float = 0.0
+    audio_active: bool = False
+    maximized: bool = False
     foreground_process: str = ""
     fullscreen: bool = False
     openxr_active: bool = False
@@ -58,6 +71,95 @@ class AutoModeDecision:
     hold_seconds: float = 3.0
     blend_seconds: float = 0.35
     require_consecutive_frames: int = 8
+    scores: dict[str, float] | None = None
+
+
+@dataclass(frozen=True)
+class AutoModeRuntimeState:
+    active_preset: StereoModePreset
+    candidate_preset: StereoModePreset | None = None
+    candidate_count: int = 0
+    hold_remaining_s: float = 0.0
+    last_decision: AutoModeDecision | None = None
+
+
+class AutoModeRuntime:
+    """Debounced auto-mode state machine for host runtimes.
+
+    The update call is intentionally synchronous and cheap: it consumes a
+    ready-made AutoModeSignals snapshot and never performs OS/GPU polling.
+    """
+
+    def __init__(self, initial_preset: StereoModePreset = "cinema") -> None:
+        self.state = AutoModeRuntimeState(active_preset=normalize_preset(initial_preset))
+
+    def reset(self, preset: StereoModePreset = "cinema") -> None:
+        self.state = AutoModeRuntimeState(active_preset=normalize_preset(preset))
+
+    def update(self, signals: AutoModeSignals, *, dt_s: float = 1.0) -> AutoModeDecision:
+        proposed = classify_auto_mode(signals)
+        hold_remaining = max(0.0, self.state.hold_remaining_s - max(0.0, float(dt_s)))
+
+        if proposed.preset == self.state.active_preset:
+            self.state = AutoModeRuntimeState(
+                active_preset=self.state.active_preset,
+                candidate_preset=None,
+                candidate_count=0,
+                hold_remaining_s=hold_remaining,
+                last_decision=proposed,
+            )
+            return proposed
+
+        if hold_remaining > 0.0 and proposed.preset not in _FAST_UPGRADE_PRESETS:
+            decision = AutoModeDecision(
+                self.state.active_preset,
+                f"holding {self.state.active_preset}; candidate {proposed.preset}",
+                hold_seconds=hold_remaining,
+                blend_seconds=proposed.blend_seconds,
+                require_consecutive_frames=proposed.require_consecutive_frames,
+                scores=proposed.scores,
+            )
+            self.state = AutoModeRuntimeState(
+                active_preset=self.state.active_preset,
+                candidate_preset=proposed.preset,
+                candidate_count=0,
+                hold_remaining_s=hold_remaining,
+                last_decision=decision,
+            )
+            return decision
+
+        if proposed.preset == self.state.candidate_preset:
+            candidate_count = self.state.candidate_count + 1
+        else:
+            candidate_count = 1
+
+        required = max(1, proposed.require_consecutive_frames)
+        if candidate_count >= required:
+            self.state = AutoModeRuntimeState(
+                active_preset=proposed.preset,
+                candidate_preset=None,
+                candidate_count=0,
+                hold_remaining_s=proposed.hold_seconds,
+                last_decision=proposed,
+            )
+            return proposed
+
+        decision = AutoModeDecision(
+            self.state.active_preset,
+            f"confirming {proposed.preset} {candidate_count}/{required}",
+            hold_seconds=hold_remaining,
+            blend_seconds=proposed.blend_seconds,
+            require_consecutive_frames=required,
+            scores=proposed.scores,
+        )
+        self.state = AutoModeRuntimeState(
+            active_preset=self.state.active_preset,
+            candidate_preset=proposed.preset,
+            candidate_count=candidate_count,
+            hold_remaining_s=hold_remaining,
+            last_decision=decision,
+        )
+        return decision
 
 
 def normalize_preset(preset: str | StereoModePreset) -> StereoModePreset:
@@ -66,6 +168,10 @@ def normalize_preset(preset: str | StereoModePreset) -> StereoModePreset:
         return _PRESET_ALIASES[key]
     except KeyError as exc:
         raise ValueError(f"unknown stereo mode preset: {preset!r}") from exc
+
+
+def auto_detection_required(preset: str | StereoModePreset) -> bool:
+    return normalize_preset(preset) == "auto"
 
 
 def stereo_config_for_preset(
@@ -103,23 +209,113 @@ def openxr_config_for_preset(
 
 
 def classify_auto_mode(signals: AutoModeSignals) -> AutoModeDecision:
-    process = signals.foreground_process.lower()
     if signals.user_export_action:
         return AutoModeDecision("debug_export", "user export/debug action", hold_seconds=2.0, blend_seconds=0.2, require_consecutive_frames=1)
 
-    if signals.still_duration_s >= 1.5 and signals.frame_motion_score <= 0.03:
-        return AutoModeDecision("still_image_hq", "stable still frame", hold_seconds=3.0, blend_seconds=0.5, require_consecutive_frames=12)
+    scores = auto_mode_scores(signals)
+    game_score = scores["game"]
+    video_score = scores["video"]
+    still_score = scores["still"]
 
-    game_like_process = any(token in process for token in ("game", "unreal", "unity", "steam", "dx", "vulkan"))
-    fast_motion = signals.frame_motion_score >= 0.35 or signals.scene_cut_score >= 0.35
-    latency_pressure = signals.latency_pressure >= 0.65 or signals.target_fps >= 90.0
-    if game_like_process or (signals.fullscreen and latency_pressure) or fast_motion:
-        return AutoModeDecision("game_low_latency", "fast motion or latency pressure", hold_seconds=2.0, blend_seconds=0.2, require_consecutive_frames=4)
+    if game_score >= 3.0 and game_score >= video_score + 1.0:
+        return AutoModeDecision(
+            "game_low_latency",
+            "high 3d/input/latency behavior",
+            hold_seconds=2.0,
+            blend_seconds=0.2,
+            require_consecutive_frames=4,
+            scores=scores,
+        )
+
+    if video_score >= 3.0 and video_score >= game_score + 0.75:
+        return AutoModeDecision(
+            "cinema",
+            "video decode dominated behavior",
+            hold_seconds=3.0,
+            blend_seconds=0.35,
+            require_consecutive_frames=6,
+            scores=scores,
+        )
+
+    if still_score >= 4.0 and game_score < 2.0 and video_score < 2.5:
+        return AutoModeDecision(
+            "still_image_hq",
+            "idle low-motion behavior",
+            hold_seconds=4.0,
+            blend_seconds=0.5,
+            require_consecutive_frames=12,
+            scores=scores,
+        )
+
+    if abs(game_score - video_score) < 0.75 and max(game_score, video_score) >= 2.5:
+        return AutoModeDecision("cinema", "mixed behavior fallback", hold_seconds=2.0, blend_seconds=0.35, require_consecutive_frames=8, scores=scores)
 
     if signals.openxr_active:
-        return AutoModeDecision("cinema", "openxr active conservative cinema defaults", hold_seconds=3.0, blend_seconds=0.35, require_consecutive_frames=8)
+        return AutoModeDecision("cinema", "openxr active conservative cinema defaults", hold_seconds=3.0, blend_seconds=0.35, require_consecutive_frames=8, scores=scores)
 
-    return AutoModeDecision("cinema", "default stable video mode", hold_seconds=3.0, blend_seconds=0.35, require_consecutive_frames=8)
+    return AutoModeDecision("cinema", "default stable mode", hold_seconds=3.0, blend_seconds=0.35, require_consecutive_frames=8, scores=scores)
+
+
+def auto_mode_scores(signals: AutoModeSignals) -> dict[str, float]:
+    process = signals.foreground_process.lower()
+    fullscreen_or_maximized = signals.fullscreen or signals.maximized
+    gpu_3d = _clamp01(signals.gpu_3d_util)
+    video_decode = _clamp01(signals.gpu_video_decode_util)
+    input_activity = _clamp01(signals.input_activity)
+    latency_pressure = _clamp01(signals.latency_pressure)
+    frame_motion = _clamp01(signals.frame_motion_score)
+    scene_cut = _clamp01(signals.scene_cut_score)
+
+    game_hint = _contains_any(process, ("steam", "unity", "unreal", "ue4", "ue5", "dx", "vulkan"))
+    video_hint = _contains_any(process, ("vlc", "mpv", "potplayer", "player", "video", "chrome", "edge", "firefox"))
+
+    game = 0.0
+    if gpu_3d >= 0.60:
+        game += 3.0
+    elif gpu_3d >= 0.30:
+        game += 1.6
+    if input_activity >= 0.65:
+        game += 2.0
+    elif input_activity >= 0.35:
+        game += 0.8
+    if fullscreen_or_maximized:
+        game += 0.7
+    if latency_pressure >= 0.65 or signals.target_fps >= 90.0:
+        game += 1.0
+    if frame_motion >= 0.35 or scene_cut >= 0.35:
+        game += 0.9
+    if game_hint:
+        game += 0.5
+
+    video = 0.0
+    if video_decode >= 0.25 and gpu_3d < 0.20:
+        video += 3.0
+    elif video_decode >= 0.15:
+        video += 1.4
+    if fullscreen_or_maximized:
+        video += 0.7
+    if input_activity <= 0.15 and signals.idle_seconds >= 5.0:
+        video += 0.8
+    if signals.audio_active:
+        video += 0.5
+    if video_hint:
+        video += 0.5
+
+    still = 0.0
+    if gpu_3d < 0.08:
+        still += 1.0
+    if video_decode < 0.05:
+        still += 1.0
+    if signals.idle_seconds >= 30.0:
+        still += 3.0
+    elif signals.idle_seconds >= 10.0:
+        still += 1.0
+    if frame_motion <= 0.03 and signals.still_duration_s >= 1.5:
+        still += 2.0
+    if not signals.audio_active:
+        still += 0.4
+
+    return {"game": game, "video": video, "still": still}
 
 
 def stereo_config_for_auto_mode(
@@ -158,6 +354,17 @@ def _replace_checked(config: StereoConfig | OpenXRRenderConfig, overrides: dict[
     if unknown:
         raise ValueError(f"unknown config override fields: {unknown}")
     return replace(config, **overrides)
+
+
+def _clamp01(value: float) -> float:
+    return max(0.0, min(1.0, float(value)))
+
+
+def _contains_any(text: str, tokens: tuple[str, ...]) -> bool:
+    return any(token in text for token in tokens)
+
+
+_FAST_UPGRADE_PRESETS: set[StereoModePreset] = {"game_low_latency", "debug_export"}
 
 
 _STEREO_PRESETS: dict[StereoModePreset, StereoConfig] = {
