@@ -213,6 +213,230 @@ OpenXRRenderConfig
 
 原则：默认 Auto，手动模式给高级用户；自动模式负责减少普通用户误选模式导致的画质、延迟或舒适度问题。
 
+## 三类最终内容模式
+
+面向最终使用场景，模式应收敛为三类：
+
+```text
+电影
+游戏
+图片
+```
+
+当前 API 仍保留 `cinema`、`game_low_latency`、`still_image_hq`、`debug_export` 等 preset 名称，用于兼容已有配置和调参；但宿主产品层可以把它们组织成更简单的三类内容模式：
+
+| 产品模式 | 当前 preset / 路径 | 说明 |
+|---|---|---|
+| 电影 | `cinema` | 全屏视频、播放器、稳定视频内容 |
+| 游戏 | `game_low_latency` | 全屏游戏、高 GPU 3D、高输入频率、低延迟优先 |
+| 图片 | `still_image_hq` / flat depth / thumbnail refine | 静态图片、普通桌面、浏览器、图片搜索页、截图 |
+
+普通桌面办公不再作为独立模式。很少有人长期戴着 VR/头显做常规办公，因此桌面、网页、文件管理器、图片搜索页等都归入“图片 / 静态画面”处理。
+
+## 图片模式的 Depth Safety Gate
+
+并不是所有画面都适合做单目深度推理。桌面 UI、浏览器普通页面、百度图片缩略图网格、文件管理器、设置页、纯色或深色背景，本质上都是屏幕上的二维信息面。
+
+如果对这些画面强行做单目深度估计，深度模型很容易生成错误深度，表现为：
+
+- 整个画面像一张复杂纹理平面，被预测成轻微内凹或外凸的曲面。
+- 缩略图之间的边界被误认为物体轮廓，产生局部凹凸。
+- 大面积纯色区域缺少纹理线索，被模型先验填成“远处”或径向深度。
+- 在 SBS / VR / 裸眼 3D 中，屏幕中心可能前凸、四边后凹，形成明显“内凹感”。
+- UI 文字、卡片、缩略图边缘产生不稳定漂浮和深度跳变。
+
+核心判断：
+
+```text
+不是所有画面都应该启用 depth inference。
+如果场景本身是 2D UI 信息面，安全策略应该优先输出平面 depth。
+```
+
+### 为什么缩略图 / UI 容易出错
+
+打开图片搜索页时，模型输入是完整屏幕截图：
+
+```text
+screen capture -> depth model -> full-frame depth map
+```
+
+模型通常不会理解“这里有 30 张小图”，也没有实例分割能力。对它来说，这是一张纹理密集的大图。
+
+结果：
+
+- 缩略图网格被当成一整张复杂纹理平面。
+- 小图边界和卡片边框被误认为真实物体边缘。
+- 每张小图内部的真实照片内容和网页 UI 平面语义混在一起。
+
+纯色 / 深色背景也会触发类似问题。单目深度模型依赖纹理、边缘、透视、物体形状等线索；大面积纯白、纯黑、灰色或极简深色背景会让模型进入不确定状态。
+
+常见退化：
+
+- 输出平均深度。
+- 输出中心近、四角远的径向深度。
+- 把背景当成远景，把屏幕边缘推远。
+
+这些错误在立体显示中会被放大为内凹、外凸或屏幕弯曲。
+
+这里必须掌握好度，不能因为局部低纹理就影响正常图片处理。正常照片中也常见天空、墙面、浅景深背景、雾、雪地、海面等低纹理区域，它们不应该被简单压平成屏幕平面。
+
+纯色 / 低纹理安全门控只应该在“明显不可信”的情况下触发，例如：
+
+- 大面积低纹理区域占比很高。
+- RGB 边缘很少，但 depth 出现明显中心近、四角远的径向变化。
+- depth 边缘和 RGB 边缘明显不对齐。
+- 画面同时符合 UI / 网页 / 缩略图 / 大色块背景特征。
+- Auto 场景信号不支持电影或游戏判断。
+
+不应该单独因为 `rgb_texture_score` 低就强制平面 depth。建议至少两个以上安全指标同时触发，才执行 `force_flat_depth=True`。否则只降低 `depth_strength_scale`，或只对局部低置信区域做轻度 flatten。
+
+根因：
+
+- 主流单目深度模型主要训练于自然图像和真实场景，缺少桌面截图、浏览器页面、文件管理器、缩略图网格、深色 UI 等数据。
+- 模型只做像素到深度的映射，不理解“这是浏览器窗口”“这是图片卡片”。
+- 实时链路通常直接全图推理，缺少区域语义和前置场景判断。
+
+### 图片模式安全策略
+
+建议在图片模式中引入轻量 `Depth Safety Gate`：
+
+```text
+RGB frame
+  -> async scene detector
+  -> image/static suitability check
+  -> if UI / low-texture / thumbnail grid: flat depth or thumbnail_hq_refine
+  -> if single large image: depth provider
+  -> depth confidence / quality gate
+  -> stereo synthesis
+```
+
+推荐场景到 depth 策略映射：
+
+| 场景 | depth 策略 |
+|---|---|
+| 桌面 / 文件管理器 / 普通浏览器页面 | 图片模式，默认平面 depth |
+| 图片缩略图网格 | 图片模式，先平面 depth，再尽快异步 `thumbnail_hq_refine` |
+| 纯色 / 低纹理背景 | 图片模式，输出平面 depth |
+| 单张大图 / 静态照片 | 图片模式，可启用 depth inference |
+| 全屏视频 | 电影模式，启用 depth，但限制最大视差 |
+| 全屏游戏 | 游戏模式，启用 depth，低延迟优先 |
+
+推荐轻量指标：
+
+| 指标 | 用途 |
+|---|---|
+| `rgb_texture_score` | 判断是否大面积低纹理 / 纯色 |
+| `large_flat_area_ratio` | 判断是否 UI / 背景平面占比过高 |
+| `thumbnail_grid_score` | 判断是否存在大量规则缩略图网格 |
+| `depth_variance` | 判断 depth 是否退化为弱变化或无意义曲面 |
+| `center_bias_score` | 判断是否出现中心近、四角远的模型先验 |
+| `depth_edge_rgb_edge_alignment` | 判断 depth 边缘是否和 RGB 边缘对齐 |
+
+这些指标可以用 OpenCV / PyTorch 梯度、边缘、连通区域、矩形网格统计实现，不需要额外大模型。
+
+建议的可信度分级：
+
+| 判断 | 处理 |
+|---|---|
+| 单一低纹理信号，但像正常照片 | 保留 depth，仅轻微降低 `depth_strength_scale` |
+| 低纹理 + depth/RGB 边缘不对齐 | 局部 flatten，降低强度 |
+| 低纹理 + 大面积平面 + UI/网页特征 | 强制平面 depth |
+| 低纹理 + 中心径向深度偏置明显 | 强制平面 depth 或大幅 flatten |
+| 单张正常大图，有主体/透视/边缘线索 | 正常启用 depth |
+
+默认策略应该偏向“不误伤正常图片”：
+
+```text
+force_flat_depth 只用于高置信 UI / 纯色背景 / 缩略图网格。
+正常图片低纹理区域优先使用 depth_strength_scale 或局部 flatten，而不是全图平面化。
+```
+
+当画面不适合 depth，但不想完全关闭立体时，可以使用保守约束：
+
+```text
+depth = lerp(depth, flat_depth, flatten_strength)
+depth_strength *= depth_strength_scale
+edge_dilation 降低
+foreground_scale 关闭
+hole_fill 保守
+temporal 开启但低强度
+```
+
+### 缩略图 HQ refine
+
+逐张缩略图单独推理不推荐作为电影 / 游戏实时默认方案，但可以作为“图片模式”的后台增强能力。
+
+适用条件：
+
+- 当前不是电影模式。
+- 当前不是游戏模式。
+- 画面基本静态。
+- GPU 有空闲。
+- 检测到规则缩略图网格或多张图片卡片。
+
+这种情况下可以尽快异步尝试，不必等待很久。推荐先输出平面 depth，后台立即开始缩略图检测和局部 refine；一旦局部 depth patch 可用，再渐进合成回全屏 depth。
+
+关键限制：
+
+- 不阻塞捕获、显示、depth 主链路。
+- 缩略图卡片边框仍保持屏幕平面。
+- 只在卡片内部允许低强度 3D。
+- 每张缩略图内部 depth 独立归一化，但强度必须压低。
+- patch 边缘需要 feather 到平面，避免卡片漂浮或边界撕裂。
+- 用户滚动、切页、输入活跃时立刻取消或丢弃后台任务。
+
+建议名称：
+
+```text
+thumbnail_hq_refine
+```
+
+推荐流程：
+
+```text
+检测静态缩略图网格
+-> 先输出全局平面 depth
+-> 后台检测每个 thumbnail rect
+-> 对 rect 内图片裁剪后批量/队列推理
+-> 生成局部 depth patch
+-> patch depth 压低强度并 feather 到平面
+-> 合成回全屏 depth
+-> stereo 重新合成或渐进更新
+```
+
+建议后续实现 API：
+
+```python
+@dataclass(frozen=True)
+class DepthSafetyDecision:
+    use_depth: bool
+    reason: str
+    force_flat_depth: bool
+    flatten_strength: float
+    depth_strength_scale: float
+    confidence: float
+```
+
+默认决策建议：
+
+| 条件 | 默认决策 |
+|---|---|
+| `auto` + 全屏视频 | 电影：启用 depth，降低强度 |
+| `auto` + 游戏 | 游戏：启用 depth |
+| `auto` + 桌面 / 普通浏览器 / 文件管理器 | 图片：平面 depth |
+| `auto` + 缩略图网格 | 图片：先平面 depth，再尽快异步 `thumbnail_hq_refine` |
+| `auto` + 纯色 / 低纹理背景 | 图片：平面 depth |
+| 手动 preset | 尊重用户选择，但可提供安全警告或可选 safety 开关 |
+
+关键原则：
+
+- 不通过降低 depth 推理分辨率解决这个问题。
+- 不把错误 depth 继续立体化。
+- 不依赖大白名单。
+- 不在推理热路径同步采集系统指标。
+- UI / 缩略图 / 纯色背景优先平面化。
+- 用户进入单张大图、全屏视频、全屏游戏时再启用 depth。
+
 ## 视觉回归调参方法
 
 最优参数可以通过视觉回归测试判断，但不能只看一张图。单张 4K 图只能判断当前画面是否更好，不能代表所有视频、播放器和 VR 场景的全局最优。
