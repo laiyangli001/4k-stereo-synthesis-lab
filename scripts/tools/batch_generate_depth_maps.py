@@ -5,7 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
 
@@ -65,7 +65,7 @@ def main() -> None:
         image_out = out_root / safe_name(rgb_path)
         command = [
             sys.executable,
-            str(ROOT / "scripts" / "generate_depth_map.py"),
+            str(ROOT / "scripts" / "tools" / "generate_depth_map.py"),
             "--rgb",
             str(rgb_path),
             "--out-dir",

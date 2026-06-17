@@ -19,7 +19,7 @@ echo [Info] First torch/CUDA import may take several minutes on low-end machines
 echo.
 
 pushd "%LAB_DIR%"
-"%PYTHON_EXE%" "%LAB_DIR%\scripts\smoke_test.py"
+"%PYTHON_EXE%" "%LAB_DIR%\scripts\smoke\smoke_test.py"
 set "EXIT_CODE=%ERRORLEVEL%"
 popd
 

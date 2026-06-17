@@ -36,9 +36,9 @@ echo.
 
 pushd "%LAB_DIR%"
 if "%REF_DEPTH%"=="" (
-  "%PYTHON_EXE%" "%LAB_DIR%\scripts\generate_depth_map.py" --rgb "%RGB%" --provider distill_base_nvidia --out-dir "%OUT_DIR%" --device cuda
+  "%PYTHON_EXE%" "%LAB_DIR%\scripts\tools\generate_depth_map.py" --rgb "%RGB%" --provider distill_base_nvidia --out-dir "%OUT_DIR%" --device cuda
 ) else (
-  "%PYTHON_EXE%" "%LAB_DIR%\scripts\generate_depth_map.py" --rgb "%RGB%" --provider distill_base_nvidia --reference-depth "%REF_DEPTH%" --out-dir "%OUT_DIR%" --device cuda
+  "%PYTHON_EXE%" "%LAB_DIR%\scripts\tools\generate_depth_map.py" --rgb "%RGB%" --provider distill_base_nvidia --reference-depth "%REF_DEPTH%" --out-dir "%OUT_DIR%" --device cuda
 )
 set "EXIT_CODE=%ERRORLEVEL%"
 if "%EXIT_CODE%"=="0" (

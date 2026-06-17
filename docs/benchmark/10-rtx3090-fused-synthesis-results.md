@@ -83,7 +83,7 @@ Confirmed `synthesis_debug.sbs_backend` values:
 Command:
 
 ```powershell
-.\python3\python.exe -B scripts\bench_end_to_end_4k.py --rgb 4K.jpg --out outputs\rtx3090_end_to_end_base_quality_full_sbs_triton.json --warmup 5 --iters 20 --backend quality_4k --layers 2 --depth-backend tensorrt_native --onnx models\models--lc700x--Distill-Any-Depth-Base-hf\model_fp16_294x518.onnx --trt-engine models\models--lc700x--Distill-Any-Depth-Base-hf\model_fp16_294x518.trt --output-format half_sbs --output-format full_sbs
+.\python3\python.exe -B scripts\benchmark\bench_end_to_end_4k.py --rgb 4K.jpg --out outputs\rtx3090_end_to_end_base_quality_full_sbs_triton.json --warmup 5 --iters 20 --backend quality_4k --layers 2 --depth-backend tensorrt_native --onnx models\models--lc700x--Distill-Any-Depth-Base-hf\model_fp16_294x518.onnx --trt-engine models\models--lc700x--Distill-Any-Depth-Base-hf\model_fp16_294x518.trt --output-format half_sbs --output-format full_sbs
 ```
 
 | Output | Depth ms | Synthesis ms | Total ms | FPS |
@@ -107,7 +107,7 @@ Backend fields:
 Command:
 
 ```powershell
-.\python3\python.exe -B scripts\bench_end_to_end_4k.py --rgb 4K.jpg --out outputs\rtx3090_end_to_end_large_quality_half_sbs_fused.json --warmup 5 --iters 20 --backend quality_4k --layers 2 --depth-backend tensorrt_native --onnx models\models--xingyang1--Distill-Any-Depth-Large-hf\model_fp16_294x518.onnx --trt-engine models\models--xingyang1--Distill-Any-Depth-Large-hf\model_fp16_294x518.trt --output-format half_sbs --output-format full_sbs
+.\python3\python.exe -B scripts\benchmark\bench_end_to_end_4k.py --rgb 4K.jpg --out outputs\rtx3090_end_to_end_large_quality_half_sbs_fused.json --warmup 5 --iters 20 --backend quality_4k --layers 2 --depth-backend tensorrt_native --onnx models\models--xingyang1--Distill-Any-Depth-Large-hf\model_fp16_294x518.onnx --trt-engine models\models--xingyang1--Distill-Any-Depth-Large-hf\model_fp16_294x518.trt --output-format half_sbs --output-format full_sbs
 ```
 
 | Output | Depth ms | Synthesis ms | Total ms | FPS |

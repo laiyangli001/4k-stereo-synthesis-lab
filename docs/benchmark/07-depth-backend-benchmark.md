@@ -118,7 +118,7 @@ CPUExecutionProvider
 Command:
 
 ```powershell
-.\python3\python.exe -B scripts\compare_python_env_depth_backends.py --rgb outputs\demo\fast_half_sbs.png --out-dir outputs\env_depth_backend_compare_reuse_session --warmup 2 --iters 5
+.\python3\python.exe -B scripts\benchmark\compare_python_env_depth_backends.py --rgb outputs\demo\fast_half_sbs.png --out-dir outputs\env_depth_backend_compare_reuse_session --warmup 2 --iters 5
 ```
 
 Results:
@@ -137,7 +137,7 @@ Results:
 Command:
 
 ```powershell
-.\python3\python.exe -B scripts\compare_python_env_depth_backends.py --rgb 4K.jpg --out-dir outputs\env_depth_backend_compare_4k --warmup 2 --iters 10
+.\python3\python.exe -B scripts\benchmark\compare_python_env_depth_backends.py --rgb 4K.jpg --out-dir outputs\env_depth_backend_compare_4k --warmup 2 --iters 10
 ```
 
 Input:
@@ -178,7 +178,7 @@ Environment delta on 4K:
 Command:
 
 ```powershell
-.\python3\python.exe -B scripts\bench_depth_backends.py --rgb 4K.jpg --out-dir outputs\depth_backend_bench_profile_4k --warmup 1 --iters 3 --backend tensorrt --backend onnx_cuda_iobinding --backend pytorch_cuda
+.\python3\python.exe -B scripts\benchmark\bench_depth_backends.py --rgb 4K.jpg --out-dir outputs\depth_backend_bench_profile_4k --warmup 1 --iters 3 --backend tensorrt --backend onnx_cuda_iobinding --backend pytorch_cuda
 ```
 
 Results:
@@ -201,7 +201,7 @@ Interpretation:
 Command:
 
 ```powershell
-.\python3\python.exe -B scripts\bench_depth_backends.py --rgb 4K.jpg --out-dir outputs\depth_backend_bench_native_4k --warmup 1 --iters 5 --backend tensorrt_native --backend tensorrt --backend onnx_cuda_iobinding --backend pytorch_cuda
+.\python3\python.exe -B scripts\benchmark\bench_depth_backends.py --rgb 4K.jpg --out-dir outputs\depth_backend_bench_native_4k --warmup 1 --iters 5 --backend tensorrt_native --backend tensorrt --backend onnx_cuda_iobinding --backend pytorch_cuda
 ```
 
 Input:
@@ -232,7 +232,7 @@ The biggest improvement is postprocess/output handling: ~6.1 ms -> ~1.1 ms.
 Command:
 
 ```powershell
-.\python3\python.exe -B scripts\bench_depth_backends.py --rgb 4K.jpg --out-dir outputs\depth_backend_bench_dlpack_4k --warmup 1 --iters 5 --backend onnx_cuda_dlpack --backend onnx_cuda_iobinding --backend tensorrt_native
+.\python3\python.exe -B scripts\benchmark\bench_depth_backends.py --rgb 4K.jpg --out-dir outputs\depth_backend_bench_dlpack_4k --warmup 1 --iters 5 --backend onnx_cuda_dlpack --backend onnx_cuda_iobinding --backend tensorrt_native
 ```
 
 Results:
@@ -268,7 +268,7 @@ Native TensorRT now reuses output CUDA tensors instead of allocating `torch.empt
 Correctness check:
 
 ```powershell
-.\python3\python.exe -B scripts\check_native_tensorrt_consistency.py --rgb 4K.jpg --out outputs\native_tensorrt_consistency.json
+.\python3\python.exe -B scripts\tools\check_native_tensorrt_consistency.py --rgb 4K.jpg --out outputs\native_tensorrt_consistency.json
 ```
 
 Result:
@@ -281,7 +281,7 @@ Result:
 Benchmark:
 
 ```powershell
-.\python3\python.exe -B scripts\bench_depth_backends.py --rgb 4K.jpg --out-dir outputs\depth_backend_bench_native_prealloc_4k --warmup 2 --iters 10 --backend tensorrt_native
+.\python3\python.exe -B scripts\benchmark\bench_depth_backends.py --rgb 4K.jpg --out-dir outputs\depth_backend_bench_native_prealloc_4k --warmup 2 --iters 10 --backend tensorrt_native
 ```
 
 Result:
@@ -302,7 +302,7 @@ Measured FPS still varies by GPU state / warmup, so use multi-run median for fin
 Command:
 
 ```powershell
-.\python3\python.exe -B scripts\bench_depth_backends.py --rgb 4K.jpg --out-dir outputs\depth_backend_bench_native_graph_4k --warmup 2 --iters 10 --backend tensorrt_native_graph --backend tensorrt_native
+.\python3\python.exe -B scripts\benchmark\bench_depth_backends.py --rgb 4K.jpg --out-dir outputs\depth_backend_bench_native_graph_4k --warmup 2 --iters 10 --backend tensorrt_native_graph --backend tensorrt_native
 ```
 
 Results:
@@ -345,7 +345,7 @@ Implemented cache:
 Correctness:
 
 ```powershell
-.\python3\python.exe -B scripts\check_native_tensorrt_consistency.py --rgb 4K.jpg --out outputs\native_tensorrt_consistency_preprocess_cache.json
+.\python3\python.exe -B scripts\tools\check_native_tensorrt_consistency.py --rgb 4K.jpg --out outputs\native_tensorrt_consistency_preprocess_cache.json
 ```
 
 | Metric | Value |
@@ -356,7 +356,7 @@ Correctness:
 Benchmark:
 
 ```powershell
-.\python3\python.exe -B scripts\bench_depth_backends.py --rgb 4K.jpg --out-dir outputs\depth_backend_bench_preprocess_cache_4k --warmup 2 --iters 10 --backend tensorrt_native
+.\python3\python.exe -B scripts\benchmark\bench_depth_backends.py --rgb 4K.jpg --out-dir outputs\depth_backend_bench_preprocess_cache_4k --warmup 2 --iters 10 --backend tensorrt_native
 ```
 
 | Backend | Inference mean ms | Inference median ms | Inference p90 ms | Preprocess mean ms | Model mean ms | Postprocess mean ms |
@@ -375,7 +375,7 @@ The speed gain is modest because the expensive part of preprocess is still bicub
 Command:
 
 ```powershell
-.\python3\python.exe -B scripts\bench_depth_backends.py --rgb 4K.jpg --out-dir outputs\depth_backend_final_compare_4k --warmup 3 --iters 20 --backend tensorrt_native --backend onnx_cuda_dlpack --backend onnx_cuda_iobinding --backend pytorch_cuda
+.\python3\python.exe -B scripts\benchmark\bench_depth_backends.py --rgb 4K.jpg --out-dir outputs\depth_backend_final_compare_4k --warmup 3 --iters 20 --backend tensorrt_native --backend onnx_cuda_dlpack --backend onnx_cuda_iobinding --backend pytorch_cuda
 ```
 
 Input:
@@ -430,7 +430,7 @@ models/models--xingyang1--Distill-Any-Depth-Large-hf/model_fp16_294x518.trt
 Command:
 
 ```powershell
-.\python3\python.exe -B scripts\bench_depth_backends.py --rgb 4K.jpg --out-dir outputs\depth_backend_large_4k --warmup 3 --iters 20 --backend tensorrt_native --backend onnx_cuda_dlpack --model-id xingyang1/Distill-Any-Depth-Large-hf --model-name Distill-Any-Depth-Large --onnx models\models--xingyang1--Distill-Any-Depth-Large-hf\model_fp16_294x518.onnx --trt-engine models\models--xingyang1--Distill-Any-Depth-Large-hf\model_fp16_294x518.trt
+.\python3\python.exe -B scripts\benchmark\bench_depth_backends.py --rgb 4K.jpg --out-dir outputs\depth_backend_large_4k --warmup 3 --iters 20 --backend tensorrt_native --backend onnx_cuda_dlpack --model-id xingyang1/Distill-Any-Depth-Large-hf --model-name Distill-Any-Depth-Large --onnx models\models--xingyang1--Distill-Any-Depth-Large-hf\model_fp16_294x518.onnx --trt-engine models\models--xingyang1--Distill-Any-Depth-Large-hf\model_fp16_294x518.trt
 ```
 
 Results:

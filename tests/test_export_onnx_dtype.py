@@ -4,7 +4,7 @@ from pathlib import Path
 import torch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "scripts" / "tools"))
 
 from export_distill_base_onnx import choose_export_dtype, default_output_path, probe_model_dtype
 

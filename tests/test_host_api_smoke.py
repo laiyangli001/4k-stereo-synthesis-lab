@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "scripts" / "host_api_smoke.py"
+SCRIPT = ROOT / "scripts" / "smoke" / "host_api_smoke.py"
 
 
 def _run_smoke(*args: str) -> dict:

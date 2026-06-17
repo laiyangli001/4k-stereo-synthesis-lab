@@ -5,7 +5,7 @@ import json
 import subprocess
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def load_json(path: Path) -> dict:
@@ -127,7 +127,7 @@ def main() -> None:
         command = [
             str(python_exe),
             "-B",
-            str(ROOT / "scripts" / "bench_depth_backends.py"),
+            str(ROOT / "scripts" / "benchmark" / "bench_depth_backends.py"),
             "--rgb",
             str(args.rgb),
             "--out-dir",

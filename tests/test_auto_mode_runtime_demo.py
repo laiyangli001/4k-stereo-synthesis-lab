@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "scripts" / "auto_mode_runtime_demo.py"
+SCRIPT = ROOT / "scripts" / "smoke" / "auto_mode_runtime_demo.py"
 
 
 def _run_demo(*args: str) -> dict:

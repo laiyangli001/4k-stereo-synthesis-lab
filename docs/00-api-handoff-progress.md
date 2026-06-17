@@ -142,8 +142,8 @@ Host/API docs:
 
 Host/API scripts:
 
-- `scripts/host_api_smoke.py`
-- `scripts/auto_mode_runtime_demo.py`
+- `scripts/smoke/host_api_smoke.py`
+- `scripts/smoke/auto_mode_runtime_demo.py`
 
 Host/API tests:
 
@@ -228,7 +228,7 @@ Realtime parameter status:
 
 4K is the stress/performance target, not a functional input-size limit. The output API and fast synthesis path are covered by tests for 720p, 1080p, portrait, and odd-size inputs. Unsupported Triton cases fall back to PyTorch instead of restricting input resolution.
 
-OpenXR note: the local environment has pyopenxr available as the `xr` module, but this lab does not yet include a full OpenXR session/swapchain runtime. The rotation-adaptive stereo core has been added in `src/stereo_lab/openxr_render.py`; it accepts arbitrary `screen_roll` angles in radians and should be used by a future runtime integration instead of fixed SBS output. `scripts/generate_openxr_stereo_preview.py` can generate roll-adaptive left/right preview images from RGB+depth inputs.
+OpenXR note: the local environment has pyopenxr available as the `xr` module, but this lab does not yet include a full OpenXR session/swapchain runtime. The rotation-adaptive stereo core has been added in `src/stereo_lab/openxr_render.py`; it accepts arbitrary `screen_roll` angles in radians and should be used by a future runtime integration instead of fixed SBS output. `scripts/examples/generate_openxr_stereo_preview.py` can generate roll-adaptive left/right preview images from RGB+depth inputs.
 
 `depth_map` is the matched output depth repeated to RGB channels. With `debug_output=True`, the exact tensor is also available as `debug_info["output_depth"]`.
 
@@ -417,13 +417,13 @@ Highlights:
 New fixed visual regression script:
 
 ```text
-scripts/generate_visual_regression_set.py
+scripts/tools/generate_visual_regression_set.py
 ```
 
 Example:
 
 ```powershell
-.\python3\python.exe -B scripts\generate_visual_regression_set.py --rgb 4K.jpg --auto-depth --depth-backend tensorrt_native --out-dir outputs\visual_regression\4k_native_base_quality
+.\python3\python.exe -B scripts\tools\generate_visual_regression_set.py --rgb 4K.jpg --auto-depth --depth-backend tensorrt_native --out-dir outputs\visual_regression\4k_native_base_quality
 ```
 
 Verified real 4K output:
@@ -480,29 +480,29 @@ compileall syntax ok
 Synthesis profile:
 
 ```powershell
-.\python3\python.exe -B scripts\profile_synthesis_4k.py --rgb 4K.jpg --out outputs\synthesis_profile_4k\<name>.json --backend quality_4k --layers 2 --output-format half_sbs --iters 5
+.\python3\python.exe -B scripts\benchmark\profile_synthesis_4k.py --rgb 4K.jpg --out outputs\synthesis_profile_4k\<name>.json --backend quality_4k --layers 2 --output-format half_sbs --iters 5
 ```
 
 End-to-end:
 
 ```powershell
-.\python3\python.exe -B scripts\bench_end_to_end_4k.py --rgb 4K.jpg --out outputs\end_to_end_4k\<name>.json --warmup 2 --iters 5 --backend quality_4k --layers 2 --depth-backend tensorrt_native --output-format half_sbs --output-format full_sbs
+.\python3\python.exe -B scripts\benchmark\bench_end_to_end_4k.py --rgb 4K.jpg --out outputs\end_to_end_4k\<name>.json --warmup 2 --iters 5 --backend quality_4k --layers 2 --depth-backend tensorrt_native --output-format half_sbs --output-format full_sbs
 ```
 
 Visual regression:
 
 ```powershell
-.\python3\python.exe -B scripts\generate_visual_regression_set.py --rgb 4K.jpg --auto-depth --depth-backend tensorrt_native --out-dir outputs\visual_regression\<name>
+.\python3\python.exe -B scripts\tools\generate_visual_regression_set.py --rgb 4K.jpg --auto-depth --depth-backend tensorrt_native --out-dir outputs\visual_regression\<name>
 ```
 
 Host API smoke:
 
 ```powershell
-.\python3\python.exe -B scripts\host_api_smoke.py --preset cinema --output-format half_sbs --out outputs\host_api_smoke_cinema.json
-.\python3\python.exe -B scripts\host_api_smoke.py --preset cinema --output-format half_sbs --out -
-.\python3\python.exe -B scripts\host_api_smoke.py --openxr --preset cinema --screen-roll 0.25 --out -
-.\python3\python.exe -B scripts\auto_mode_runtime_demo.py --selected-preset auto --out -
-.\python3\python.exe -B scripts\host_api_smoke.py --rgb 4K.jpg --auto-depth --depth-backend tensorrt_native --preset cinema --output-format half_sbs --out outputs\host_api_smoke_4k_native.json
+.\python3\python.exe -B scripts\smoke\host_api_smoke.py --preset cinema --output-format half_sbs --out outputs\host_api_smoke_cinema.json
+.\python3\python.exe -B scripts\smoke\host_api_smoke.py --preset cinema --output-format half_sbs --out -
+.\python3\python.exe -B scripts\smoke\host_api_smoke.py --openxr --preset cinema --screen-roll 0.25 --out -
+.\python3\python.exe -B scripts\smoke\auto_mode_runtime_demo.py --selected-preset auto --out -
+.\python3\python.exe -B scripts\smoke\host_api_smoke.py --rgb 4K.jpg --auto-depth --depth-backend tensorrt_native --preset cinema --output-format half_sbs --out outputs\host_api_smoke_4k_native.json
 ```
 
 ## Recommended Next Steps
@@ -510,8 +510,8 @@ Host API smoke:
 1. Keep GUI/OpenXR host integration aligned with:
    - `docs/14-host-api-preset-examples.md`
    - `docs/15-host-api-contract.md`
-   - `scripts/host_api_smoke.py`
-   - `scripts/auto_mode_runtime_demo.py`
+   - `scripts/smoke/host_api_smoke.py`
+   - `scripts/smoke/auto_mode_runtime_demo.py`
 2. When implementing a real GUI/runtime host, start async scene detection only when `auto_detection_required(selected_preset)` is true.
 3. Real system metric collection remains out of scope for this core repo:
    - GPU 3D / Video Decode sampling

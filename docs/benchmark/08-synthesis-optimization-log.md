@@ -43,7 +43,7 @@ dfde924 feat: add real input comparison reports
 
 Files:
 
-- `scripts/compare_methods.py`
+- `scripts/tools/compare_methods.py`
 - `scripts/windows/run_visible_compare_demo.bat`
 - `scripts/windows/run_visible_compare_files.bat`
 - `src/stereo_lab/report.py`
@@ -71,9 +71,9 @@ Files:
 
 - `src/stereo_lab/depth_provider.py`
 - `src/stereo_lab/auto_depth.py`
-- `scripts/generate_depth_map.py`
-- `scripts/compare_methods.py`
-- `scripts/export_distill_base_onnx.py`
+- `scripts/tools/generate_depth_map.py`
+- `scripts/tools/compare_methods.py`
+- `scripts/tools/export_distill_base_onnx.py`
 - `scripts/windows/run_visible_generate_depth.bat`
 - `scripts/windows/run_visible_compare_rgb_auto_depth.bat`
 - `scripts/windows/run_visible_export_distill_base_onnx.bat`
@@ -101,8 +101,8 @@ b289d3d feat: add nvidia depth workflow
 
 Files:
 
-- `scripts/batch_generate_depth_maps.py`
-- `scripts/test_distill_base_onnx.py`
+- `scripts/tools/batch_generate_depth_maps.py`
+- `scripts/tools/test_distill_base_onnx.py`
 - `scripts/windows/setup_cuda13_nightly_env.ps1`
 - `scripts/windows/run_cuda13_onnx_smoke.ps1`
 - `src/stereo_lab/depth_onnx_provider.py`
@@ -140,7 +140,7 @@ Files:
 
 - `src/stereo_lab/depth_trt_provider.py`
 - `scripts/dev/probe_tensorrt_runtime.py`
-- `scripts/bench_depth_backends.py`
+- `scripts/benchmark/bench_depth_backends.py`
 
 Problem:
 
@@ -178,8 +178,8 @@ Commit:
 
 Files:
 
-- `scripts/bench_depth_backends.py`
-- `scripts/compare_python_env_depth_backends.py`
+- `scripts/benchmark/bench_depth_backends.py`
+- `scripts/benchmark/compare_python_env_depth_backends.py`
 
 Problem:
 
@@ -255,9 +255,9 @@ Commit:
 Files:
 
 - `src/stereo_lab/depth_trt_native_provider.py`
-- `scripts/build_native_tensorrt_engine.py`
+- `scripts/tools/build_native_tensorrt_engine.py`
 - `scripts/windows/run_visible_build_native_tensorrt_engine.bat`
-- `scripts/check_native_tensorrt_consistency.py`
+- `scripts/tools/check_native_tensorrt_consistency.py`
 
 What changed:
 
@@ -295,7 +295,7 @@ Commit:
 Files:
 
 - `src/stereo_lab/depth_trt_native_provider.py`
-- `scripts/check_native_tensorrt_consistency.py`
+- `scripts/tools/check_native_tensorrt_consistency.py`
 
 What changed:
 
@@ -331,7 +331,7 @@ Commit:
 Files:
 
 - `src/stereo_lab/depth_onnx_provider.py`
-- `scripts/bench_depth_backends.py`
+- `scripts/benchmark/bench_depth_backends.py`
 
 What changed:
 
@@ -439,7 +439,7 @@ Commit:
 
 Files:
 
-- `scripts/export_distill_base_onnx.py`
+- `scripts/tools/export_distill_base_onnx.py`
 - `tests/test_export_onnx_dtype.py`
 
 What changed:
@@ -518,8 +518,8 @@ Commit:
 
 Files:
 
-- `scripts/bench_end_to_end_4k.py`
-- `scripts/profile_synthesis_4k.py`
+- `scripts/benchmark/bench_end_to_end_4k.py`
+- `scripts/benchmark/profile_synthesis_4k.py`
 
 What changed:
 
@@ -550,7 +550,7 @@ Commit:
 
 File:
 
-- `scripts/generate_visual_regression_set.py`
+- `scripts/tools/generate_visual_regression_set.py`
 
 What changed:
 
@@ -578,7 +578,7 @@ Why it matters:
 Example:
 
 ```powershell
-.\python3\python.exe -B scripts\generate_visual_regression_set.py --rgb 4K.jpg --auto-depth --depth-backend tensorrt_native --out-dir outputs\visual_regression\4k_native_base_quality
+.\python3\python.exe -B scripts\tools\generate_visual_regression_set.py --rgb 4K.jpg --auto-depth --depth-backend tensorrt_native --out-dir outputs\visual_regression\4k_native_base_quality
 ```
 
 Verified output set:
@@ -970,13 +970,13 @@ Latest result:
 Profile:
 
 ```powershell
-.\python3\python.exe -B scripts\profile_synthesis_4k.py --rgb 4K.jpg --out outputs\synthesis_profile_4k\quality_half_profile_depth_edges_inplace_rerun.json --backend quality_4k --layers 2 --output-format half_sbs --iters 5
+.\python3\python.exe -B scripts\benchmark\profile_synthesis_4k.py --rgb 4K.jpg --out outputs\synthesis_profile_4k\quality_half_profile_depth_edges_inplace_rerun.json --backend quality_4k --layers 2 --output-format half_sbs --iters 5
 ```
 
 End-to-end:
 
 ```powershell
-.\python3\python.exe -B scripts\bench_end_to_end_4k.py --rgb 4K.jpg --out outputs\end_to_end_4k\quality_native_synthesis_edges_opt.json --warmup 2 --iters 5 --backend quality_4k --layers 2 --depth-backend tensorrt_native --output-format half_sbs --output-format full_sbs
+.\python3\python.exe -B scripts\benchmark\bench_end_to_end_4k.py --rgb 4K.jpg --out outputs\end_to_end_4k\quality_native_synthesis_edges_opt.json --warmup 2 --iters 5 --backend quality_4k --layers 2 --depth-backend tensorrt_native --output-format half_sbs --output-format full_sbs
 ```
 
 ## Current Bottlenecks

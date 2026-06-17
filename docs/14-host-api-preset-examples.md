@@ -195,47 +195,47 @@ result = render_openxr_stereo(rgb, depth, config)
 在生成最终视觉回归集之前，可以先跑宿主 API smoke，确认 preset、常驻状态和 stereo 输出链路能被外部宿主按契约调用：
 
 ```powershell
-.\python3\python.exe -B scripts\host_api_smoke.py --preset cinema --output-format half_sbs --out outputs\host_api_smoke_cinema.json
+.\python3\python.exe -B scripts\smoke\host_api_smoke.py --preset cinema --output-format half_sbs --out outputs\host_api_smoke_cinema.json
 ```
 
 在只想验证调用链、不写文件的受限环境中，可以使用：
 
 ```powershell
-.\python3\python.exe -B scripts\host_api_smoke.py --preset cinema --output-format half_sbs --out -
+.\python3\python.exe -B scripts\smoke\host_api_smoke.py --preset cinema --output-format half_sbs --out -
 ```
 
 验证 OpenXR per-eye core 调用链：
 
 ```powershell
-.\python3\python.exe -B scripts\host_api_smoke.py --openxr --preset cinema --screen-roll 0.25 --out -
+.\python3\python.exe -B scripts\smoke\host_api_smoke.py --openxr --preset cinema --screen-roll 0.25 --out -
 ```
 
 演示 Auto 模式宿主状态机接入，不采集真实系统指标，只消费模拟的后台采样快照：
 
 ```powershell
-.\python3\python.exe -B scripts\auto_mode_runtime_demo.py --selected-preset auto --out -
-.\python3\python.exe -B scripts\auto_mode_runtime_demo.py --selected-preset game_low_latency --out -
+.\python3\python.exe -B scripts\smoke\auto_mode_runtime_demo.py --selected-preset auto --out -
+.\python3\python.exe -B scripts\smoke\auto_mode_runtime_demo.py --selected-preset game_low_latency --out -
 ```
 
 如需验证真实 depth provider 链路，再显式加 `--rgb` 和 `--auto-depth`：
 
 ```powershell
-.\python3\python.exe -B scripts\host_api_smoke.py --rgb 4K.jpg --auto-depth --depth-backend tensorrt_native --preset cinema --output-format half_sbs --out outputs\host_api_smoke_4k_native.json
+.\python3\python.exe -B scripts\smoke\host_api_smoke.py --rgb 4K.jpg --auto-depth --depth-backend tensorrt_native --preset cinema --output-format half_sbs --out outputs\host_api_smoke_4k_native.json
 ```
 
 修改预设默认值前，先生成固定视觉回归集：
 
 ```powershell
-.\python3\python.exe -B scripts\generate_visual_regression_set.py --rgb 4K.jpg --auto-depth --depth-backend tensorrt_native --out-dir outputs\visual_regression\preset_cinema
+.\python3\python.exe -B scripts\tools\generate_visual_regression_set.py --rgb 4K.jpg --auto-depth --depth-backend tensorrt_native --out-dir outputs\visual_regression\preset_cinema
 ```
 
 生成指定预设的视觉回归集：
 
 ```powershell
-.\python3\python.exe -B scripts\generate_visual_regression_set.py --rgb 4K.jpg --auto-depth --depth-backend tensorrt_native --preset cinema --out-dir outputs\visual_regression\preset_cinema
-.\python3\python.exe -B scripts\generate_visual_regression_set.py --rgb 4K.jpg --auto-depth --depth-backend tensorrt_native --preset game_low_latency --out-dir outputs\visual_regression\preset_game
-.\python3\python.exe -B scripts\generate_visual_regression_set.py --rgb 4K.jpg --auto-depth --depth-backend tensorrt_native --preset still_image_hq --out-dir outputs\visual_regression\preset_still_hq
-.\python3\python.exe -B scripts\generate_visual_regression_set.py --rgb 4K.jpg --auto-depth --depth-backend tensorrt_native --preset debug_export --out-dir outputs\visual_regression\preset_debug
+.\python3\python.exe -B scripts\tools\generate_visual_regression_set.py --rgb 4K.jpg --auto-depth --depth-backend tensorrt_native --preset cinema --out-dir outputs\visual_regression\preset_cinema
+.\python3\python.exe -B scripts\tools\generate_visual_regression_set.py --rgb 4K.jpg --auto-depth --depth-backend tensorrt_native --preset game_low_latency --out-dir outputs\visual_regression\preset_game
+.\python3\python.exe -B scripts\tools\generate_visual_regression_set.py --rgb 4K.jpg --auto-depth --depth-backend tensorrt_native --preset still_image_hq --out-dir outputs\visual_regression\preset_still_hq
+.\python3\python.exe -B scripts\tools\generate_visual_regression_set.py --rgb 4K.jpg --auto-depth --depth-backend tensorrt_native --preset debug_export --out-dir outputs\visual_regression\preset_debug
 ```
 
 重点检查：

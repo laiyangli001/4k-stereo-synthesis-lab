@@ -24,7 +24,7 @@ echo [Info] This may take several minutes.
 echo.
 
 pushd "%LAB_DIR%"
-"%PYTHON_EXE%" "%LAB_DIR%\scripts\export_distill_base_onnx.py" --device cuda --dtype auto
+"%PYTHON_EXE%" "%LAB_DIR%\scripts\tools\export_distill_base_onnx.py" --device cuda --dtype auto
 set "EXIT_CODE=%ERRORLEVEL%"
 if "%EXIT_CODE%"=="0" (
   echo.

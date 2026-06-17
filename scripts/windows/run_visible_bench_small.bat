@@ -19,7 +19,7 @@ echo [Info] First torch/CUDA import may take several minutes on low-end machines
 echo.
 
 pushd "%LAB_DIR%"
-"%PYTHON_EXE%" "%LAB_DIR%\scripts\bench_4k.py" --width 640 --height 360 --frames 3 --backend quality_4k --output-format half_sbs --device cuda
+"%PYTHON_EXE%" "%LAB_DIR%\scripts\benchmark\bench_4k.py" --width 640 --height 360 --frames 3 --backend quality_4k --output-format half_sbs --device cuda
 set "EXIT_CODE=%ERRORLEVEL%"
 popd
 

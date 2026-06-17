@@ -13,7 +13,7 @@ src/stereo_lab/openxr_render.py
 Preview script:
 
 ```text
-scripts/generate_openxr_stereo_preview.py
+scripts/examples/generate_openxr_stereo_preview.py
 ```
 
 This module implements the part that prevents rotation-related stereo distortion:

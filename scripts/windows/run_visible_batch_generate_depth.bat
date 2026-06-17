@@ -31,7 +31,7 @@ echo [Info] First torch/CUDA import or model download may take several minutes.
 echo.
 
 pushd "%LAB_DIR%"
-"%PYTHON_EXE%" "%LAB_DIR%\scripts\batch_generate_depth_maps.py" --rgb-dir "%RGB_DIR%" --out-dir "%OUT_DIR%" --provider distill_base_nvidia --device cuda
+"%PYTHON_EXE%" "%LAB_DIR%\scripts\tools\batch_generate_depth_maps.py" --rgb-dir "%RGB_DIR%" --out-dir "%OUT_DIR%" --provider distill_base_nvidia --device cuda
 set "EXIT_CODE=%ERRORLEVEL%"
 if "%EXIT_CODE%"=="0" (
   echo.

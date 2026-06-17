@@ -32,7 +32,7 @@ echo [Info] First torch/CUDA import may take several minutes on low-end machines
 echo.
 
 pushd "%LAB_DIR%"
-"%PYTHON_EXE%" "%LAB_DIR%\scripts\compare_methods.py" --rgb "%RGB%" --auto-depth --depth-provider distill_base_518 --out-dir "%OUT_DIR%" --output-format half_sbs --device cuda
+"%PYTHON_EXE%" "%LAB_DIR%\scripts\tools\compare_methods.py" --rgb "%RGB%" --auto-depth --depth-provider distill_base_518 --out-dir "%OUT_DIR%" --output-format half_sbs --device cuda
 set "EXIT_CODE=%ERRORLEVEL%"
 if "%EXIT_CODE%"=="0" (
   echo.

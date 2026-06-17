@@ -20,7 +20,7 @@ echo [Info] First torch/CUDA import may take several minutes on low-end machines
 echo.
 
 pushd "%LAB_DIR%"
-"%PYTHON_EXE%" "%LAB_DIR%\scripts\demo_generate.py"
+"%PYTHON_EXE%" "%LAB_DIR%\scripts\examples\demo_generate.py"
 set "EXIT_CODE=%ERRORLEVEL%"
 if "%EXIT_CODE%"=="0" (
   echo.

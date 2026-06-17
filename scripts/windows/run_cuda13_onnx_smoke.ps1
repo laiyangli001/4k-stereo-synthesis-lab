@@ -13,7 +13,7 @@ if (-not (Test-Path $Python)) {
 
 Push-Location $Root
 try {
-    & $Python -B scripts\test_distill_base_onnx.py --rgb $Rgb --device cuda --out-dir $OutDir
+    & $Python -B scripts\tools\test_distill_base_onnx.py --rgb $Rgb --device cuda --out-dir $OutDir
 } finally {
     Pop-Location
 }

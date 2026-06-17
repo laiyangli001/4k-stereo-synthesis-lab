@@ -30,7 +30,7 @@ echo [Info] TensorRT first build may take several minutes.
 echo.
 
 pushd "%LAB_DIR%"
-"%PYTHON_EXE%" "%LAB_DIR%\scripts\compare_python_env_depth_backends.py" --rgb "%RGB%" --out-dir "%OUT_DIR%" --warmup 1 --iters 3
+"%PYTHON_EXE%" "%LAB_DIR%\scripts\benchmark\compare_python_env_depth_backends.py" --rgb "%RGB%" --out-dir "%OUT_DIR%" --warmup 1 --iters 3
 set "EXIT_CODE=%ERRORLEVEL%"
 if "%EXIT_CODE%"=="0" (
   echo.
