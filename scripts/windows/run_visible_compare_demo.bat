@@ -2,7 +2,7 @@
 chcp 65001>nul
 setlocal
 
-set "LAB_DIR=%~dp0.."
+set "LAB_DIR=%~dp0..\.."
 set "PYTHON_EXE=%LAB_DIR%\python3\python.exe"
 set "RGB=%LAB_DIR%\outputs\demo\input_rgb.png"
 set "DEPTH=%LAB_DIR%\outputs\demo\input_depth.png"

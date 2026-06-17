@@ -2,7 +2,7 @@
 chcp 65001>nul
 setlocal
 
-set "LAB_DIR=%~dp0.."
+set "LAB_DIR=%~dp0..\.."
 set "PYTHON_EXE=%LAB_DIR%\python3\python.exe"
 
 if not exist "%PYTHON_EXE%" (

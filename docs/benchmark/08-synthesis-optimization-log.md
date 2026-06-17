@@ -44,8 +44,8 @@ dfde924 feat: add real input comparison reports
 Files:
 
 - `scripts/compare_methods.py`
-- `scripts/run_visible_compare_demo.bat`
-- `scripts/run_visible_compare_files.bat`
+- `scripts/windows/run_visible_compare_demo.bat`
+- `scripts/windows/run_visible_compare_files.bat`
 - `src/stereo_lab/report.py`
 
 What changed:
@@ -74,9 +74,9 @@ Files:
 - `scripts/generate_depth_map.py`
 - `scripts/compare_methods.py`
 - `scripts/export_distill_base_onnx.py`
-- `scripts/run_visible_generate_depth.bat`
-- `scripts/run_visible_compare_rgb_auto_depth.bat`
-- `scripts/run_visible_export_distill_base_onnx.bat`
+- `scripts/windows/run_visible_generate_depth.bat`
+- `scripts/windows/run_visible_compare_rgb_auto_depth.bat`
+- `scripts/windows/run_visible_export_distill_base_onnx.bat`
 
 What changed:
 
@@ -103,8 +103,8 @@ Files:
 
 - `scripts/batch_generate_depth_maps.py`
 - `scripts/test_distill_base_onnx.py`
-- `scripts/setup_cuda13_nightly_env.ps1`
-- `scripts/run_cuda13_onnx_smoke.ps1`
+- `scripts/windows/setup_cuda13_nightly_env.ps1`
+- `scripts/windows/run_cuda13_onnx_smoke.ps1`
 - `src/stereo_lab/depth_onnx_provider.py`
 - `src/stereo_lab/report.py`
 
@@ -139,7 +139,7 @@ Commit:
 Files:
 
 - `src/stereo_lab/depth_trt_provider.py`
-- `scripts/probe_tensorrt_runtime.py`
+- `scripts/dev/probe_tensorrt_runtime.py`
 - `scripts/bench_depth_backends.py`
 
 Problem:
@@ -256,7 +256,7 @@ Files:
 
 - `src/stereo_lab/depth_trt_native_provider.py`
 - `scripts/build_native_tensorrt_engine.py`
-- `scripts/run_visible_build_native_tensorrt_engine.bat`
+- `scripts/windows/run_visible_build_native_tensorrt_engine.bat`
 - `scripts/check_native_tensorrt_consistency.py`
 
 What changed:

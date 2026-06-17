@@ -4,7 +4,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$Root = Resolve-Path (Join-Path $PSScriptRoot "..")
+$Root = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 $Downloads = Join-Path $Root "downloads"
 $PythonTarget = Join-Path $Root $PythonDir
 $Installer = Join-Path $Downloads "python-$PythonVersion-amd64.exe"

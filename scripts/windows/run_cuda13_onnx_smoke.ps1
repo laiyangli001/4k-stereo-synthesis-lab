@@ -4,11 +4,11 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$Root = Resolve-Path (Join-Path $PSScriptRoot "..")
+$Root = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 $Python = Join-Path $Root "python-cu13\python.exe"
 
 if (-not (Test-Path $Python)) {
-    throw "CUDA 13 nightly runtime not found: $Python. Run scripts\setup_cuda13_nightly_env.ps1 first."
+    throw "CUDA 13 nightly runtime not found: $Python. Run scripts\windows\setup_cuda13_nightly_env.ps1 first."
 }
 
 Push-Location $Root

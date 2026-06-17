@@ -2,7 +2,7 @@
 chcp 65001>nul
 setlocal
 
-set "LAB_DIR=%~dp0.."
+set "LAB_DIR=%~dp0..\.."
 set "PYTHON_EXE=%LAB_DIR%\python3\python.exe"
 
 if not exist "%PYTHON_EXE%" (
@@ -12,21 +12,15 @@ if not exist "%PYTHON_EXE%" (
   exit /b 1
 )
 
-title 4K Stereo Lab - Visible Demo
-echo [Info] Using local Python:
+title 4K Stereo Lab - Small CUDA Benchmark
+echo [Info] Using Desktop2Stereo Python:
 echo        %PYTHON_EXE%
-echo [Info] This demo writes PNG files to outputs\demo.
 echo [Info] First torch/CUDA import may take several minutes on low-end machines.
 echo.
 
 pushd "%LAB_DIR%"
-"%PYTHON_EXE%" "%LAB_DIR%\scripts\demo_generate.py"
+"%PYTHON_EXE%" "%LAB_DIR%\scripts\bench_4k.py" --width 640 --height 360 --frames 3 --backend quality_4k --output-format half_sbs --device cuda
 set "EXIT_CODE=%ERRORLEVEL%"
-if "%EXIT_CODE%"=="0" (
-  echo.
-  echo [Info] Opening outputs\demo ...
-  explorer "%LAB_DIR%\outputs\demo"
-)
 popd
 
 echo.

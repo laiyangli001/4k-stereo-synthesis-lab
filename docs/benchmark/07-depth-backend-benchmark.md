@@ -77,7 +77,7 @@ models/models--lc700x--Distill-Any-Depth-Base-hf/model_fp16_294x518.trt
 Visible first-build helper:
 
 ```bat
-scripts/run_visible_build_native_tensorrt_engine.bat
+scripts/windows/run_visible_build_native_tensorrt_engine.bat
 ```
 
 Benchmark backend name:

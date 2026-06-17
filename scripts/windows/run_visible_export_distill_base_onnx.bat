@@ -2,7 +2,7 @@
 chcp 65001>nul
 setlocal
 
-set "LAB_DIR=%~dp0.."
+set "LAB_DIR=%~dp0..\.."
 set "PYTHON_EXE=%LAB_DIR%\python3\python.exe"
 set "ONNX_DIR=%LAB_DIR%\models\models--lc700x--Distill-Any-Depth-Base-hf"
 
