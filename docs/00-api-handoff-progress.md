@@ -433,6 +433,7 @@ Host API smoke:
 .\python3\python.exe -B scripts\host_api_smoke.py --preset cinema --output-format half_sbs --out outputs\host_api_smoke_cinema.json
 .\python3\python.exe -B scripts\host_api_smoke.py --preset cinema --output-format half_sbs --out -
 .\python3\python.exe -B scripts\host_api_smoke.py --openxr --preset cinema --screen-roll 0.25 --out -
+.\python3\python.exe -B scripts\auto_mode_runtime_demo.py --selected-preset auto --out -
 .\python3\python.exe -B scripts\host_api_smoke.py --rgb 4K.jpg --auto-depth --depth-backend tensorrt_native --preset cinema --output-format half_sbs --out outputs\host_api_smoke_4k_native.json
 ```
 
@@ -453,6 +454,7 @@ Host API smoke:
    - Presets must not lower depth inference resolution or silently change model paths.
 4. Re-run API and preset unit tests after host-facing changes, plus `scripts/host_api_smoke.py` for a synthetic no-model smoke check.
    - `tests/test_host_api_smoke.py` locks the CLI JSON report contract for stereo and OpenXR host smoke paths.
+   - `tests/test_auto_mode_runtime_demo.py` locks the simulated Auto host state-machine integration path.
 5. Optimize `hole_fill` only after the API/preset boundary is stable.
 6. Re-run formal benchmarks on RTX 3090 / RTX 5070 when available:
    - `bench_depth_backends.py`

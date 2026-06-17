@@ -210,6 +210,13 @@ result = render_openxr_stereo(rgb, depth, config)
 .\python3\python.exe -B scripts\host_api_smoke.py --openxr --preset cinema --screen-roll 0.25 --out -
 ```
 
+演示 Auto 模式宿主状态机接入，不采集真实系统指标，只消费模拟的后台采样快照：
+
+```powershell
+.\python3\python.exe -B scripts\auto_mode_runtime_demo.py --selected-preset auto --out -
+.\python3\python.exe -B scripts\auto_mode_runtime_demo.py --selected-preset game_low_latency --out -
+```
+
 如需验证真实 depth provider 链路，再显式加 `--rgb` 和 `--auto-depth`：
 
 ```powershell
