@@ -1,0 +1,22 @@
+﻿# --index-url https://download.pytorch.org/whl/cu128
+-f https://mirrors.aliyun.com/pytorch-wheels/cu128/
+torch==2.7.1
+torchvision==0.22.1
+# torchaudio==2.7.1
+
+# ONNX Runtime GPU stack used by distill_base_nvidia.
+# This resolves to CUDA 12.9/cuDNN 9 runtime DLLs and works with the current CUDA 12.x PyTorch environment.
+onnxruntime-gpu[cuda,cudnn]==1.26.0
+nvidia-cublas-cu12==12.9.2.10
+nvidia-cuda-nvrtc-cu12==12.9.86
+nvidia-cuda-runtime-cu12==12.9.79
+nvidia-cudnn-cu12==9.23.1.3
+nvidia-cufft-cu12==11.4.1.4
+nvidia-curand-cu12==10.3.10.19
+nvidia-nvjitlink-cu12==12.9.86
+
+# Optional TensorRT Python packages already present in this environment.
+tensorrt_cu12==10.14.1.48.post1
+tensorrt_cu12_bindings==10.14.1.48.post1
+tensorrt_cu12_libs==10.14.1.48.post1
+

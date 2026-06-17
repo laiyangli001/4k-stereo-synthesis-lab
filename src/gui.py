@@ -1,0 +1,2983 @@
+"""
+Desktop2Stereo Flet GUI
+Flet desktop app, migrated from tkinter gui.py.
+Feature-equivalent; all interaction logic matches the original.
+
+Custom control overview:
+
+CompactTextField (L535)
+  Compact text input, 32px height. Displays as bordered text label by default;
+  switches to TextField on click for editing.
+  Constructor params:
+    value      — initial value
+    width      — control width
+    read_only  — read-only flag
+    on_change  — value change callback (param: e.control.value)
+    tooltip    — tooltip text
+    filter     — regex to restrict allowed characters (e.g. r"[0-9]" for digits only)
+    max_length — max input length
+  On submit (Enter/Blur), non-matching characters are stripped.
+  Properties: .value (r/w), .set_tooltip(text)
+
+CompactDropdown (L615)
+  Custom dropdown based on PopupMenuButton, 32px height, visually consistent with TextField.
+  Constructor params:
+    options    — list of options
+    value      — currently selected value
+    on_select  — selection callback (param: e.control.value)
+    expand     — expand_loose flag
+    dyna_width — dynamic width mode (uses LABEL_ALIGN_WIDTH)
+    width      — fixed width
+    min_width  — auto-width lower bound
+    max_width  — auto-width upper bound
+    tooltip    — tooltip text
+  Width priority: fixed > dynamic mode > auto-calculated (bounded by min/max).
+  Properties: .value (r/w), .options (r/w, triggers menu rebuild), .set_tooltip(text)
+"""
+import os
+import sys
+import subprocess
+import time
+import asyncio
+import ctypes
+import re
+import json
+import flet as ft
+import yaml
+from utils import (
+    VERSION, OS_NAME, ALL_MODELS, DEFAULT_PORT, STEREO_MIX_NAMES,
+    DISABLE_TRT_KEYWORDS, DISABLE_COREML_KEYWORDS, DISABLE_OPENVINO_KEYWORDS,
+    get_local_ip, shutdown_event, read_yaml
+)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DIAG_LOG = os.path.join(BASE_DIR, "logs", "diag.log")
+
+
+def _setup_console_logging():
+    """Redirect stdout/stderr to also write to the diag log file."""
+    import datetime
+    os.makedirs(os.path.dirname(DIAG_LOG), exist_ok=True)
+
+    class _TeeStream:
+        def __init__(self, original, label):
+            self.original = original
+            self.label = label
+            self._buffer = ""
+
+        def write(self, data):
+            self.original.write(data)
+            if data and data.strip():
+                try:
+                    ts = datetime.datetime.now().strftime("%H:%M:%S")
+                    with open(DIAG_LOG, "a", encoding="utf-8") as f:
+                        for line in data.splitlines():
+                            stripped = line.strip()
+                            if stripped:
+                                f.write(f"[{ts}] [{self.label}] {stripped}\n")
+                except Exception:
+                    pass
+
+        def flush(self):
+            self.original.flush()
+
+        def isatty(self):
+            return self.original.isatty()
+
+    sys.stdout = _TeeStream(sys.stdout, "out")
+    sys.stderr = _TeeStream(sys.stderr, "err")
+
+# Known model size suffixes, longest-first for matching priority
+_MODEL_SIZES = ["Small", "SmallPlus", "Base", "Large", "Giant"]
+_SIZE_ORDER = {s: i for i, s in enumerate(_MODEL_SIZES)}
+
+def parse_model_name(name):
+    """Split model name into (family, size). DepthPro treated as Large."""
+    parts = name.split("-")
+    size_parts = []
+    i = len(parts) - 1
+    while i >= 0:
+        matched = None
+        for sz in _MODEL_SIZES:
+            if parts[i].upper() == sz.upper():
+                matched = sz
+                break
+        if matched:
+            size_parts.insert(0, matched)
+            i -= 1
+        else:
+            break
+    if size_parts:
+        family = "-".join(parts[:i + 1])
+        size = "-".join(size_parts)
+        return (family, size)
+    return (name, "")
+
+def build_family_size_map(model_list):
+    """Returns (families_ordered, family_to_sizes) from list of full model names."""
+    families = []
+    family_to_sizes = {}
+    for name in model_list:
+        family, size = parse_model_name(name)
+        if family not in family_to_sizes:
+            family_to_sizes[family] = []
+            families.append(family)
+        if size and size not in family_to_sizes[family]:
+            family_to_sizes[family].append(size)
+    for family in family_to_sizes:
+        family_to_sizes[family].sort(key=lambda s: _SIZE_ORDER.get(s, 99))
+    return families, family_to_sizes
+
+
+def _set_console_quick_edit(enabled: bool):
+    """Toggle Windows console Quick Edit mode when a real console is attached."""
+    try:
+        kernel32 = ctypes.windll.kernel32
+        kernel32.GetStdHandle.restype = ctypes.c_void_p
+        kernel32.GetStdHandle.argtypes = [ctypes.c_uint32]
+        STD_INPUT_HANDLE = -10
+        ENABLE_QUICK_EDIT_MODE = 0x0040
+        ENABLE_EXTENDED_FLAGS = 0x0080
+        h_stdin = kernel32.GetStdHandle(STD_INPUT_HANDLE)
+        mode = ctypes.c_uint32()
+        if kernel32.GetConsoleMode(h_stdin, ctypes.byref(mode)):
+            mode.value |= ENABLE_EXTENDED_FLAGS
+            if enabled:
+                mode.value |= ENABLE_QUICK_EDIT_MODE
+            else:
+                mode.value &= ~ENABLE_QUICK_EDIT_MODE
+            kernel32.SetConsoleMode(h_stdin, mode)
+    except Exception:
+        pass  # Not a console or Windows — safe to ignore
+
+
+# Disable Quick Edit while the worker is running to avoid accidental console freeze.
+_set_console_quick_edit(False)
+
+# ─────────────────────────────────────────────
+# UI Text Dictionary (EN / CN)
+# ─────────────────────────────────────────────
+UI_TEXTS = {
+    "EN": {
+        "Monitor": "Input Monitor",
+        "Window": "Input Window",
+        "Refresh": "Refresh",
+        "Show FPS": "Show FPS",
+        "IPD (m):": "IPD (mm):",
+        "Convergence:": "Convergence:",
+        "Display Mode:": "Display Mode:",
+        "Depth Model:": "Depth Model:",
+        "Depth Strength:": "Depth Strength:",
+        "Depth Resolution:": "Depth Resolution:",
+        "Anti-aliasing:": "Anti-aliasing:",
+        "Foreground Scale:": "Foreground Scale:",
+        "FP16": "FP16",
+        "Inference Acceleration:": "Acceleration:",
+        "Recompile TensorRT": "Recompile TensorRT",
+        "Recompile CoreML": "Recompile CoreML",
+        "Recompile OpenVINO": "Recompile OpenVINO",
+        "Stop": "Stop",
+        "Computing Device:": "Computing Device:",
+        "Reset": "Reset",
+        "Run": "Run",
+        "Set Language:": "Set Language:",
+        "Error": "Error",
+        "Warning": "Warning",
+        "Saved": "Run Desktop2Stereo",
+        "PyYAML not installed, cannot save YAML file.": "PyYAML not installed, cannot save YAML file.",
+        "Settings saved to settings.yaml": "Settings saved to settings.yaml",
+        "Failed to save settings.yaml:": "Failed to save settings.yaml:",
+        "Could not retrieve monitor list.\nFalling back to indexes 1 and 2.": "Could not retrieve monitor list.\nFalling back to indexes 1 and 2.",
+        "Loaded settings.yaml at startup": "Loaded settings.yaml at startup",
+        "Running": "Running... (Hold ESC 3s to Stop)",
+        "Stopped": "Stopped.",
+        "Countdown": "Settings saved to settings.yaml, starting...",
+        "A thread already running!": "A thread already running!",
+        "No windows found": "No windows found",
+        "Selected input window:": "Selected input window:",
+        "Selected input monitor:": "Selected input monitor:",
+        "Run Mode:": "Run Mode:",
+        "Local Viewer": "Local Viewer",
+        "Legacy Streamer": "Legacy Streamer",
+        "MJPEG Streamer": "MJPEG Streamer",
+        "RTMP Streamer": "RTMP Streamer",
+        "Stream Protocol:": "Stream Protocol:",
+        "Stream Key": "Stream Key:",
+        "Stereo Mix": "Stereo Mix:",
+        "CRF": "CRF:",
+        "Audio Delay": "Audio Delay (s):",
+        "Lossless Scaling Support": "LSFG",
+        "3D Monitor": "3D Monitor",
+        "OpenXR Link": "OpenXR Link",
+        "XR Preview Window": "XR Preview Window",
+        "Local VSync": "Local VSync",
+        "Capture FPS:": "Capture FPS:",
+        "Upscaler:": "Upscaler:",
+        "Upscaler Sharpness:": "Sharpness:",
+        "Auto": "Auto",
+        "Off": "Off",
+        "Streamer Port:": "Streamer Port:",
+        "Streamer URL": "Streamer URL:",
+       "Preview":"Preview",
+        "Stream Quality:": "Stream Quality:",
+        "Host": "Host:",
+        "Invalid port number (1-65535)": "Invalid port number (must be between 1-65535)",
+        "Invalid port number": "Port must be a number",
+        "Please select a window before running in Window capture mode": "Please select a window before running in Window capture mode",
+        "The selected window no longer exists. Please refresh and select a valid window.": "The selected window no longer exists. Please refresh and select a valid window.",
+        "Failed to stop process on exit:": "Failed to stop process on exit:",
+        "Failed to stop process:": "Failed to stop process:",
+        "Failed to run process:": "Failed to run process:",
+        "Failed to load settings.yaml:": "Failed to load settings.yaml:",
+        "Opening URL in browser": "Opening URL in browser",
+        "Controller:": "Controller:",
+        "Environment:": "Room:",
+        "Capture Tool:": "Capture Tool:",
+        "Fill 16:9": "16:9",
+        "Fix Viewer Aspect": "Fix Aspect",
+        "Stereo Output:": "Stereo Output:",
+        "Theme:": "Theme:",
+        "DesktopDuplication selected: Window capture mode disabled.": "DesktopDuplication selected: Window capture mode disabled.",
+        "torch.compile": "torch.compile",
+        "TensorRT": "TensorRT",
+        "CoreML": "CoreML",
+        "OpenVINO": "OpenVINO",
+        "tooltip_window": "Select a window to capture",
+        "tooltip_depth_model": "Depth estimation model",
+        "tooltip_depth_res": "Depth map resolution",
+        "tooltip_convergence": "Stereo convergence",
+        "tooltip_depth_strength": "Depth effect intensity",
+        "tooltip_foreground_scale": "Foreground object scale",
+        "tooltip_antialiasing": "Anti-aliasing level",
+        "tooltip_ipd": "Interpupillary distance (mm)",
+        "tooltip_device": "Inference device",
+        "tooltip_capture_tool": "Capture backend",
+        "tooltip_run_mode": "Output mode",
+        "tooltip_display_mode": "Stereo display format",
+        "tooltip_local_vsync": "Synchronize the local viewer to the display refresh rate",
+        "tooltip_target_fps": "Override internal frame pacing. Auto uses the detected display refresh rate.",
+        "tooltip_ctrl_model": "Controller model",
+        "tooltip_env_model": "Room environment model",
+        "tooltip_capture_mode": "Source: monitor or window",
+        "tooltip_monitor": "Input monitor",
+        "tooltip_stereo_monitor": "Stereo output monitor",
+        "tooltip_lang": "Interface language",
+        "tooltip_theme": "Color theme",
+        "tooltip_stream_quality": "Encode quality",
+        "tooltip_stream_proto": "Streaming protocol",
+        "tooltip_audio": "Stereo mix device",
+        "tooltip_stream_port": "Server port",
+        "tooltip_stream_key": "Stream key",
+        "tooltip_crf": "Quality factor (0-51)",
+        "tooltip_audio_delay": "Audio offset (s)",
+        "err_crf": "CRF must be between 0-51",
+        "err_audio_delay": "Audio Delay must be between -10 and 10",
+        "err_stream_key": "Stream Key can only contain letters, digits, underscore, hyphen, max 64 chars",
+        "err_start_failed": "Start failed: {}",
+        "esc_stop": "Hold ESC 3s — stopping!",
+        "exited_with_code": "Exited with code {}",
+        "failed_save_yaml": "Failed to save YAML: {}",
+        "invalid_url_scheme": "Invalid URL scheme: {}",
+        "error_preview": "Failed to preview: {}",
+        "url_copied": "URL copied to clipboard",
+    },
+    "CN": {
+        "Monitor": "输入屏幕",
+        "Window": "输入窗口",
+        "Refresh": "刷新",
+        "Show FPS": "显示帧率",
+        "IPD (m):": "瞳距 (mm):",
+        "Convergence:": "会聚点:",
+        "Display Mode:": "显示模式:",
+        "Depth Model:": "深度模型:",
+        "Depth Strength:": "深度强度:",
+        "Depth Resolution:": "深度分辨率:",
+        "Anti-aliasing:": "抗锯齿:",
+        "Foreground Scale:": "前景缩放:",
+        "FP16": "FP16",
+        "Inference Acceleration:": "推理加速:",
+        "Recompile TensorRT": "重译TensorRT",
+        "Recompile CoreML": "重译CoreML",
+        "Recompile OpenVINO": "重译OpenVINO",
+        "Stop": "停止",
+        "Computing Device:": "计算设备:",
+        "Reset": "重置",
+        "Run": "运行",
+        "Set Language:": "设置语言:",
+        "Error": "错误",
+        "Warning": "警告",
+        "Saved": "运行Desktop2Stereo",
+        "PyYAML not installed, cannot save YAML file.": "未安装PyYAML，无法保存YAML文件。",
+        "Settings saved to settings.yaml": "设置已保存到 settings.yaml",
+        "Failed to save settings.yaml:": "保存 settings.yaml 失败：",
+        "Could not retrieve monitor list.\nFalling back to indexes 1 and 2.": "无法获取显示器列表。\n回退到索引1和2。",
+        "Loaded settings.yaml at startup": "启动时已加载 settings.yaml",
+        "Running": "运行中...（长按ESC 3秒停止）",
+        "Stopped": "已停止。",
+        "Countdown": "设置已保存到 settings.yaml，启动中...",
+        "A thread already running!": "一个进程已经运行！",
+        "No windows found": "未找到窗口",
+        "Selected input window:": "已选择输入窗口:",
+        "Selected input monitor:": "已选择输入显示器 :",
+        "Run Mode:": "运行模式:",
+        "Local Viewer": "本地查看",
+        "Legacy Streamer": "旧网络推流",
+        "MJPEG Streamer": "MJPEG推流",
+        "RTMP Streamer": "RTMP推流",
+        "Stream Protocol:": "流协议:",
+        "Stream Key": "推流密钥:",
+        "Stereo Mix": "混音设备:",
+        "CRF": "恒定质量:",
+        "Audio Delay": "音频延迟 (秒):",
+        "system": "系统",
+        "blue": "蓝色",
+        "green": "绿色",
+        "red": "红色",
+        "purple": "紫色",
+        "orange": "橙色",
+        "teal": "青色",
+        "pink": "粉色",
+        "grey": "灰色",
+        "Lossless Scaling Support": "小黄鸭",
+        "3D Monitor": "3D显示器",
+        "OpenXR Link": "OpenXR串流",
+        "Local VSync": "本地垂直同步",
+        "Capture FPS:": "捕获帧率:",
+        "Upscaler:": "画面增强:",
+        "Upscaler Sharpness:": "增强锐度:",
+        "Auto": "自动",
+        "Off": "关闭",
+        "Streamer Port:": "推流端口:",
+        "Streamer URL": "推流网址:",
+        "Preview": "预览",
+        "Stream Quality:": "推流质量:",
+        "Host": "主机:",
+        "Invalid port number (1-65535)": "端口号无效 (必须介于1-65535之间)",
+        "Invalid port number": "端口必须是数字",
+        "Please select a window before running in Window capture mode": "请在窗口捕获模式下选择一个窗口再运行",
+        "The selected window no longer exists. Please refresh and select a valid window.": "所选窗口已不存在。请刷新并选择一个有效的窗口。",
+        "Failed to stop process on exit:": "退出时停止进程失败：",
+        "Failed to stop process:": "停止进程失败：",
+        "Failed to run process:": "运行进程失败：",
+        "Failed to load settings.yaml:": "加载 settings.yaml 失败：",
+        "Opening URL in browser": "正在浏览器中打开网址",
+        "Controller:": "手柄模型：",
+        "Environment:": "房间模型：",
+        "Capture Tool:": "捕获工具:",
+        "Fill 16:9": "16:9",
+        "Fix Viewer Aspect": "锁定比例",
+        "Stereo Output:": "立体输出:",
+        "Theme:": "主题颜色:",
+        "DesktopDuplication selected: Window capture mode disabled.": "已选择DesktopDuplication：窗口捕获模式已禁用。",
+        "torch.compile": "torch.compile",
+        "TensorRT": "TensorRT",
+        "CoreML": "CoreML",
+        "OpenVINO": "OpenVINO",
+        "tooltip_window": "选择要捕获的窗口",
+        "tooltip_depth_model": "选择深度估计模型",
+        "tooltip_depth_res": "深度图分辨率",
+        "tooltip_convergence": "立体会聚点",
+        "tooltip_depth_strength": "深度效果强度",
+        "tooltip_foreground_scale": "前景缩放比例",
+        "tooltip_antialiasing": "抗锯齿级别",
+        "tooltip_ipd": "瞳距（毫米）",
+        "tooltip_device": "计算设备",
+        "tooltip_capture_tool": "捕获后端",
+        "tooltip_run_mode": "输出模式",
+        "tooltip_display_mode": "立体显示格式",
+        "tooltip_local_vsync": "将本地查看窗口同步到显示器刷新率，关闭可用于帧率对比测试",
+        "tooltip_target_fps": "覆盖内部帧率节流；自动使用检测到的显示器刷新率",
+        "tooltip_ctrl_model": "手柄型号",
+        "tooltip_env_model": "房间环境模型",
+        "tooltip_capture_mode": "捕获源：屏幕或窗口",
+        "tooltip_monitor": "输入显示器",
+        "tooltip_stereo_monitor": "立体输出显示器",
+        "tooltip_lang": "界面语言",
+        "tooltip_theme": "主题颜色",
+        "tooltip_stream_quality": "编码质量",
+        "tooltip_stream_proto": "推流协议",
+        "tooltip_audio": "混音设备",
+        "tooltip_stream_port": "推流端口",
+        "tooltip_stream_key": "推流密钥",
+        "tooltip_crf": "质量因子 (0-51)",
+        "tooltip_audio_delay": "音频偏移（秒）",
+        "err_crf": "CRF 必须是 0-51 之间的整数",
+        "err_audio_delay": "Audio Delay 必须是 -10 到 10 之间的数值",
+        "err_stream_key": "Stream Key 只能包含字母、数字、下划线和连字符，最长 64 字符",
+        "err_start_failed": "启动失败: {}",
+        "esc_stop": "长按ESC 3秒停止",
+        "exited_with_code": "退出码 {}",
+        "failed_save_yaml": "保存 YAML 失败: {}",
+        "invalid_url_scheme": "无效 URL 协议: {}",
+        "error_preview": "打开浏览器失败: {}",
+        "url_copied": "已复制网址到剪贴板",
+    }
+}
+# ─────────────────────────────────────────────
+# Default Configuration
+# ─────────────────────────────────────────────
+DEFAULT_MODEL_LIST = list(ALL_MODELS.keys())
+DEFAULT_FAMILIES, FAMILY_TO_SIZES = build_family_size_map(DEFAULT_MODEL_LIST)
+FAMILY_SIZE_TO_MODEL = {}
+for name in DEFAULT_MODEL_LIST:
+    f, s = parse_model_name(name)
+    FAMILY_SIZE_TO_MODEL[(f, s)] = name
+DEFAULTS = {
+    "Capture Mode": "Monitor",
+    "Monitor Index": 1,
+    "Window Title": "",
+    "Show FPS": False,
+    "Model List": DEFAULT_MODEL_LIST,
+    "Depth Model": DEFAULT_MODEL_LIST[0] if DEFAULT_MODEL_LIST else "",
+    "Depth Strength": 2.0,
+    "Depth Resolution": 322,
+    "Anti-aliasing": 2,
+    "Foreground Scale": 0.5,
+    "IPD": 0.064,
+    "Convergence": 0.0,
+    "Display Mode": "Half-SBS",
+    "FP16": True,
+    "torch.compile": False,
+    "TensorRT": False,
+    "Recompile TensorRT": False,
+    "CoreML": False,
+    "Recompile CoreML": False,
+    "Recompile OpenVINO": False,
+    "Computing Device": 0,
+    "Language": "EN",
+    "Run Mode": "OpenXR Link",
+    "XR Preview Window": True,
+    "Local VSync": True,
+    "Target FPS": 0,
+    "Processing Resolution": "Auto",
+    "Upscaler": "Off",
+    "Upscaler Sharpness": 0.35,
+    "Stream Protocol": "HLS",
+    "Streamer Port": DEFAULT_PORT,
+    "Stream Quality": 100,
+    "Stream Key": "live",
+    "Stereo Mix": None,
+    "CRF": 20,
+    "Audio Delay": -0.15,
+    "Controller Model": "PICO",
+    "Environment Model": "None",
+    "Lossless Scaling Support": False,
+    "Capture Tool": "none",
+    "Fill 16:9": True,
+    "Fix Viewer Aspect": False,
+    "Stereo Output": None,
+}
+
+
+# ─────────────────────────────────────────────
+# Global Font Size
+# ─────────────────────────────────────────────
+SCALE = 0.9  # Global UI scale factor (fonts, spacing, widget + window sizes)
+
+
+def get_environment_model_options():
+    """Return selectable room environment names."""
+    env_base = os.path.join(BASE_DIR, "environment")
+    options = ["None"]
+    if os.path.exists(os.path.join(env_base, "environment.glb")):
+        options.append("Default")
+    room_dirs = []
+    for name in os.listdir(env_base):
+        room_dir = os.path.join(env_base, name)
+        if not os.path.isdir(room_dir) or name.startswith("."):
+            continue
+        profile_path = os.path.join(room_dir, "profile.json")
+        if not os.path.isfile(profile_path):
+            raise FileNotFoundError(f"[GUI] Missing room profile.json: {profile_path}")
+        try:
+            with open(profile_path, "r", encoding="utf-8-sig") as f:
+                profile = json.load(f)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"[GUI] Invalid room profile.json: {profile_path}: {exc}") from exc
+        if not isinstance(profile, dict):
+            raise ValueError(f"[GUI] Room profile.json root must be an object: {profile_path}")
+        room_dirs.append(name)
+    options.extend(sorted(room_dirs, key=str.lower))
+    return options
+
+
+def S(v):
+    """Scale a dimension literal by the global UI SCALE factor."""
+    return round(v * SCALE)
+
+
+FONT_SIZE = S(14)
+LABEL_ALIGN_WIDTH = 0  # Set by _auto_align_labels after UI is built
+# ─────────────────────────────────────────────
+# Device & Window Helpers (from gui.py)
+# ─────────────────────────────────────────────
+PRIMARY_MONITOR_SUFFIX = " [Main]"
+def get_devices():
+    """
+    Returns (devices_dict, is_rocm).
+    devices_dict: {0: {"name": str, "Computing Device": torch.device}, ...}
+    """
+    is_rocm = False
+    devices = {}
+    count = 0
+    try:
+        import torch_directml
+        if torch_directml.is_available():
+            for i in range(torch_directml.device_count()):
+                dev_name = torch_directml.device_name(i).strip().rstrip('\x00')
+                devices[count] = {
+                    "name": f"DirectML{i}: {dev_name}",
+                    "Computing Device": torch_directml.device(i),
+                }
+                count += 1
+    except ImportError:
+        pass
+    try:
+        import torch
+        if torch.cuda.is_available():
+            for i in range(torch.cuda.device_count()):
+                name = torch.cuda.get_device_name(i)
+                if torch.version.hip is not None:
+                    is_rocm = True
+                devices[count] = {"name": f"CUDA {i}: {name}", "Computing Device": torch.device(f"cuda:{i}")}
+                count += 1
+        if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+            devices[count] = {"name": "MPS: Apple Silicon", "Computing Device": torch.device("mps")}
+            count += 1
+        if hasattr(torch, "xpu") and torch.xpu.is_available():
+            for i in range(torch.xpu.device_count()):
+                name = torch.xpu.get_device_name(i)
+                devices[count] = {"name": f"XPU {i}: {name}", "Computing Device": torch.device(f"xpu:{i}")}
+                count += 1
+        devices[count] = {"name": "CPU", "Computing Device": torch.device("cpu")}
+    except ImportError:
+        raise ImportError("PyTorch Not Found! Make sure you have deployed the Python environment in '.env'.")
+    return devices, is_rocm
+class _LazyDevices(dict):
+    """Lazy hardware detection — only runs get_devices() on first dict API access."""
+    def __init__(self):
+        self._loaded = False
+    def _ensure(self):
+        if not self._loaded:
+            self._loaded = True
+            try:
+                d, r = get_devices()
+                self.update(d)
+                global IS_ROCM; IS_ROCM = r
+            except Exception as e:
+                print(f"[Warning] Hardware detection failed, fallback to CPU: {e}")
+                self.update({0: {"name": "CPU", "Computing Device": None}})
+    def __getitem__(self, k): self._ensure(); return super().__getitem__(k)
+    def __iter__(self): self._ensure(); return super().__iter__()
+    def __len__(self): self._ensure(); return super().__len__()
+    def values(self): self._ensure(); return super().values()
+    def keys(self): self._ensure(); return super().keys()
+    def items(self): self._ensure(); return super().items()
+    def get(self, k, d=None): self._ensure(); return super().get(k, d)
+    def __contains__(self, k): self._ensure(); return super().__contains__(k)
+DEVICES = _LazyDevices()
+IS_ROCM = False
+def get_default_windows_capture_tool():
+    if "CUDA" in DEVICES.get(0, {}).get("name", "") and not IS_ROCM:
+        return "WindowsCaptureCUDA"
+    elif "CUDA" in DEVICES.get(0, {}).get("name", "") and IS_ROCM:
+        return "WindowsCaptureROCm"
+    else:
+        return "DXCamera"
+def get_primary_monitor_index():
+    if OS_NAME != "Windows":
+        return _get_primary_monitor_index_unix()
+    try:
+        import win32api, win32con
+        primary_monitor_handle = win32api.MonitorFromPoint((0, 0), win32con.MONITOR_DEFAULTTOPRIMARY)
+        primary_monitor_info = win32api.GetMonitorInfo(primary_monitor_handle)
+        primary_rect = primary_monitor_info["Monitor"]
+        primary_left, primary_top, _, _ = primary_rect
+        import mss
+        with mss.mss() as sct:
+            for idx, monitor in enumerate(sct.monitors[1:], start=1):
+                if monitor["left"] == primary_left and monitor["top"] == primary_top:
+                    return idx
+        return 1
+    except Exception:
+        return 1
+def _get_primary_monitor_index_unix():
+    try:
+        import mss
+        with mss.mss() as sct:
+            for idx, monitor in enumerate(sct.monitors[1:], start=1):
+                if monitor["left"] == 0 and monitor["top"] == 0:
+                    return idx
+    except Exception:
+        pass
+    return 1
+def list_windows():
+    """Return list of {title, handle, rect} for visible windows."""
+    if OS_NAME == "Windows":
+        return _list_windows_win()
+    elif OS_NAME == "Darwin":
+        return _list_windows_mac()
+    else:
+        return _list_windows_linux()
+def _list_windows_win():
+    import win32gui
+    windows = []
+    def callback(hwnd, _):
+        if win32gui.IsWindowVisible(hwnd):
+            title = win32gui.GetWindowText(hwnd)
+            if title:
+                client_rect = win32gui.GetClientRect(hwnd)
+                left, top = win32gui.ClientToScreen(hwnd, (client_rect[0], client_rect[1]))
+                windows.append({
+                    "title": title,
+                    "handle": hwnd,
+                    "rect": (left, top, client_rect[2], client_rect[3]),
+                })
+        return True
+    win32gui.EnumWindows(callback, None)
+    return windows
+def _list_windows_mac():
+    from Quartz import (
+        CGWindowListCopyWindowInfo,
+        kCGWindowListOptionOnScreenOnly,
+        kCGWindowListExcludeDesktopElements,
+        kCGNullWindowID,
+    )
+    windows = []
+    options = kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements
+    window_info = CGWindowListCopyWindowInfo(options, kCGNullWindowID)
+    blacklist = [
+        "Window Server", "ControlCenter", "NotificationCenter", "Spotlight",
+        "Dock", "FocusModes", "WiFi", "Sound", "UserSwitcher", "Clock",
+        "BentoBox", "Bluetooth", "popdown", "AudioVideoModule",
+        "ScreenMirroring", "SystemUIServer", "CoreServicesUIAgent",
+        "TextInputMenuAgent", "com.apple.controlcenter", "loginwindow",
+    ]
+    for win in window_info:
+        title = win.get("kCGWindowName", "") or ""
+        owner = win.get("kCGWindowOwnerName", "")
+        layer = win.get("kCGWindowLayer", 0)
+        bounds = win.get("kCGWindowBounds", {})
+        if not title.strip():
+            continue
+        if owner in blacklist or title in blacklist:
+            continue
+        if layer >= 1000:
+            continue
+        if win.get("kCGWindowAlpha", 1.0) == 0.0:
+            continue
+        if title.strip().lower().startswith(("item-", "window-")):
+            continue
+        if "X" in bounds and "Y" in bounds and "Width" in bounds and "Height" in bounds:
+            w, h = bounds["Width"], bounds["Height"]
+            if w < 10 or h < 10:
+                continue
+            windows.append({
+                "title": title.strip(),
+                "handle": win["kCGWindowNumber"],
+                "rect": (bounds["X"], bounds["Y"], w, h),
+            })
+    return windows
+def _list_windows_linux():
+    windows = []
+    try:
+        result = subprocess.check_output(["wmctrl", "-lG"], timeout=2).decode("utf-8").splitlines()
+        for line in result:
+            parts = line.split(None, 7)
+            if len(parts) >= 8:
+                _, _, x_str, y_str, w_str, h_str, _, title = parts
+                try:
+                    x, y, w, h = int(x_str), int(y_str), int(w_str), int(h_str)
+                    if title.strip():
+                        windows.append({"title": title.strip(), "handle": None, "rect": (x, y, w, h)})
+                except ValueError:
+                    continue
+    except Exception as e:
+        print(f"[Warning] Linux window enumeration failed (install wmctrl): {e}")
+    return windows
+def get_monitor_index_for_point(x, y):
+    try:
+        import mss
+        with mss.mss() as sct:
+            for idx, mon in enumerate(sct.monitors[1:], start=1):
+                left, top = mon["left"], mon["top"]
+                right, bottom = left + mon["width"], top + mon["height"]
+                if left <= x < right and top <= y < bottom:
+                    return idx
+    except Exception:
+        pass
+    return get_primary_monitor_index()
+def _get_capture_tool_options(device_label):
+    if OS_NAME == "Darwin":
+        return ["ScreenCaptureKit", "Quartz"]
+    if OS_NAME != "Windows":
+        return ["DXCamera"]
+    is_nvidia = "CUDA" in device_label.upper() and not IS_ROCM
+    if is_nvidia:
+        return ["WindowsCaptureCUDA", "WindowsCapture", "DXCamera", "DesktopDuplication"]
+    elif "CUDA" in device_label.upper() and IS_ROCM:
+        return ["WindowsCaptureROCm", "WindowsCapture", "DXCamera", "DesktopDuplication"]
+    else:
+        return ["DXCamera", "WindowsCapture", "DesktopDuplication"]
+# ─────────────────────────────────────────────
+# Save YAML (with encoding fallback)
+# ─────────────────────────────────────────────
+HAVE_YAML = True
+def save_yaml(path, cfg):
+    if not HAVE_YAML:
+        return False, "PyYAML not installed"
+    try:
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            yaml.safe_dump(cfg, f, allow_unicode=True, sort_keys=False)
+        os.replace(tmp, path)
+        return True, ""
+    except Exception as e:
+        return False, str(e)
+# CompactDropdown — compact custom dropdown control
+
+class CompactTextField(ft.Container):
+    """Compact text input — 32px height, visually consistent with CompactDropdown."""
+
+    def __init__(self, value="", width=S(100), read_only=False, on_change=None, tooltip=None, filter=None, max_length=None):
+        super().__init__()
+        self.height = S(32)
+        self.width = width if width else None
+        self.padding = 0
+        self.bgcolor = None
+        self.border = None
+        self.border_radius = 0
+        self._read_only = read_only
+        self._on_change = on_change
+        self._value = value
+        self._label = ft.Text(value or "", size=FONT_SIZE)
+        self._committed = False
+        self._tooltip = tooltip or ""
+        self._filter = filter
+        self._max_length = max_length
+        self._build_display()
+
+    def _build_display(self):
+        self.content = ft.Container(
+            height=S(32), padding=ft.Padding(S(8), 0, S(8), 0),
+            border=ft.Border(ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE)),
+            border_radius=4,
+            tooltip=self._tooltip,
+            on_click=None if self._read_only else self._on_click,
+            content=ft.Row([self._label], spacing=2, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+        )
+
+    def _on_click(self, e):
+        self._committed = False
+        tf = ft.TextField(
+            value=self._value, text_size=FONT_SIZE, dense=True,
+            filled=False, border=ft.InputBorder.NONE,
+            content_padding=ft.Padding(0, 0, 0, 0), height=S(28),
+            autofocus=True, on_submit=self._on_submit, on_blur=self._on_submit,
+            max_length=self._max_length,
+            input_filter=ft.InputFilter(regex_string=self._filter, allow=True) if self._filter else None,
+        )
+        self.content = ft.Container(
+            height=S(32), padding=ft.Padding(S(4), 0, S(4), 0),
+            border=ft.Border(ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE)),
+            border_radius=4, content=tf,
+        )
+        self.update()
+
+    def set_tooltip(self, text):
+        self._tooltip = text
+
+    @property
+    def value(self):
+        return self._value
+
+    @value.setter
+    def value(self, val):
+        self._value = val
+        self._label.value = val
+        try:
+            self._label.update()
+        except RuntimeError:
+            pass
+
+    def _on_submit(self, e):
+        if self._committed:
+            return
+        self._committed = True
+        raw = e.control.value
+        if self._filter:
+            raw = ''.join(c for c in raw if re.match(self._filter, c))
+        self._value = raw
+        if self._on_change:
+            from types import SimpleNamespace
+            self._on_change(SimpleNamespace(control=SimpleNamespace(value=self._value)))
+        self._label.value = self._value
+        self._build_display()
+        self.update()
+
+
+class CompactDropdown(ft.Container):
+    """Compact dropdown — PopupMenuButton with controllable width."""
+    _instances = None  # Managed by GUI instance; replaced with instance list in build_ui
+
+    def __init__(self, options=None, value="", on_select=None, expand=False,
+                 dyna_width=None, width=None, min_width=None, max_width=None,
+                 tooltip=None, _instances_list=None):
+        super().__init__()
+        self._options = options or []
+        self._on_select_cb = on_select
+        self._dyna = dyna_width
+        self._fixed = width
+        self._min = min_width or 0
+        self._max = max_width or 0
+        self._tooltip = tooltip
+        self.height = S(32)
+        self.padding = 0
+        self.bgcolor = None
+        self.border = None
+        self.border_radius = 0
+        self.expand_loose = expand
+
+        self._label = ft.Text(value or "", size=FONT_SIZE)
+        self._build_menu()
+        self._apply_width()
+        if _instances_list is not None:
+            _instances_list.append(self)
+        elif CompactDropdown._instances is not None:
+            CompactDropdown._instances.append(self)
+
+    def reapply_width(self):
+        self._apply_width()
+
+    def _calc_auto_width(self):
+        txt = self._label.value or ""
+        if not txt:
+            return S(100)
+        w = sum(FONT_SIZE * (1.2 if ord(c) > 127 else 0.6) for c in txt)
+        return int(w) + S(34)
+
+    def _apply_width(self):
+        if self._dyna:
+            self.width = LABEL_ALIGN_WIDTH or self._calc_auto_width()
+        elif self._fixed is not None:
+            self.width = self._fixed
+        else:
+            auto = self._calc_auto_width()
+            if self._min and auto < self._min:
+                self.width = self._min
+            elif self._max and auto > self._max:
+                self.width = self._max
+            else:
+                self.width = None
+
+    def _build_menu(self):
+        def on_item_click(e):
+            val = e.control.data
+            self._label.value = val
+            self._apply_width()
+            try:
+                self._label.update()
+                self.update()
+            except RuntimeError:
+                pass
+            if self._on_select_cb:
+                from types import SimpleNamespace
+                ev = SimpleNamespace(control=SimpleNamespace(value=val))
+                self._on_select_cb(ev)
+
+        items = [
+            ft.PopupMenuItem(content=ft.Container(ft.Text(o, size=FONT_SIZE), padding=ft.Padding(8,0,8,0)), data=o, height=S(32), padding=0, on_click=on_item_click)
+            for o in self._options
+        ]
+
+        has_limit = self._min or self._max
+        align = ft.MainAxisAlignment.SPACE_BETWEEN if (self._fixed is not None or self._dyna or has_limit) else ft.MainAxisAlignment.START
+
+        self.content = ft.PopupMenuButton(
+            items=items,
+            menu_position=ft.PopupMenuPosition.UNDER,
+            enable_feedback=False,
+            padding=0, menu_padding=0,
+            tooltip=self._tooltip or "",
+            content=ft.Container(
+                height=S(32),
+                padding=ft.Padding(S(8), 0, S(8), 0),
+                tooltip=self._tooltip or "",
+                border=ft.Border(
+                    ft.BorderSide(1, ft.Colors.OUTLINE),
+                    ft.BorderSide(1, ft.Colors.OUTLINE),
+                    ft.BorderSide(1, ft.Colors.OUTLINE),
+                    ft.BorderSide(1, ft.Colors.OUTLINE),
+                ),
+                border_radius=4,
+                content=ft.Row([
+                    self._label,
+                    ft.Icon(ft.Icons.ARROW_DROP_DOWN, size=S(16)),
+                ], spacing=2, alignment=align,
+                   vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            ),
+        )
+    def set_tooltip(self, text):
+        self._tooltip = text
+        try:
+            self._build_menu()
+            self.update()
+        except RuntimeError:
+            pass
+
+    @property
+    def value(self):
+        return self._label.value
+
+    @value.setter
+    def value(self, val):
+        self._label.value = val
+        self._apply_width()
+        try:
+            self._build_menu()
+            self._label.update()
+            self.update()
+        except RuntimeError:
+            pass
+
+    @property
+    def options(self):
+        return self._options
+
+    @options.setter
+    def options(self, opts):
+        self._options = opts
+        try:
+            self._build_menu()
+            self.update()
+        except RuntimeError:
+            pass
+
+
+# Main GUI Class
+class Desktop2StereoGUI:
+    """Flet GUI for Desktop2Stereo — full equivalent of tk ConfigGUI."""
+    def __init__(self, page: ft.Page):
+        self.page = page
+        self._loop = None  # Assigned in setup()
+        # ── state ──
+        self.language = "EN"
+        self._config = {}
+        self.run_mode_key = DEFAULTS.get("Run Mode", "Local Viewer")
+        self.capture_mode_key = DEFAULTS.get("Capture Mode", "Monitor")
+        self.stream_protocol_key = DEFAULTS.get("Stream Protocol", "RTMP")
+        self.selected_window_name = ""
+        self.selected_window_handle = None
+        self.selected_window_rect = None
+        self._window_objects = []
+        self.process = None
+        self._starting = False
+        self._proc_lock = None  # Assigned in setup()
+        self.monitor_label_to_index = {}
+        self.device_label_to_index = {}
+        self._esc_down = None        # GetAsyncKeyState: ESC press timestamp
+        self._esc_stopped = False    # Prevent duplicate stop triggers
+        self._closed = False         # Window closed flag
+        self._cancel_starting = False  # Cancel pending start
+        self._stopping = False       # Prevent _async_stop reentry
+        self._labels_aligned = False  # One-shot label alignment guard
+        self._status_key = ""          # Track status for language change re-translation
+
+    # ── setup ──
+    async def setup(self):
+        _setup_console_logging()
+        # Get the correct event loop in async context
+        self._loop = asyncio.get_running_loop()
+        self._proc_lock = asyncio.Lock()
+
+        self.page.title = f"Desktop2Stereo v{VERSION}"
+        self.page.window.icon = os.path.join(os.path.dirname(__file__), "icon.ico")
+        self.page.padding = S(24)
+        self.page.horizontal_alignment = ft.CrossAxisAlignment.STRETCH
+        if OS_NAME == "Windows":
+            font = "Microsoft YaHei"
+        elif OS_NAME == "Darwin":
+            font = "PingFang SC"
+        else:
+            font = "Noto Sans SC"
+        self.page.theme = ft.Theme(color_scheme_seed="blue", font_family=font)
+        self.page.spacing = 0
+        self.page.theme_mode = ft.ThemeMode.SYSTEM
+        self.page.window.min_width = S(520)
+        self.page.window.min_height = S(300)
+
+        # Build UI
+        self.build_ui()
+        self._auto_align_labels()
+        self.page.on_close = self._on_page_close
+
+        # Populate monitors & devices
+        self.monitor_label_to_index = self.populate_monitors()
+        self.device_label_to_index = self.populate_devices()
+
+        # Load config
+        self._config = DEFAULTS.copy()
+        if os.path.exists(os.path.join(BASE_DIR, "settings.yaml")):
+            try:
+                cfg = read_yaml(os.path.join(BASE_DIR, "settings.yaml"))
+                if cfg:
+                    self._config.update(cfg)
+                    self._yaml_loaded = True
+                    self.language = self._config.get("Language", "EN")
+                    self.apply_config(self._config)
+                    self.set_status(UI_TEXTS[self.language]["Loaded settings.yaml at startup"], key="Loaded settings.yaml at startup")
+            except Exception as e:
+                self.apply_config(self._config)
+                self.set_status(f"{UI_TEXTS[self.language]['Failed to load settings.yaml:']} {e}")
+        else:
+            self.apply_config(self._config)
+
+        self.on_device_change(None)
+        self.auto_enable_optimizers_based_on_device()
+        self.page.on_keyboard_event = self._on_key
+        self._esc_task = asyncio.ensure_future(self._esc_poll_task())
+        # Calculate window size without triggering update
+        self._fit_window_to_content(update=False)
+
+        # Show window once
+        self.page.window.visible = True
+        self.page.update()
+        await asyncio.sleep(0)
+
+    def _ctrl_width(self, ctrl):
+        """Get actual width of a control, accounting for CompactDropdown min/max constraints."""
+        # CompactDropdown: estimate from current text, not stale width property
+        if hasattr(ctrl, '_calc_auto_width'):
+            auto = ctrl._calc_auto_width()
+            fixed = getattr(ctrl, '_fixed', None)
+            mn = getattr(ctrl, '_min', 0) or 0
+            mx = getattr(ctrl, '_max', 0) or 0
+            if fixed is not None:
+                return fixed
+            if mn and auto < mn:
+                return mn
+            if mx and auto > mx:
+                return mx
+            return auto
+        # Standard control width attribute
+        w = getattr(ctrl, "width", None) or 0
+        if w:
+            return w
+        if hasattr(ctrl, '_fixed') and ctrl._fixed:
+            return ctrl._fixed
+        if hasattr(ctrl, '_label'):
+            txt = ctrl._label.value or ""
+            return sum(13 if ord(ch) > 127 else 7 for ch in txt) + 34
+        # CompactTextField
+        if hasattr(ctrl, '_value'):
+            txt = str(ctrl._value or "")
+            return sum(13 if ord(ch) > 127 else 7 for ch in txt) + 34
+        # ft.Button / ft.FilledButton: extract from content.controls[0] or content.value
+        content = getattr(ctrl, "content", None)
+        if content is not None:
+            if hasattr(content, "value") and content.value:
+                txt = content.value
+            elif hasattr(content, "controls"):
+                txt = "".join(c.value for c in content.controls if hasattr(c, "value") and c.value)
+            else:
+                txt = ""
+            if txt:
+                return sum(13 if ord(ch) > 127 else 7 for ch in txt) + 40
+        # ft.Checkbox / generic: use label or value
+        txt = getattr(ctrl, "label", None) or getattr(ctrl, "value", None) or ""
+        return sum(13 if ord(ch) > 127 else 7 for ch in str(txt)) + 28
+
+    def _fit_window_to_content(self, update=True):
+        """Auto-adjust the window around the visible content."""
+        width = self._estimate_window_width()
+        self.page.window.min_width = min(width, S(520))
+        self.page.window.width = width
+        self.page.window.max_width = width
+        self.page.window.height = self._estimate_window_height()
+        if update:
+            self.page.update()
+
+    def _spacing_width(self, controls, spacing):
+        visible_count = sum(1 for ctrl in controls if self._control_has_effective_content(ctrl))
+        return max(0, visible_count - 1) * (spacing or 0)
+
+    def _estimate_control_width(self, ctrl):
+        if ctrl is None or getattr(ctrl, "visible", True) is False:
+            return 0
+        if getattr(ctrl, "expand", None) and getattr(ctrl, "width", None) is None:
+            content = getattr(ctrl, "content", None)
+            if content is None:
+                return 0
+        if isinstance(ctrl, ft.Container):
+            content = getattr(ctrl, "content", None)
+            if content is not None:
+                child_width = self._estimate_control_width(content)
+                explicit = getattr(ctrl, "width", None) or 0
+                padding = getattr(ctrl, "padding", None)
+                pad_x = 0
+                if padding is not None:
+                    pad_x = (getattr(padding, "left", 0) or 0) + (getattr(padding, "right", 0) or 0)
+                return max(explicit, child_width + pad_x)
+        if isinstance(ctrl, ft.Row):
+            controls = getattr(ctrl, "controls", []) or []
+            return sum(self._estimate_control_width(c) for c in controls) + self._spacing_width(controls, getattr(ctrl, "spacing", 0))
+        if isinstance(ctrl, ft.Column):
+            controls = getattr(ctrl, "controls", []) or []
+            return max((self._estimate_control_width(c) for c in controls), default=0)
+        return self._ctrl_width(ctrl)
+
+    def _estimate_group_width(self, container):
+        if container is None or getattr(container, "visible", True) is False:
+            return 0
+        content = getattr(container, "content", None)
+        content_width = self._estimate_control_width(content)
+        padding = getattr(container, "padding", None)
+        pad_x = 0
+        if padding is not None:
+            pad_x = (getattr(padding, "left", 0) or 0) + (getattr(padding, "right", 0) or 0)
+        border_x = 2
+        return content_width + pad_x + border_x
+
+    def _estimate_window_width(self):
+        if not getattr(self, "depth_group", None):
+            return S(696)
+        sections = [self.lang_group, self.depth_group, self.device_group]
+        widths = [self._estimate_group_width(section) for section in sections]
+        if getattr(self, "stream_container", None) and self.stream_container.visible:
+            widths.append(self._estimate_group_width(self.stream_container))
+        content_width = max(widths + [0])
+        page_padding = (getattr(self.page, "padding", 0) or 0) * 2
+        window_chrome = S(18)
+        safety_margin = S(24)
+        min_width = S(520)
+        max_width = S(1100)
+        return max(min_width, min(max_width, content_width + page_padding + window_chrome + safety_margin))
+
+    def _control_has_effective_content(self, ctrl):
+        if ctrl is None:
+            return False
+        if getattr(ctrl, "visible", True) is False:
+            return False
+        content = getattr(ctrl, "content", None)
+        if content is not None:
+            return self._control_has_effective_content(content)
+        controls = getattr(ctrl, "controls", None)
+        if controls is not None:
+            return any(self._control_has_effective_content(child) for child in controls)
+        return True
+
+    def _estimate_group_height(self, container, include_margin=True):
+        if container is None or getattr(container, "visible", True) is False:
+            return 0
+        content = getattr(container, "content", None)
+        controls = getattr(content, "controls", None)
+        if not controls:
+            return 0
+        visible_rows = sum(1 for ctrl in controls if self._control_has_effective_content(ctrl))
+        if visible_rows <= 0:
+            return 0
+        row_height = S(32)
+        row_spacing = getattr(content, "spacing", S(8)) or 0
+        padding_v = S(20)
+        border_v = 2
+        margin_v = S(8) if include_margin else 0
+        return padding_v + visible_rows * row_height + max(0, visible_rows - 1) * row_spacing + border_v + margin_v
+
+    def _estimate_window_height(self):
+        if not getattr(self, "depth_group", None):
+            return S(768)
+        scroll_spacing = getattr(getattr(self, "_scroll_area", None), "spacing", S(8)) or 0
+        visible_sections = []
+        for section in [self.lang_group, self.depth_group, self.device_group]:
+            if section is not None and getattr(section, "visible", True):
+                visible_sections.append(section)
+        scroll_height = sum(self._estimate_group_height(section) for section in visible_sections)
+        if getattr(self, "stream_container", None) and self.stream_container.visible:
+            scroll_height += scroll_spacing
+            scroll_height += self._estimate_group_height(self.stream_container, include_margin=False)
+        page_padding = (getattr(self.page, "padding", 0) or 0) * 2
+        footer_height = S(112)
+        window_chrome = S(42)
+        safety_margin = S(8)
+        min_height = S(680)
+        max_height = S(1008)
+        estimated = scroll_height + footer_height + page_padding + window_chrome + safety_margin
+        return max(min_height, min(max_height, estimated))
+
+    # Build UI — grid-aligned, matching original GUI
+
+    def _auto_align_labels(self, force=False):
+        """Auto-detect longest label text and unify label widths for grid alignment."""
+        if self._labels_aligned and not force:
+            return
+        left_labels = [
+            self.r0_label, self.r1a_label, self.r2a_label, self.r3a_label,
+            self.r4_label, self.r5_label, self.r6_label, self.target_fps_label,
+            self.upscaler_label, self.r7a_label, self.r9_label, self.r10_label,
+            self.lang_label,
+            self.stream_url_label, self.stream_port_label,
+            self.stream_proto_label, self.audio_label, self.crf_label,
+        ]
+        right_labels = [
+            self.r1b_label, self.r2b_label, self.r3b_label,
+            self.upscaler_sharpness_label, self.r7b_label, self.r10b_label, self.theme_label,
+            self.stream_quality_label, self.stream_key_label, self.audio_delay_label,
+        ]
+
+        def _est(t):
+            return sum(S(12) if ord(c) > 127 else S(7) for c in t)
+
+        all_labels = left_labels + right_labels
+        max_w = max(_est(lbl.value) for lbl in all_labels)
+        final_w = int(max_w * 1.15) + S(10)
+
+        for lbl in all_labels:
+            lbl.width = final_w
+
+        self._label_max_width = final_w
+        global LABEL_ALIGN_WIDTH
+        LABEL_ALIGN_WIDTH = final_w
+        for inst in getattr(self, '_dropdowns', []):
+            inst.reapply_width()
+        if hasattr(self, '_row8_spacer'):
+            capture_mode_w = self._ctrl_width(self.capture_mode_dd)
+            self._row8_spacer.width = max(0, final_w - capture_mode_w - 1)
+            try:
+                self._row8_spacer.update()
+            except RuntimeError:
+                pass
+        if hasattr(self, '_accel_spacer'):
+            self._accel_spacer.width = final_w
+            try:
+                self._accel_spacer.update()
+            except RuntimeError:
+                pass
+        self._labels_aligned = True
+
+    def build_ui(self):
+        page = self.page
+        page.controls.clear()
+        self._dropdowns = []
+        CompactDropdown._instances = self._dropdowns
+
+        # Row 1: Depth model
+        self.r0_label = ft.Text("Depth Model:", size=FONT_SIZE, width=S(130))
+        default_family, default_size = parse_model_name(DEFAULT_MODEL_LIST[0]) if DEFAULT_MODEL_LIST else ("", "")
+        self.depth_model_dd = CompactDropdown(
+            options=[f for f in DEFAULT_FAMILIES],
+            value=default_family,
+            on_select=self.on_model_family_change,
+            min_width=S(200), max_width=S(300))
+        self.model_size_dd = CompactDropdown(
+            options=FAMILY_TO_SIZES.get(default_family, []),
+            value=default_size,
+            on_select=self.on_model_size_change,
+            width=S(110))
+        self.fp16_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="FP16")
+        row0 = ft.Row([
+            self.r0_label,
+            self.depth_model_dd,
+            ft.Container(width=S(8)),
+            self.model_size_dd,
+        ], spacing=1)
+
+        # Row 2: Depth resolution + Convergence
+        self.r1a_label = ft.Text("Depth Resolution:", size=FONT_SIZE, width=S(130))
+        self.depth_res_dd = CompactDropdown(options=[], width=S(130))
+        self.r1b_label = ft.Text("Convergence:", size=FONT_SIZE, width=S(130))
+        conv_options = [str(i / 4) for i in range(-2, 5)]
+        self.convergence_dd = CompactDropdown(width=S(130),
+            options=[v for v in conv_options],
+            value="0.0")
+        row1 = ft.Row([
+            self.r1a_label,
+            self.depth_res_dd,
+            ft.Container(width=S(40)),
+            self.r1b_label,
+            self.convergence_dd
+        ], spacing=1)
+
+        # Row 3: Depth strength + Foreground scale
+        self.r2a_label = ft.Text("Depth Strength:", size=FONT_SIZE, width=S(130))
+        ds_options = [f"{i / 2:.1f}" for i in range(21)]
+        self.depth_strength_dd = CompactDropdown(width=S(130),
+            options=[v for v in ds_options],
+            value="2.0")
+        self.r2b_label = ft.Text("Foreground Scale:", size=FONT_SIZE, width=S(130))
+        fg_options = [f"{i / 2:.1f}" for i in range(-10, 11)]
+        self.foreground_scale_dd = CompactDropdown(width=S(130),
+            options=[v for v in fg_options],
+            value="0.5")
+        row2 = ft.Row([
+            self.r2a_label,
+            self.depth_strength_dd,
+            ft.Container(width=S(40)),
+            self.r2b_label,
+            self.foreground_scale_dd
+        ], spacing=1)
+
+        # Row 4: Anti-aliasing + IPD
+        self.r3a_label = ft.Text("Anti-aliasing:", size=FONT_SIZE, width=S(130))
+        aa_options = [str(i) for i in range(11)]
+        self.antialiasing_dd = CompactDropdown(width=S(130), 
+            options=[v for v in aa_options],
+            value="2")
+        self.r3b_label = ft.Text("IPD (mm):", size=FONT_SIZE, width=S(130))
+        self.ipd_dd = CompactDropdown(options=[str(i) for i in range(58, 71)], value="64", width=S(130))
+        row3 = ft.Row([
+            self.r3a_label,
+            self.antialiasing_dd,
+            ft.Container(width=S(40)),
+            self.r3b_label,
+            self.ipd_dd
+        ], spacing=1)
+
+        # Row 5: Acceleration group (two rows, 4 columns each)
+        self.r4_label = ft.Text("Acceleration:", size=FONT_SIZE, width=S(130))
+        self.torch_compile_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="torch.compile")
+        self.tensorrt_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="TensorRT", on_change=self._on_trt_toggle)
+        self.coreml_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="CoreML", on_change=self._on_coreml_toggle)
+        self.openvino_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="OpenVINO", on_change=self._on_openvino_toggle)
+        self.recompile_trt_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="Recompile TensorRT")
+        self.recompile_coreml_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="Recompile CoreML")
+        self.recompile_openvino_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="Recompile OpenVINO")
+        accel_row1 = ft.Row([self.fp16_cb, self.torch_compile_cb, self.coreml_cb, self.recompile_coreml_cb], spacing=S(20))
+        accel_row2 = ft.Row([self.tensorrt_cb, self.recompile_trt_cb, self.openvino_cb, self.recompile_openvino_cb], spacing=S(20))
+        self._accel_spacer = ft.Container(width=0)
+        self.row4a = ft.Row([
+            self.r4_label,
+            accel_row1,
+        ], spacing=1)
+        self.row4b = ft.Row([
+            self._accel_spacer,
+            accel_row2,
+        ], spacing=1)
+
+        # Row 6: Computing device
+        self.r5_label = ft.Text("Computing Device:", size=FONT_SIZE, width=S(130))
+        device_names = [v["name"] for v in DEVICES.values()]
+        self.device_dd = CompactDropdown(
+            options=[n for n in device_names],
+            on_select=self.on_device_change,
+            min_width=S(180))
+        self.showfps_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="Show FPS")
+        self.local_vsync_cb = ft.Checkbox(
+            scale=SCALE,
+            visual_density=ft.VisualDensity.COMPACT,
+            label="Local VSync",
+            value=DEFAULTS.get("Local VSync", True),
+        )
+        self.target_fps_label = ft.Text("Capture FPS:", size=FONT_SIZE, width=S(130))
+        self.target_fps_dd = CompactDropdown(
+            options=["Auto", "60", "72", "80", "90", "120"],
+            value="Auto",
+            width=S(74),
+        )
+        row5 = ft.Row([
+            self.r5_label,
+            self.device_dd
+        ], spacing=1)
+
+        # Row 7: Capture tool
+        self.r6_label = ft.Text("Capture Tool:", size=FONT_SIZE, width=S(130))
+        ct_options = _get_capture_tool_options(DEVICES.get(0, {}).get("name", ""))
+        self.capture_tool_dd = CompactDropdown(
+            options=[o for o in ct_options],
+            on_select=self.on_capture_tool_change,
+            min_width=S(160))
+        row6 = ft.Row([
+            self.r6_label,
+            self.capture_tool_dd,
+            ft.Container(width=S(15)),
+            self.showfps_cb,
+        ], spacing=1)
+        self.row6b = ft.Row([
+            self.target_fps_label,
+            self.target_fps_dd,
+            ft.Container(width=S(20)),
+            self.local_vsync_cb,
+        ], spacing=1)
+        self.upscaler_label = ft.Text("Upscaler:", size=FONT_SIZE, width=S(130))
+        self.upscaler_dd = CompactDropdown(
+            options=["Off", "FSR1"],
+            value="Off",
+            width=S(90),
+        )
+        self.upscaler_sharpness_label = ft.Text("Sharpness:", size=FONT_SIZE, width=S(130))
+        self.upscaler_sharpness_dd = CompactDropdown(
+            options=["0.00", "0.25", "0.35", "0.50", "0.75", "1.00"],
+            value="0.35",
+            width=S(74),
+        )
+        self.row6c = ft.Row([
+            self.upscaler_label,
+            self.upscaler_dd,
+            ft.Container(width=S(20)),
+            self.upscaler_sharpness_label,
+            self.upscaler_sharpness_dd,
+        ], spacing=1)
+        if OS_NAME == "Linux":
+            self.r6_label.visible = False
+            self.capture_tool_dd.visible = False
+
+        # Row 8: Run mode + Display mode / Controller
+        self.r7a_label = ft.Text("Run Mode:", size=FONT_SIZE, width=S(130))
+        self.run_mode_dd = CompactDropdown(on_select=self.on_run_mode_change, width=S(130))
+        self.r7b_label = ft.Text("Display Mode:", size=FONT_SIZE, width=S(130))
+        self.display_mode_dd = CompactDropdown(
+            options=[m for m in ["Half-SBS", "Full-SBS", "Half-TAB", "Full-TAB", "Depth Map", "Anaglyph", "Interleaved", "Mono", "Leia"]],
+            value="Half-SBS", width=S(130))
+        self.xr_preview_cb = ft.Checkbox(
+            label="XR Preview Window",
+            value=DEFAULTS.get("XR Preview Window", True),
+        )
+        self.r10_label = ft.Text("Controller:", size=FONT_SIZE, width=S(130))
+        try:
+            ctrl_base = os.path.join(os.path.dirname(__file__), "controllers")
+            ctrl_dirs = [d for d in os.listdir(ctrl_base) if os.path.isdir(os.path.join(ctrl_base, d))]
+        except (FileNotFoundError, OSError):
+            ctrl_dirs = []
+        if not ctrl_dirs:
+            ctrl_dirs = ["PICO"]
+        self.ctrl_model_dd = CompactDropdown(
+            options=[c for c in ctrl_dirs],
+            value="PICO", width=S(130))
+        self.r10b_label = ft.Text("Environment:", size=FONT_SIZE, width=S(130))
+        env_dirs = get_environment_model_options()
+        self.env_model_dd = CompactDropdown(
+            options=[e for e in env_dirs],
+            value="None" if "None" in env_dirs else env_dirs[0],
+            width=S(130))
+        self.row7a = ft.Row([
+            self.r7a_label,
+            self.run_mode_dd,
+            ft.Container(width=S(40)),
+            self.r7b_label,
+            self.display_mode_dd,
+            self.xr_preview_cb
+        ], spacing=1)
+        self.row7b = ft.Row([
+            self.r10_label,
+            self.ctrl_model_dd,
+            ft.Container(width=S(40)),
+            self.r10b_label,
+            self.env_model_dd
+        ], spacing=1)
+
+        # Row 9: Input monitor/window + Refresh
+        self.capture_mode_dd = CompactDropdown(
+            options=["Monitor",
+                     "Window"],
+            value="Monitor", on_select=self.on_capture_mode_change,
+            dyna_width=True)
+        self.monitor_dd = CompactDropdown(on_select=self._on_monitor_change, max_width=S(300))
+        self.window_dd = CompactDropdown(on_select=self.on_window_selected, max_width=S(300))
+        self.refresh_btn = ft.Button(content=ft.Text("Refresh", size=FONT_SIZE), width=S(130), on_click=self.refresh_monitor_and_window)
+        self._row8_spacer = ft.Container(width=S(60))
+        row8 = ft.Row([
+            self.capture_mode_dd,
+            self._row8_spacer,
+            self.monitor_dd,
+            self.window_dd,
+            ft.Container(width=S(8)),
+            ft.Container(expand=True),
+            self.refresh_btn
+        ], spacing=1)
+
+        # Row 10: Stereo output + checkboxes
+        self.r9_label = ft.Text("Stereo Output:", size=FONT_SIZE, width=S(130))
+        self.stereo_monitor_dd = CompactDropdown(options=[], on_select=lambda e: self._fit_window_to_content())
+        self.fill_16_9_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="Fill 16:9")
+        self.fix_aspect_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="Fix Viewer Aspect")
+        self.lossless_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="LSFG")
+        self._stereo_spacer = ft.Container(width=S(10))
+        self.row9 = ft.Row([
+            self.r9_label,
+            self.stereo_monitor_dd,
+            self._stereo_spacer,
+            ft.Row([self.fill_16_9_cb, self.fix_aspect_cb, self.lossless_cb], spacing=S(20)),
+        ], spacing=1)
+
+        # Bottom: Language + Theme + Buttons
+        self.lang_label = ft.Text("Set Language:", size=FONT_SIZE, width=S(130))
+        self.lang_dd = CompactDropdown(
+            options=["English", "简体中文"],
+            value="English", on_select=self.on_language_change,
+            width=S(130))
+        self.theme_label = ft.Text("Theme:", size=FONT_SIZE, width=S(130))
+        self.theme_dd = CompactDropdown(
+            options=["system", "blue", "green", "red", "purple", "orange", "teal", "pink", "grey"],
+            value="system", on_select=self.on_theme_change,
+            width=S(130))
+        self.reset_btn = ft.Button(content=ft.Text("Reset", size=FONT_SIZE), width=S(130), on_click=self.reset_defaults)
+        self.stop_btn = ft.Button(content=ft.Text("Stop", size=FONT_SIZE), width=S(130), on_click=self.stop_process)
+        self.run_btn = ft.Button(content=ft.Text("Run", size=FONT_SIZE), width=S(150), on_click=self.save_and_run)
+        lang_row = ft.Row([
+            self.lang_label,
+            self.lang_dd,
+            ft.Container(width=S(40)),
+            self.theme_label,
+            self.theme_dd,
+        ], spacing=1)
+
+        self.status_text = ft.Text("", italic=True, size=FONT_SIZE)
+
+        # ========== Assembly ==========
+        depth_group = ft.Container(
+            ft.Column([row0, row1, row2, row3, self.row4a, self.row4b], spacing=S(8)),
+            margin=ft.Margin(0, 0, 0, S(8)),
+            border=ft.Border(ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE)),
+            border_radius=6, padding=ft.Padding(S(16), S(10), S(16), S(10)),
+        )
+        device_group = ft.Container(
+            ft.Column([row5, row6, self.row6b, self.row7a, self.row7b, row8, self.row6c, self.row9], spacing=S(8)),
+            margin=ft.Margin(0, 0, 0, S(8)),
+            border=ft.Border(ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE)),
+            border_radius=6, padding=ft.Padding(S(16), S(10), S(16), S(10)),
+        )
+        lang_group = ft.Container(
+            ft.Column([lang_row], spacing=S(8)),
+            margin=ft.Margin(0, 0, 0, S(8)),
+            border=ft.Border(ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE)),
+            border_radius=6, padding=ft.Padding(S(16), S(10), S(16), S(10)),
+        )
+        self.lang_group = lang_group
+        self.depth_group = depth_group
+        self.device_group = device_group
+        self._build_streamer_rows()
+
+        scroll_area = ft.Column([
+            self.lang_group,
+            self.depth_group,
+            self.device_group,
+            self.stream_container,
+        ], scroll=ft.ScrollMode.AUTO, expand=False, tight=True, spacing=S(8))
+
+        btn_row = ft.Row([
+            self.reset_btn,
+            ft.Container(expand=True),
+            ft.Row([self.stop_btn, self.run_btn], spacing=S(20)),
+        ])
+
+        self._btn_bar = ft.Container(content=btn_row)
+        self._status_bar = ft.Row([
+            ft.Container(
+                content=self.status_text,
+                bgcolor=ft.Colors.SURFACE_CONTAINER,
+                border_radius=0, padding=ft.Padding(S(8), S(4), S(8), S(4)),
+                expand=True,
+            )
+        ])
+
+        footer = ft.Container(
+            ft.Column([self._btn_bar, self._status_bar], spacing=S(16)),
+            padding=ft.Padding(0, S(18), 0, 0),
+        )
+
+        self._scroll_area = scroll_area
+        self._footer = footer
+
+        root = ft.Column([scroll_area, footer], expand=False, tight=True, spacing=0)
+        page.add(root)
+
+    # All event/logic methods below preserve original behavior
+    def _build_streamer_rows(self):
+        self.stream_url_label = ft.Text("Stream URL:", size=FONT_SIZE, width=S(150))
+        self.stream_url_tf = ft.Container(
+            content=ft.Row([ft.Text("", size=FONT_SIZE)], vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            height=S(32), padding=ft.Padding(S(8), 0, S(8), 0), expand=True,
+            border=ft.Border(ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE)),
+            border_radius=4, on_click=self.copy_url_to_clipboard,
+        )
+        self.preview_btn = ft.Button(content=ft.Text("Preview", size=FONT_SIZE), width=S(130), on_click=self.preview_in_browser)
+        self.stream_url_row = ft.Row(
+            [self.stream_url_label, self.stream_url_tf, ft.Container(width=S(10)), self.preview_btn],
+            spacing=2,
+        )
+        self.stream_port_label = ft.Text("Streamer Port:", size=FONT_SIZE, width=S(150))
+        self.stream_port_tf = CompactTextField(value=str(DEFAULT_PORT), width=S(130), on_change=self.update_stream_url, filter=r"[0-9]", max_length=5)
+        self.stream_quality_label = ft.Text("Stream Quality:", size=FONT_SIZE)
+        qual_vals = [str(i) for i in range(100, 49, -5)]
+        self.stream_quality_dd = CompactDropdown(width=S(130),
+            options=[q for q in qual_vals], value="100")
+        self.stream_port_quality_row = ft.Row(
+            [self.stream_port_label, self.stream_port_tf, ft.Container(width=S(40)), self.stream_quality_label, self.stream_quality_dd],
+            spacing=1,
+        )
+        self.stream_proto_label = ft.Text("Stream Protocol:", size=FONT_SIZE, width=S(150))
+        self.stream_proto_dd = CompactDropdown(width=S(130),
+            options=[p for p in ["RTMP", "RTSP", "HLS", "HLS M3U8", "WebRTC"]],
+            value="HLS", on_select=self._on_stream_protocol_change)
+        self.stream_key_label = ft.Text("Stream Key:", size=FONT_SIZE, width=S(130))
+        self.stream_key_tf = CompactTextField(value="live", width=S(130), on_change=self._on_stream_key_change)
+        self.stream_proto_row = ft.Row([self.stream_proto_label, self.stream_proto_dd, ft.Container(width=S(40)), self.stream_key_label, self.stream_key_tf], spacing=1)
+        self.audio_label = ft.Text("Stereo Mix:", size=FONT_SIZE, width=S(150))
+        self.audio_dd = CompactDropdown(options=[], min_width=S(130))
+        self.audio_row = ft.Row([self.audio_label, self.audio_dd], spacing=1)
+        self.crf_label = ft.Text("CRF:", size=FONT_SIZE, width=S(150))
+        self.crf_tf = CompactTextField(value="20", width=S(130), filter=r"[0-9]", max_length=2)
+        self.audio_delay_label = ft.Text("Audio Delay (s):", size=FONT_SIZE, width=S(130))
+        self.audio_delay_tf = CompactTextField(value="-0.15", width=S(130), filter=r"[0-9\-\.]", max_length=6)
+        self.crf_row = ft.Row([self.crf_label, self.crf_tf, ft.Container(width=S(40)), self.audio_delay_label, self.audio_delay_tf], spacing=1)
+        self._streamer_rows = [
+            self.stream_url_row,
+            self.stream_port_quality_row,
+            self.stream_proto_row,
+            self.crf_row,
+            self.audio_row,
+        ]
+        self.stream_container = ft.Container(
+            ft.Column([], spacing=S(8)),
+            visible=False, padding=ft.Padding(S(16), S(10), S(16), S(10)),
+            border=ft.Border(ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE)),
+            border_radius=6,
+        )
+
+    def _show_streamer_rows(self, *row_indices):
+        col = self.stream_container.content.controls
+        col.clear()
+        for i in row_indices:
+            if 0 <= i < len(self._streamer_rows):
+                col.append(self._streamer_rows[i])
+        self.stream_container.visible = bool(row_indices)
+        self.stream_container.update()
+        self._fit_window_to_content()
+
+    def _get_streamer_row_map(self):
+        return {
+            "Local Viewer": [],
+            "3D Monitor": [],
+            "OpenXR Link": [],
+            "MJPEG Streamer": [0, 1],
+            "Legacy Streamer": [0, 1],
+            "RTMP Streamer": [0, 1, 2, 3, 4],
+        }
+
+    def populate_monitors(self):
+        self.monitor_label_to_index = {}
+        monitors = []
+        try:
+            import mss
+            with mss.mss() as sct:
+                monitors = sct.monitors[1:]
+        except Exception:
+            monitors = []
+        if not monitors:
+            self.monitor_dd.options = []
+            self.monitor_dd.update()
+            return {}
+        primary_index = get_primary_monitor_index()
+        if primary_index < 1 or primary_index > len(monitors):
+            primary_index = 1
+        current_val = self.monitor_dd.value if hasattr(self, 'monitor_dd') else ""
+        found = False
+        opts = []
+        for idx, mon in enumerate(monitors, start=1):
+            is_primary = idx == primary_index
+            suffix = PRIMARY_MONITOR_SUFFIX if is_primary else ""
+            label = f"{idx}: {mon['width']}x{mon['height']} @ ({mon['left']},{mon['top']}){suffix}"
+            self.monitor_label_to_index[label] = idx
+            opts.append(label)
+            if label == current_val:
+                found = True
+        self.monitor_dd.options = opts
+        if found:
+            self.monitor_dd.value = current_val
+        else:
+            primary_label = next((lbl for lbl, i in self.monitor_label_to_index.items() if i == primary_index), None)
+            self.monitor_dd.value = primary_label or (list(self.monitor_label_to_index.keys())[0] if self.monitor_label_to_index else "")
+        self.monitor_dd.update()
+        self.update_stereo_monitor_menu()
+        self._fit_window_to_content()
+        return self.monitor_label_to_index
+
+    def populate_devices(self):
+        self.device_label_to_index = {}
+        device_dict = DEVICES
+        opts = []
+        for idx, dev_info in device_dict.items():
+            label = dev_info["name"]
+            self.device_label_to_index[label] = idx
+            opts.append(label)
+        self.device_dd.options = opts
+        default_idx = DEFAULTS.get("Computing Device", 0)
+        default_label = next((lbl for lbl, i in self.device_label_to_index.items() if i == default_idx), None)
+        self.device_dd.value = default_label or (opts[0] if opts else "")
+        self.device_dd.update()
+        return self.device_label_to_index
+
+    def _upscaler_display_options(self):
+        t = UI_TEXTS[self.language]
+        return [t.get("Auto", "Auto"), t.get("Off", "Off"), "FSR1"]
+
+    def _upscaler_to_display(self, value):
+        value_l = str(value or "").strip().lower()
+        if value_l == "fsr1":
+            return "FSR1"
+        if value_l in ("auto", "自动"):
+            return UI_TEXTS[self.language].get("Auto", "Auto")
+        return UI_TEXTS[self.language].get("Off", "Off")
+
+    def _upscaler_from_display(self, value):
+        value_l = str(value or "").strip().lower()
+        if value_l == "fsr1":
+            return "FSR1"
+        if value_l in ("auto", "自动"):
+            return "Auto"
+        return "Off"
+
+    def apply_config(self, cfg, keep_optional=True):
+        self._config = cfg.copy()
+        current_primary = get_primary_monitor_index()
+        mon_idx = cfg.get("Monitor Index", DEFAULTS["Monitor Index"])
+        label = next((lbl for lbl, i in self.monitor_label_to_index.items() if i == mon_idx), None)
+        if label:
+            self.monitor_dd.value = label
+        elif self.monitor_label_to_index:
+            primary_label = next((lbl for lbl, i in self.monitor_label_to_index.items() if i == current_primary), None)
+            self.monitor_dd.value = primary_label or next(iter(self.monitor_label_to_index))
+        self.selected_window_name = cfg.get("Window Title", "")
+        self.selected_window_handle = None
+        self.selected_window_rect = None
+        if keep_optional and self.capture_mode_key == "Window":
+            self.refresh_window_list()
+            dev_idx = cfg.get("Computing Device", DEFAULTS["Computing Device"])
+            dev_label = next((lbl for lbl, i in self.device_label_to_index.items() if i == dev_idx), None)
+            if dev_label:
+                self.device_dd.value = dev_label
+        model_list = DEFAULT_MODEL_LIST
+        selected_model = cfg.get("Depth Model", DEFAULTS["Depth Model"])
+        if selected_model not in model_list:
+            selected_model = model_list[0] if model_list else DEFAULTS["Depth Model"]
+        family, size = parse_model_name(selected_model)
+        if family not in DEFAULT_FAMILIES:
+            family = DEFAULT_FAMILIES[0] if DEFAULT_FAMILIES else ""
+        self.depth_model_dd.options = [f for f in DEFAULT_FAMILIES]
+        self.depth_model_dd.value = family
+        avail_sizes = FAMILY_TO_SIZES.get(family, [])
+        self.model_size_dd.options = [s for s in avail_sizes]
+        if size in avail_sizes:
+            self.model_size_dd.value = size
+        elif avail_sizes:
+            self.model_size_dd.value = avail_sizes[0]
+        else:
+            self.model_size_dd.value = ""
+        self.depth_res_dd.value = str(cfg.get("Depth Resolution", DEFAULTS["Depth Resolution"]))
+        self.update_depth_resolution_options(self.current_model_name)
+        self.depth_strength_dd.value = str(cfg.get("Depth Strength", DEFAULTS["Depth Strength"]))
+        self.display_mode_dd.value = cfg.get("Display Mode", DEFAULTS["Display Mode"])
+        self.xr_preview_cb.value = cfg.get("XR Preview Window", DEFAULTS["XR Preview Window"])
+        self.local_vsync_cb.value = cfg.get("Local VSync", DEFAULTS["Local VSync"])
+        self.upscaler_dd.options = self._upscaler_display_options()
+        self.upscaler_dd.value = self._upscaler_to_display(cfg.get("Upscaler", DEFAULTS["Upscaler"]))
+        self.upscaler_sharpness_dd.value = f'{self._parse_float(cfg.get("Upscaler Sharpness", DEFAULTS["Upscaler Sharpness"]), DEFAULTS["Upscaler Sharpness"]):.2f}'
+        target_fps = self._parse_int(cfg.get("Target FPS", DEFAULTS["Target FPS"]), DEFAULTS["Target FPS"])
+        self.target_fps_dd.value = str(target_fps) if target_fps > 0 else "Auto"
+        self.antialiasing_dd.value = str(cfg.get("Anti-aliasing", DEFAULTS["Anti-aliasing"]))
+        self.foreground_scale_dd.value = str(cfg.get("Foreground Scale", DEFAULTS["Foreground Scale"]))
+        self.convergence_dd.value = str(cfg.get("Convergence", DEFAULTS["Convergence"]))
+        ipd_m = cfg.get("IPD", DEFAULTS["IPD"])
+        self.ipd_dd.value = str(int(ipd_m * 1000))
+        self.fp16_cb.value = cfg.get("FP16", DEFAULTS["FP16"])
+        self.showfps_cb.value = cfg.get("Show FPS", DEFAULTS["Show FPS"])
+        self.fill_16_9_cb.value = cfg.get("Fill 16:9", DEFAULTS["Fill 16:9"])
+        self.fix_aspect_cb.value = cfg.get("Fix Viewer Aspect", DEFAULTS["Fix Viewer Aspect"])
+        self.lossless_cb.value = cfg.get("Lossless Scaling Support", DEFAULTS["Lossless Scaling Support"])
+        if keep_optional:
+            self.language = cfg.get("Language", DEFAULTS["Language"])
+            self.lang_dd.value = "English" if self.language == "EN" else "简体中文"
+        
+        saved_ctrl = cfg.get("Controller Model", DEFAULTS.get("Controller Model", "PICO"))
+        self.ctrl_model_dd.value = saved_ctrl if saved_ctrl in self.ctrl_model_dd.options else "PICO"
+        saved_env = cfg.get("Environment Model", DEFAULTS.get("Environment Model", "Default"))
+        self.env_model_dd.value = saved_env if saved_env in self.env_model_dd.options else self.env_model_dd.options[0]
+        self.torch_compile_cb.value = cfg.get("torch.compile", False)
+        self.tensorrt_cb.value = cfg.get("TensorRT", False)
+        self.recompile_trt_cb.value = cfg.get("Recompile TensorRT", DEFAULTS["Recompile TensorRT"])
+        self.coreml_cb.value = cfg.get("CoreML", False)
+        self.recompile_coreml_cb.value = cfg.get("Recompile CoreML", DEFAULTS["Recompile CoreML"])
+        self.openvino_cb.value = cfg.get("OpenVINO", False)
+        self.recompile_openvino_cb.value = cfg.get("Recompile OpenVINO", DEFAULTS["Recompile OpenVINO"])
+        self.recompile_trt_cb.visible = self.tensorrt_cb.value and self.tensorrt_cb.visible
+        self.recompile_coreml_cb.visible = self.coreml_cb.value and self.coreml_cb.visible
+        self.recompile_openvino_cb.visible = self.openvino_cb.value and self.openvino_cb.visible
+                # Capture tool
+        ct = cfg.get("Capture Tool", DEFAULTS["Capture Tool"])
+        self.capture_tool_dd.value = ct if ct in self.capture_tool_dd.options else (self.capture_tool_dd.options[0] if self.capture_tool_dd.options else '')
+        # Run mode
+        if keep_optional:
+            run_mode = cfg.get("Run Mode", DEFAULTS.get("Run Mode", "Local Viewer"))
+            if run_mode == "3D Monitor" and OS_NAME != "Windows":
+                run_mode = "Local Viewer"
+            if run_mode == "OpenXR Link" and OS_NAME == "Darwin":
+                run_mode = "Local Viewer"
+            self.run_mode_key = run_mode
+        self.stream_protocol_key = cfg.get("Stream Protocol", DEFAULTS.get("Stream Protocol", "RTMP"))
+        self.stream_proto_dd.value = self.stream_protocol_key
+        self.stream_port_tf.value = str(cfg.get("Streamer Port", DEFAULTS.get("Streamer Port", DEFAULT_PORT)))
+        self.stream_quality_dd.value = str(cfg.get("Stream Quality", DEFAULTS["Stream Quality"]))
+        self.stream_key_tf.value = cfg.get("Stream Key", DEFAULTS["Stream Key"])
+        self.audio_dd.value = cfg.get("Stereo Mix", "")
+        self.crf_tf.value = str(cfg.get("CRF", DEFAULTS["CRF"]))
+        self.audio_delay_tf.value = str(cfg.get("Audio Delay", DEFAULTS["Audio Delay"]))
+        self.capture_mode_key = cfg.get("Capture Mode", DEFAULTS["Capture Mode"])
+        cm_t = UI_TEXTS[self.language]
+        self.capture_mode_dd.value = cm_t["Monitor"] if self.capture_mode_key == "Monitor" else cm_t["Window"]
+        self._sync_capture_mode_visibility()
+        self._apply_stereo_output(cfg)
+        self.update_tensorrt_visibility_based_on_model(selected_model)
+        self.update_coreml_visibility_based_on_model(selected_model)
+        self.update_openvino_visibility_based_on_model(selected_model)
+        self.update_ui_texts()
+        self._sync_visibility()
+        self.update_stream_url()
+        self.on_device_change(None)
+        self.on_capture_tool_change(None)
+
+    def _apply_stereo_output(self, cfg):
+        mon_count = self._get_monitor_count()
+        if mon_count <= 1:
+            self.stereo_monitor_dd.value = "Viewer Window"
+            return
+        saved = cfg.get("Stereo Output")
+        input_label = self.monitor_dd.value if self.capture_mode_key == "Monitor" else None
+        if saved is not None:
+            label = next((lbl for lbl, i in self.monitor_label_to_index.items() if i == saved), None)
+            if label and label != input_label:
+                self.stereo_monitor_dd.value = label
+                return
+        fallback = None
+        for lbl in self.monitor_label_to_index:
+            if lbl != input_label:
+                fallback = lbl
+                break
+        self.stereo_monitor_dd.value = fallback if fallback else "Viewer Window"
+
+    def _get_monitor_count(self):
+        try:
+            import mss
+            with mss.mss() as sct:
+                return len(sct.monitors) - 1
+        except Exception:
+            return 0
+
+    def update_stereo_monitor_menu(self):
+        if not hasattr(self, 'stereo_monitor_dd'):
+            return
+        input_label = self.monitor_dd.value if self.capture_mode_key == "Monitor" else None
+        opts = ["Viewer Window"]
+        for label in self.monitor_label_to_index:
+            if label != input_label:
+                opts.append(label)
+        current = self.stereo_monitor_dd.value
+        valid = current in opts
+        self.stereo_monitor_dd.options = opts
+        if not valid:
+            self.stereo_monitor_dd.value = opts[0] if opts else "Viewer Window"
+        self.stereo_monitor_dd.update()
+
+    def update_depth_resolution_options(self, model_name):
+        resolutions = ALL_MODELS.get(model_name, {}).get("resolutions", [322])
+        self.depth_res_dd.options = [str(r) for r in resolutions]
+        cur = self.depth_res_dd.value
+        if cur and cur in [str(r) for r in resolutions]:
+            return
+        try:
+            cur_num = int(cur) if cur else 0
+            closest = min(resolutions, key=lambda x: abs(x - cur_num))
+            self.depth_res_dd.value = str(closest)
+        except (ValueError, TypeError):
+            self.depth_res_dd.value = str(resolutions[0])
+        self.depth_res_dd.update()
+
+    @property
+    def current_model_name(self):
+        family = self.depth_model_dd.value
+        size = self.model_size_dd.value
+        return FAMILY_SIZE_TO_MODEL.get((family, size), family if not size else f"{family}-{size}")
+
+    def on_model_family_change(self, e):
+        family = e.control.value
+        sizes = FAMILY_TO_SIZES.get(family, [])
+        self.model_size_dd.options = [s for s in sizes]
+        if sizes:
+            self.model_size_dd.value = sizes[0]
+        else:
+            self.model_size_dd.value = ""
+        self.model_size_dd.update()
+        self._on_model_changed()
+
+    def on_model_size_change(self, e):
+        self._on_model_changed()
+
+    def _on_model_changed(self):
+        model = self.current_model_name
+        self._config["Depth Model"] = model
+        self.update_depth_resolution_options(model)
+        self.auto_enable_optimizers_based_on_device()
+        if not IS_ROCM and "CUDA" in self.device_dd.value:
+            self.update_tensorrt_visibility_based_on_model(model)
+        elif "MPS" in self.device_dd.value:
+            self.update_coreml_visibility_based_on_model(model)
+        elif "XPU" in self.device_dd.value:
+            self.update_openvino_visibility_based_on_model(model)
+        self._fit_window_to_content()
+
+    def on_device_change(self, e):
+        device_label = e.control.value if e else self.device_dd.value
+        self._config["Computing Device"] = self.device_label_to_index.get(device_label, 0)
+        if OS_NAME in ("Windows", "Darwin"):
+            new_opts = _get_capture_tool_options(device_label)
+            self.capture_tool_dd.options = [o for o in new_opts]
+            if self.capture_tool_dd.value not in new_opts:
+                self.capture_tool_dd.value = new_opts[0]
+            self.capture_tool_dd.update()
+        self._update_accelerator_visibility(device_label)
+        self._fit_window_to_content()
+
+    def _update_accelerator_visibility(self, device_label):
+        cuda = "CUDA" in device_label
+        dml = "DirectML" in device_label
+        mps = "MPS" in device_label
+        xpu = "XPU" in device_label
+        other = not (cuda or dml or mps or xpu)
+        self.torch_compile_cb.visible = cuda
+        self.tensorrt_cb.visible = cuda and not IS_ROCM
+        self.tensorrt_cb.disabled = False
+        self.recompile_trt_cb.visible = self.tensorrt_cb.value if self.tensorrt_cb.visible else False
+        self.coreml_cb.visible = mps
+        self.coreml_cb.disabled = False
+        self.recompile_coreml_cb.visible = self.coreml_cb.value if self.coreml_cb.visible else False
+        self.openvino_cb.visible = xpu
+        self.openvino_cb.disabled = False
+        self.recompile_openvino_cb.visible = self.openvino_cb.value if self.openvino_cb.visible else False
+        self.fp16_cb.visible = not (dml or mps)
+        self.r4_label.visible = not (dml or other)
+        is_windows_or_mac = OS_NAME in ("Windows", "Darwin")
+        self.r6_label.visible = is_windows_or_mac
+        self.capture_tool_dd.visible = is_windows_or_mac
+        if dml or other:
+            self.torch_compile_cb.visible = False
+            self.tensorrt_cb.visible = False
+            self.recompile_trt_cb.visible = False
+            self.coreml_cb.visible = False
+            self.recompile_coreml_cb.visible = False
+            self.openvino_cb.visible = False
+            self.recompile_openvino_cb.visible = False
+        current_model = self.current_model_name
+        if cuda and not IS_ROCM:
+            self.update_tensorrt_visibility_based_on_model(current_model)
+        if mps:
+            self.update_coreml_visibility_based_on_model(current_model)
+        if xpu:
+            self.update_openvino_visibility_based_on_model(current_model)
+
+    def _on_trt_toggle(self, e):
+        self.recompile_trt_cb.visible = self.tensorrt_cb.value
+        self._fit_window_to_content()
+
+    def _on_coreml_toggle(self, e):
+        self.recompile_coreml_cb.visible = self.coreml_cb.value
+        self._fit_window_to_content()
+
+    def _on_openvino_toggle(self, e):
+        self.recompile_openvino_cb.visible = self.openvino_cb.value
+        self._fit_window_to_content()
+
+    def auto_enable_optimizers_based_on_device(self):
+        device_label = self.device_dd.value
+        model_lower = (self.current_model_name or "").lower()
+        self.tensorrt_cb.value = False
+        self.coreml_cb.value = False
+        self.openvino_cb.value = False
+        if "CUDA" in device_label and not IS_ROCM:
+            should = not any(kw in model_lower for kw in DISABLE_TRT_KEYWORDS)
+            self.tensorrt_cb.value = should
+            self.torch_compile_cb.value = True
+        elif "MPS" in device_label:
+            should = not any(kw in model_lower for kw in DISABLE_COREML_KEYWORDS)
+            self.coreml_cb.value = should
+        elif "XPU" in device_label:
+            should = not any(kw in model_lower for kw in DISABLE_OPENVINO_KEYWORDS)
+            self.openvino_cb.value = should
+        self._on_trt_toggle(None)
+        self._on_coreml_toggle(None)
+        self._on_openvino_toggle(None)
+
+    def update_tensorrt_visibility_based_on_model(self, model_name):
+        if not model_name:
+            return
+        if not IS_ROCM and "CUDA" in self.device_dd.value:
+            model_lower = model_name.lower()
+            should_disable = any(kw in model_lower for kw in DISABLE_TRT_KEYWORDS)
+            if should_disable:
+                self.tensorrt_cb.value = False
+                self.tensorrt_cb.disabled = True
+                self.recompile_trt_cb.visible = False
+            else:
+                self.tensorrt_cb.disabled = False
+
+    def update_coreml_visibility_based_on_model(self, model_name):
+        if not model_name:
+            return
+        if "MPS" in self.device_dd.value:
+            model_lower = model_name.lower()
+            should_disable = any(kw in model_lower for kw in DISABLE_COREML_KEYWORDS)
+            if should_disable:
+                self.coreml_cb.value = False
+                self.coreml_cb.disabled = True
+                self.recompile_coreml_cb.visible = False
+            else:
+                self.coreml_cb.disabled = False
+
+    def update_openvino_visibility_based_on_model(self, model_name):
+        if not model_name:
+            return
+        if "XPU" in self.device_dd.value:
+            model_lower = model_name.lower()
+            should_disable = any(kw in model_lower for kw in DISABLE_OPENVINO_KEYWORDS)
+            if should_disable:
+                self.openvino_cb.value = False
+                self.openvino_cb.disabled = True
+                self.recompile_openvino_cb.visible = False
+            else:
+                self.openvino_cb.disabled = False
+
+    def on_capture_tool_change(self, e):
+        tool = e.control.value if e else self.capture_tool_dd.value
+        if tool == "DesktopDuplication":
+            self.capture_mode_key = "Monitor"
+            self.capture_mode_dd.value = UI_TEXTS[self.language]["Monitor"]
+            self.capture_mode_dd.disabled = True
+            self.set_status(UI_TEXTS[self.language]["DesktopDuplication selected: Window capture mode disabled."])
+        else:
+            self.capture_mode_dd.disabled = False
+            self.set_status("", key="")
+        self.capture_mode_dd.update()
+        self._sync_capture_mode_visibility()
+
+    def _sync_capture_mode_visibility(self):
+        """Show monitor_dd or window_dd based on capture_mode_key."""
+        if self.capture_mode_key == "Monitor":
+            self.monitor_dd.visible = True
+            self.window_dd.visible = False
+        else:
+            self.monitor_dd.visible = False
+            self.window_dd.visible = True
+        self._safe_update(self.monitor_dd, self.window_dd)
+        self._fit_window_to_content()
+
+    def on_capture_mode_change(self, e):
+        mode = e.control.value
+        texts = UI_TEXTS[self.language]
+        reverse_map = {texts["Monitor"]: "Monitor", texts["Window"]: "Window"}
+        self.capture_mode_key = reverse_map.get(mode, "Monitor")
+        self._sync_capture_mode_visibility()
+        if self.capture_mode_key == "Window":
+            self.refresh_window_list()
+        self.update_stereo_monitor_menu()
+        self._fit_window_to_content()
+
+    def on_window_selected(self, e):
+        label = e.control.value if e else self.window_dd.value
+        # Extract handle from label: "Title [h:123456]"
+        m = re.search(r'\[h:(\d+)\]$', label)
+        target_handle = int(m.group(1)) if m else None
+        # Extract clean title (strip suffix)
+        display_title = re.sub(r'\s*\[h:\d+\]$', '', label).strip()
+        self.selected_window_name = display_title
+        for win in self._window_objects:
+            wh = win.get("handle") or 0
+            if target_handle is not None and wh == target_handle:
+                self.selected_window_handle = win.get("handle")
+                self.selected_window_rect = win.get("rect")
+                break
+            elif target_handle is None and win["title"] == display_title:
+                self.selected_window_handle = win.get("handle")
+                self.selected_window_rect = win.get("rect")
+                break
+        self._fit_window_to_content()
+
+    def _on_monitor_change(self, e):
+        self.update_stereo_monitor_menu()
+        self._fit_window_to_content()
+        self.set_status(f"{UI_TEXTS[self.language]['Selected input monitor:']} {e.control.value}")
+
+    def on_run_mode_change(self, e):
+        label = e.control.value
+        texts = UI_TEXTS[self.language]
+        mode_map = {
+            texts.get("Local Viewer", "Local Viewer"): "Local Viewer",
+            texts.get("OpenXR Link", "OpenXR Link"): "OpenXR Link",
+            texts.get("RTMP Streamer", "RTMP Streamer"): "RTMP Streamer",
+            texts.get("MJPEG Streamer", "MJPEG Streamer"): "MJPEG Streamer",
+            texts.get("Legacy Streamer", "Legacy Streamer"): "Legacy Streamer",
+            texts.get("3D Monitor", "3D Monitor"): "3D Monitor",
+        }
+        self.run_mode_key = mode_map.get(label, "Local Viewer")
+        self._config["Run Mode"] = self.run_mode_key
+        self._sync_visibility()
+
+    def _sync_visibility(self):
+        mode = self.run_mode_key
+        texts = UI_TEXTS[self.language]
+        mode_reverse = {
+            "Local Viewer": texts["Local Viewer"],
+            "OpenXR Link": texts["OpenXR Link"],
+            "RTMP Streamer": texts["RTMP Streamer"],
+            "MJPEG Streamer": texts["MJPEG Streamer"],
+            "Legacy Streamer": texts["Legacy Streamer"],
+            "3D Monitor": texts["3D Monitor"],
+        }
+        self.run_mode_dd.value = mode_reverse.get(mode, texts["Local Viewer"])
+        is_openxr = mode == "OpenXR Link"
+        self.r7b_label.visible = not is_openxr
+        self.display_mode_dd.visible = not is_openxr
+        self.xr_preview_cb.visible = is_openxr
+        self.local_vsync_cb.visible = mode in ["Local Viewer", "3D Monitor"]
+        self.row6b.visible = mode in ["Local Viewer", "3D Monitor", "OpenXR Link"]
+        self.row6c.visible = mode in ["Local Viewer", "3D Monitor"]
+        self.target_fps_label.visible = mode in ["Local Viewer", "3D Monitor", "OpenXR Link"]
+        self.target_fps_dd.visible = mode in ["Local Viewer", "3D Monitor", "OpenXR Link"]
+        self.row7b.visible = is_openxr
+        if is_openxr:
+            self.showfps_cb.visible = False
+            self.fill_16_9_cb.visible = False
+            self.fix_aspect_cb.visible = False
+        else:
+            self.showfps_cb.visible = True
+            self.fill_16_9_cb.visible = True
+            self.fix_aspect_cb.visible = mode in ["Local Viewer", "3D Monitor"]
+        if mode in ["Legacy Streamer", "3D Monitor"]:
+            self.display_mode_dd.options = [m for m in ["Half-SBS", "Full-SBS", "Half-TAB", "Full-TAB"]]
+        else:
+            self.display_mode_dd.options = [m for m in ["Half-SBS", "Full-SBS", "Half-TAB", "Full-TAB", "Depth Map", "Anaglyph", "Interleaved", "Mono", "Leia"]]
+        mon_count = self._get_monitor_count()
+        stereo_full = mode in ["Local Viewer", "3D Monitor", "RTMP Streamer"] and mon_count > 1
+        self.r9_label.visible = not is_openxr
+        self.stereo_monitor_dd.visible = stereo_full
+        if hasattr(self, '_stereo_spacer'):
+            self._stereo_spacer.visible = stereo_full
+        self.row9.visible = (not is_openxr) and (stereo_full or self.fill_16_9_cb.visible or self.fix_aspect_cb.visible or self.lossless_cb.visible)
+        if mode == "3D Monitor":
+            self.stereo_monitor_dd.value = self.monitor_dd.value
+        row_map = self._get_streamer_row_map()
+        indices = row_map.get(mode, [])
+        self._show_streamer_rows(*indices)
+        self.lossless_cb.visible = (OS_NAME == "Windows" and mode == "RTMP Streamer")
+        self.update_stereo_monitor_menu()
+        self._fit_window_to_content()
+        if mode in ["Local Viewer", "RTMP Streamer"]:
+            self._auto_select_stereo_monitor()
+        if mode == "RTMP Streamer":
+            self.populate_audio_devices()
+            self.auto_select_stereo_mix()
+            saved_mix = self._config.get("Stereo Mix", "")
+            if saved_mix and saved_mix in (self.audio_dd.options or []):
+                self.audio_dd.value = saved_mix
+        self.update_stream_url()
+        self._fit_window_to_content()
+        self.page.update()
+
+    def _auto_select_stereo_monitor(self):
+        mon_count = self._get_monitor_count()
+        if mon_count <= 1:
+            return
+        cur = self.stereo_monitor_dd.value
+        valid = cur and cur in self.stereo_monitor_dd.options and cur != "Viewer Window"
+        if not valid:
+            input_label = self.monitor_dd.value if self.capture_mode_key == "Monitor" else None
+            for lbl in self.monitor_label_to_index:
+                if lbl != input_label:
+                    self.stereo_monitor_dd.value = lbl
+                    break
+
+    def on_theme_change(self, e):
+        color = e.control.value
+        cn_map = {"系统":"system","蓝色":"blue","绿色":"green","红色":"red","紫色":"purple","橙色":"orange","青色":"teal","粉色":"pink","灰色":"grey"}
+        color = cn_map.get(color, color.lower())
+        if OS_NAME == "Windows":
+            font = "Microsoft YaHei"
+        elif OS_NAME == "Darwin":
+            font = "PingFang SC"
+        else:
+            font = "Noto Sans SC"
+        if color == "system":
+            self.page.theme_mode = ft.ThemeMode.SYSTEM
+            self.page.theme = ft.Theme(color_scheme_seed="blue", font_family=font)
+        else:
+            self.page.theme = ft.Theme(color_scheme_seed=color, font_family=font)
+        self.page.update()
+
+    def on_language_change(self, e):
+        lang_display = e.control.value
+        _LANG_MAP = {"English": "EN", "简体中文": "CN"}
+        lang = _LANG_MAP.get(lang_display, "EN")
+        if lang in UI_TEXTS:
+            self.language = lang
+            self._config["Language"] = lang
+            self.update_ui_texts()
+            self._sync_visibility()
+            if self._status_key:
+                self.set_status(UI_TEXTS[self.language][self._status_key], key=self._status_key)
+            # Theme: update_ui_texts already set options, here we only set the value
+            t = UI_TEXTS[self.language]
+            cur = self.theme_dd.value
+            cn_map = {"系统":"system","蓝色":"blue","绿色":"green","红色":"red","紫色":"purple","橙色":"orange","青色":"teal","粉色":"pink","灰色":"grey"}
+            key = cn_map.get(cur, cur.lower() if cur else "system")
+            self.theme_dd.value = t.get(key, key) if self.language == "CN" else key.capitalize()
+            self._fit_window_to_content()
+            self.page.update()
+
+    def update_ui_texts(self):
+        t = UI_TEXTS[self.language]
+        self.r0_label.value = t["Depth Model:"]
+        self.fp16_cb.label = t["FP16"]
+        self.r1a_label.value = t["Depth Resolution:"]
+        self.r1b_label.value = t["Convergence:"]
+        self.r2a_label.value = t["Depth Strength:"]
+        self.r2b_label.value = t["Foreground Scale:"]
+        self.r3a_label.value = t["Anti-aliasing:"]
+        self.r3b_label.value = t["IPD (m):"]
+        self.r4_label.value = t["Inference Acceleration:"]
+        self.torch_compile_cb.label = t["torch.compile"]
+        self.tensorrt_cb.label = t["TensorRT"]
+        self.coreml_cb.label = t["CoreML"]
+        self.openvino_cb.label = t["OpenVINO"]
+        self.recompile_trt_cb.label = t["Recompile TensorRT"]
+        self.recompile_coreml_cb.label = t["Recompile CoreML"]
+        self.recompile_openvino_cb.label = t["Recompile OpenVINO"]
+        self.r5_label.value = t["Computing Device:"]
+        self.showfps_cb.label = t["Show FPS"]
+        self.r6_label.value = t["Capture Tool:"]
+        self.r7a_label.value = t["Run Mode:"]
+        self.r7b_label.value = t["Display Mode:"]
+        self.xr_preview_cb.label = t.get("XR Preview Window", "XR画面预览窗口" if self.language == "CN" else "XR Preview Window")
+        self.local_vsync_cb.label = t.get("Local VSync", "Local VSync")
+        self.target_fps_label.value = t.get("Capture FPS:", "Capture FPS:")
+        self.upscaler_label.value = t.get("Upscaler:", "Upscaler:")
+        self.upscaler_sharpness_label.value = t.get("Upscaler Sharpness:", "Sharpness:")
+        upscaler_value = self._upscaler_from_display(self.upscaler_dd.value)
+        self.upscaler_dd.options = self._upscaler_display_options()
+        self.upscaler_dd.value = self._upscaler_to_display(upscaler_value)
+        self.r9_label.value = t["Stereo Output:"]
+        self.theme_label.value = t["Theme:"]
+        theme_display = ["System","Blue","Green","Red","Purple","Orange","Teal","Pink","Grey"]
+        self.theme_dd.options = [t.get(k.lower(), k) for k in theme_display]
+        cur = self.theme_dd.value
+        cn_map = {"系统":"system","蓝色":"blue","绿色":"green","红色":"red","紫色":"purple","橙色":"orange","青色":"teal","粉色":"pink","灰色":"grey"}
+        key = cn_map.get(cur, cur.lower() if cur else "system")
+        self.theme_dd.value = t.get(key, key) if self.language == "CN" else key.capitalize()
+        self.fill_16_9_cb.label = t["Fill 16:9"]
+        self.fix_aspect_cb.label = t["Fix Viewer Aspect"]
+        self.lossless_cb.label = t["Lossless Scaling Support"]
+        self.r10_label.value = t["Controller:"]
+        self.r10b_label.value = t["Environment:"]
+        self.lang_label.value = t["Set Language:"]
+        run_mode_texts = {}
+        if OS_NAME == "Darwin":
+            run_mode_texts = {
+                "Local Viewer": t["Local Viewer"],
+                "RTMP Streamer": t["RTMP Streamer"],
+                "MJPEG Streamer": t["MJPEG Streamer"],
+                "Legacy Streamer": t["Legacy Streamer"],
+            }
+        else:
+            run_mode_texts = {
+                "Local Viewer": t["Local Viewer"],
+                "OpenXR Link": t["OpenXR Link"],
+                "RTMP Streamer": t["RTMP Streamer"],
+                "MJPEG Streamer": t["MJPEG Streamer"],
+                "Legacy Streamer": t["Legacy Streamer"],
+            }
+            if OS_NAME == "Windows":
+                run_mode_texts["3D Monitor"] = t["3D Monitor"]
+        self.run_mode_dd.options = [v for v in run_mode_texts.values()]
+        self.capture_mode_dd.options = [
+            t["Monitor"],
+            t["Window"],
+        ]
+        self.capture_mode_dd.value = t["Monitor"] if self.capture_mode_key == "Monitor" else t["Window"]
+        self.capture_mode_dd.reapply_width()
+        self.stream_url_label.value = t["Streamer URL"]
+        self.stream_port_label.value = t["Streamer Port:"]
+        self.stream_quality_label.value = t["Stream Quality:"]
+        self.stream_proto_label.value = t["Stream Protocol:"]
+        self.stream_key_label.value = t["Stream Key"]
+        self.audio_label.value = t["Stereo Mix"]
+        self.crf_label.value = t["CRF"]
+        self.audio_delay_label.value = t["Audio Delay"]
+        self.preview_btn.content.value = t["Preview"]
+        self.refresh_btn.content.value = t["Refresh"]
+        self.reset_btn.content.value = t["Reset"]
+        self.stop_btn.content.value = t["Stop"]
+        self.run_btn.content.value = t["Run"]
+        # Update tooltips
+        def _set_tooltip(ctrl, text):
+            if hasattr(ctrl, "set_tooltip"):
+                ctrl.set_tooltip(text)
+            else:
+                try:
+                    ctrl.tooltip = text
+                except Exception:
+                    pass
+
+        _set_tooltip(self.window_dd, t["tooltip_window"])
+        for ctrl, key in [
+            (self.depth_model_dd, "tooltip_depth_model"),
+            (self.model_size_dd, "tooltip_depth_model"),
+            (self.depth_res_dd, "tooltip_depth_res"),
+            (self.convergence_dd, "tooltip_convergence"),
+            (self.depth_strength_dd, "tooltip_depth_strength"),
+            (self.foreground_scale_dd, "tooltip_foreground_scale"),
+            (self.antialiasing_dd, "tooltip_antialiasing"),
+            (self.ipd_dd, "tooltip_ipd"),
+            (self.device_dd, "tooltip_device"),
+            (self.capture_tool_dd, "tooltip_capture_tool"),
+            (self.run_mode_dd, "tooltip_run_mode"),
+            (self.display_mode_dd, "tooltip_display_mode"),
+            (self.local_vsync_cb, "tooltip_local_vsync"),
+            (self.target_fps_dd, "tooltip_target_fps"),
+            (self.ctrl_model_dd, "tooltip_ctrl_model"),
+            (self.env_model_dd, "tooltip_env_model"),
+            (self.capture_mode_dd, "tooltip_capture_mode"),
+            (self.monitor_dd, "tooltip_monitor"),
+            (self.stereo_monitor_dd, "tooltip_stereo_monitor"),
+            (self.lang_dd, "tooltip_lang"),
+            (self.theme_dd, "tooltip_theme"),
+            (self.stream_quality_dd, "tooltip_stream_quality"),
+            (self.stream_proto_dd, "tooltip_stream_proto"),
+            (self.audio_dd, "tooltip_audio"),
+            (self.stream_port_tf, "tooltip_stream_port"),
+            (self.stream_key_tf, "tooltip_stream_key"),
+            (self.crf_tf, "tooltip_crf"),
+            (self.audio_delay_tf, "tooltip_audio_delay"),
+        ]:
+            _set_tooltip(ctrl, t.get(key, UI_TEXTS["EN"].get(key, key)))
+        self._auto_align_labels(force=True)
+
+    def _safe_update(self, *controls):
+        for c in controls:
+            try:
+                c.update()
+            except RuntimeError:
+                pass
+            except Exception as e:
+                print(f"[Warning] _safe_update failed: {e}")
+
+    def update_stream_url(self, e=None):
+        if not self.stream_container.visible:
+            return
+        protocol = self.stream_proto_dd.value
+        port = self.stream_port_tf.value or str(DEFAULT_PORT)
+        stream_key = self.stream_key_tf.value or "live"
+        local_ip = get_local_ip()
+        if self.run_mode_key in ["MJPEG Streamer", "Legacy Streamer"]:
+            self.stream_url_tf.content.controls[0].value = f"http://{local_ip}:{port}/"
+        else:
+            templates = {
+                "RTMP": f"rtmp://{local_ip}:{port}/{stream_key}",
+                "RTSP": f"rtsp://{local_ip}:{port}/{stream_key}",
+                "HLS": f"http://{local_ip}:{port}/{stream_key}/",
+                "HLS M3U8": f"http://{local_ip}:{port}/{stream_key}/index.m3u8",
+                "WebRTC": f"http://{local_ip}:{port}/{stream_key}/",
+            }
+            self.stream_url_tf.content.controls[0].value = templates.get(protocol, f"http://{local_ip}:{port}/{stream_key}/")
+        self._safe_update(self.stream_url_tf)
+        self.preview_btn.visible = protocol not in ["RTMP", "RTSP"]
+        self._safe_update(self.preview_btn)
+
+    def _on_stream_protocol_change(self, e):
+        self.stream_protocol_key = e.control.value
+        self._config["Stream Protocol"] = self.stream_protocol_key
+        self.update_stream_url()
+        self._fit_window_to_content()
+
+    def _on_stream_key_change(self, e):
+        val = e.control.value or ""
+        if not re.match(r'^[A-Za-z0-9_-]*$', val) or len(val) > 64:
+            self.set_status(UI_TEXTS[self.language]["err_stream_key"])
+        self._config["Stream Key"] = val
+        self.update_stream_url()
+
+    def populate_audio_devices(self):
+        if OS_NAME == "Linux":
+            self._populate_audio_linux()
+        else:
+            self._populate_audio_generic()
+        if self.audio_devices:
+            self.audio_dd.options = [d for d in self.audio_devices]
+            self.audio_dd.value = self.audio_devices[0]
+            self.audio_dd.update()
+            if self.audio_devices[0] in ["No Stereo Mix device found", "sounddevice not available"]:
+                self.set_status(self.audio_devices[0])
+
+    def _populate_audio_generic(self):
+        """Use sounddevice to find Stereo Mix / loopback devices."""
+        self.audio_devices = []
+        try:
+            import sounddevice as sd
+            all_devices = sd.query_devices()
+            found = set()
+            for dev in all_devices:
+                name = (dev.get("name", "") or "").lower()
+                in_ch = dev.get("max_input_channels", 0)
+                out_ch = dev.get("max_output_channels", 0)
+                if in_ch > 0 or out_ch > 0:
+                    for mix in STEREO_MIX_NAMES:
+                        if mix in name and "audio stereo input" not in name:
+                            found.add(dev.get("name"))
+                            break
+                    if "virtual-audio-capturer" in name:
+                        found.add(dev.get("name"))
+            if not found and OS_NAME == "Darwin":
+                print("[Info] No audio capture devices found on MacOS.\nRecommended tools:\n- BlackHole: https://existential.audio/blackhole/\n- Virtual Desktop Streamer: https://www.vrdesktop.net/\n- Loopback: https://rogueamoeba.com/loopback/")
+                self.audio_devices = ["No audio capture devices found"]
+            elif not found and OS_NAME == "Windows":
+                print("[Warning] No Stereo Mix devices found, please enable it in audio settings.\nIf no Stereo Mix, install 'Screen Capture Recorder':\nhttps://github.com/rdp/screen-capture-recorder-to-video-windows-free/releases")
+                self.audio_devices = ["virtual-audio-capturer"]
+            else:
+                self.audio_devices = list(found) or ["No Stereo Mix device found"]
+        except ImportError:
+            self.audio_devices = ["sounddevice not available"]
+        except Exception as e:
+            self.audio_devices = [f"Error: {e}"]
+
+    def _populate_audio_linux(self):
+        self.audio_devices = []
+        try:
+            result = subprocess.run(["pacmd", "list-sources"],
+                                    capture_output=True, text=True, check=True)
+            sources = []
+            for block in result.stdout.split("index:")[1:]:
+                m = re.search(r"name:\s*<(.+?)>", block)
+                if m:
+                    sources.append(m.group(1))
+            self.audio_devices = sources or ["No audio sources found"]
+        except Exception:
+            self.audio_devices = ["pacmd not available"]
+
+    def auto_select_stereo_mix(self):
+        """Auto-select the first stereo-mix-like device."""
+        if not self.audio_devices:
+            return
+        for dev in self.audio_devices:
+            dl = dev.lower()
+            for mix in STEREO_MIX_NAMES:
+                if mix in dl and "audio stereo input" not in dl:
+                    self.audio_dd.value = dev
+                    self.audio_dd.update()
+                    return
+        # Fallback: virtual-audio-capturer
+        for dev in self.audio_devices:
+            if "virtual-audio-capturer" in dev.lower():
+                self.audio_dd.value = dev
+                self.audio_dd.update()
+                return
+        self.audio_dd.value = "No Stereo Mix device found"
+        self.audio_dd.update()
+
+    def refresh_monitor_and_window(self, e=None):
+        self.populate_monitors()
+        if self.capture_mode_key == "Window":
+            self.refresh_window_list()
+        if self.run_mode_key == "RTMP Streamer":
+            self.populate_audio_devices()
+            self.auto_select_stereo_mix()
+        self.update_stereo_monitor_menu()
+        self._sync_visibility()
+        self._fit_window_to_content()
+        if self.capture_mode_key == "Monitor" and self.monitor_dd.value:
+            self.set_status(f"{UI_TEXTS[self.language]['Selected input monitor:']} {self.monitor_dd.value}")
+        elif self.capture_mode_key == "Window" and self.selected_window_name:
+            self.set_status(f"{UI_TEXTS[self.language]['Selected input window:']} {self.selected_window_name}")
+
+    def refresh_window_list(self):
+        try:
+            windows = list_windows()
+            if not windows:
+                self.window_dd.options = []
+                self.window_dd.update()
+                return
+            self._window_objects = windows
+            # Include handle in label to avoid duplicate title ambiguity
+            win_labels = [f"{w['title']} [h:{w['handle'] or 0}]" for w in windows]
+            self.window_dd.options = win_labels
+            if self.selected_window_name:
+                labels_by_title = [lbl for lbl in win_labels if lbl.startswith(self.selected_window_name + " [")]
+                selected_handle_str = f"[h:{self.selected_window_handle or 0}]"
+                match = next((lbl for lbl in labels_by_title if selected_handle_str in lbl), None)
+                if match:
+                    self.window_dd.value = match
+                elif labels_by_title:
+                    self.window_dd.value = labels_by_title[0]
+                    self.on_window_selected(None)
+                else:
+                    self.window_dd.value = win_labels[0] if windows else ""
+                    self.on_window_selected(None)
+            elif windows:
+                self.window_dd.value = win_labels[0]
+                self.on_window_selected(None)
+            self.window_dd.update()
+        except Exception as e:
+            self.set_status(UI_TEXTS[self.language]["err_refresh_window"].format(e))
+
+
+    # URL actions
+
+    def preview_in_browser(self, e):
+        try:
+            import webbrowser
+            url = self.stream_url_tf.content.controls[0].value
+            if not url.startswith(("http://", "https://")):
+                self.set_status(UI_TEXTS[self.language]["invalid_url_scheme"].format(url))
+                return
+            webbrowser.open(url)
+            self.set_status(f"{UI_TEXTS[self.language]['Opening URL in browser']}: {url}")
+        except Exception as ex:
+            self.set_status(UI_TEXTS[self.language]["error_preview"].format(ex))
+
+    def copy_url_to_clipboard(self, e):
+        url = self.stream_url_tf.content.controls[0].value
+        if url:
+            try:
+                import pyperclip
+                pyperclip.copy(url)
+            except ImportError:
+                import subprocess
+                if OS_NAME == "Windows":
+                    subprocess.run("clip", input=url, text=True, shell=True)
+                elif OS_NAME == "Darwin":
+                    subprocess.run("pbcopy", input=url, text=True)
+            self.set_status(UI_TEXTS[self.language]["url_copied"], key="url_copied")
+            asyncio.create_task(self._fade_status(2.0))
+
+    async def _fade_status(self, delay):
+        await asyncio.sleep(delay)
+        self.set_status("", key="")
+
+    def set_status(self, msg, key=None):
+        self.status_text.value = msg
+        if key is not None:
+            self._status_key = key
+        self._safe_update(self.status_text)
+
+    def _set_running_ui(self, running: bool):
+        """Toggle Run/Stop button enabled state."""
+        self.run_btn.disabled = running
+        self.stop_btn.disabled = not running
+        self._safe_update(self.run_btn, self.stop_btn)
+
+
+    # Save, Run, Stop, Reset
+
+    def _validate_config_before_run(self):
+        """Validate config before run. Returns (ok: bool, error_msg: str)."""
+        try:
+            port_val = int(self.stream_port_tf.value) if self.stream_port_tf.value else DEFAULT_PORT
+            if not (1 <= port_val <= 65535):
+                return False, UI_TEXTS[self.language]["Invalid port number (1-65535)"]
+        except ValueError:
+            return False, UI_TEXTS[self.language]["Invalid port number (1-65535)"]
+        try:
+            crf_val = int(self.crf_tf.value) if self.crf_tf.value else DEFAULTS["CRF"]
+            if not (0 <= crf_val <= 51):
+                return False, UI_TEXTS[self.language]["err_crf"]
+        except ValueError:
+            return False, UI_TEXTS[self.language]["err_crf"]
+        try:
+            delay_val = float(self.audio_delay_tf.value) if self.audio_delay_tf.value else DEFAULTS["Audio Delay"]
+            if not (-10 <= delay_val <= 10):
+                return False, UI_TEXTS[self.language]["err_audio_delay"]
+        except ValueError:
+            return False, UI_TEXTS[self.language]["err_audio_delay"]
+        sk = self.stream_key_tf.value or "live"
+        if not re.match(r'^[A-Za-z0-9_-]+$', sk) or len(sk) > 64:
+            return False, UI_TEXTS[self.language]["err_stream_key"]
+        if self.capture_mode_key == "Window":
+            if not self.selected_window_name:
+                return False, UI_TEXTS[self.language]["Please select a window before running in Window capture mode"]
+            windows = list_windows()
+            exists = any(
+                (w.get("handle") is not None and w["handle"] == self.selected_window_handle)
+                or (w.get("handle") is None and w["title"] == self.selected_window_name)
+                for w in windows
+            )
+            if not exists:
+                return False, UI_TEXTS[self.language]["The selected window no longer exists. Please refresh and select a valid window."]
+        return True, ""
+
+    def save_and_run(self, e):
+        """Collect config, save YAML, start subprocess."""
+        # Re-entry guard: prevent multiple clicks from launching duplicate processes
+        if self._starting or (self.process and self.process.returncode is None):
+            self.set_status(UI_TEXTS[self.language]["A thread already running!"])
+            self.page.update()
+            return
+        ok, err = self._validate_config_before_run()
+        if not ok:
+            self.set_status(err)
+            return
+        self._starting = True
+        self._cancel_starting = False
+        self._esc_stopped = False
+        self._stopping = False
+        _set_console_quick_edit(False)
+        self._set_running_ui(True)
+
+        # Build config
+        self._collect_config()
+
+        # Save YAML
+        ok, err = save_yaml(os.path.join(BASE_DIR, "settings.yaml"), self._config)
+        if not ok:
+            self.set_status(UI_TEXTS[self.language]["failed_save_yaml"].format(err))
+            self._starting = False
+            self._set_running_ui(False)
+            return
+
+        self.set_status(UI_TEXTS[self.language]["Countdown"], key="Countdown")
+        self.page.update()
+
+        # Start process with countdown
+        asyncio.create_task(self._countdown_and_run(0.5))
+
+    @staticmethod
+    def _parse_int(val, default):
+        try:
+            return int(val)
+        except (ValueError, TypeError):
+            return default
+
+    @staticmethod
+    def _parse_float(val, default):
+        try:
+            return float(val)
+        except (ValueError, TypeError):
+            return default
+
+    def _collect_config(self):
+        """Read all UI control values into self._config (single source of truth)."""
+        if self.capture_mode_key == "Window":
+            window_rect = getattr(self, 'selected_window_rect', None)
+            if window_rect:
+                center_x = window_rect[0] + window_rect[2] // 2
+                center_y = window_rect[1] + window_rect[3] // 2
+                monitor_idx = get_monitor_index_for_point(center_x, center_y)
+            else:
+                monitor_idx = get_primary_monitor_index()
+        else:
+            monitor_idx = self.monitor_label_to_index.get(self.monitor_dd.value, DEFAULTS["Monitor Index"])
+        stereo_val = self.stereo_monitor_dd.value
+        if stereo_val == "Viewer Window" or not stereo_val:
+            stereo_idx = None
+        else:
+            stereo_idx = self.monitor_label_to_index.get(stereo_val, None)
+
+        self._config.update({
+            "Capture Mode": self.capture_mode_key,
+            "Monitor Index": monitor_idx,
+            "Window Title": self.selected_window_name if self.capture_mode_key == "Window" else "",
+            "Show FPS": self.showfps_cb.value,
+            "IPD": self._parse_int(self.ipd_dd.value, int(DEFAULTS["IPD"] * 1000)) / 1000.0,
+            "Convergence": self._parse_float(self.convergence_dd.value, DEFAULTS["Convergence"]),
+            "Display Mode": self.display_mode_dd.value,
+            "Model List": ALL_MODELS,
+            "Depth Model": self.current_model_name,
+            "Depth Strength": self._parse_float(self.depth_strength_dd.value, DEFAULTS["Depth Strength"]),
+            "Anti-aliasing": self._parse_int(self.antialiasing_dd.value, DEFAULTS["Anti-aliasing"]),
+            "Foreground Scale": self._parse_float(self.foreground_scale_dd.value, DEFAULTS["Foreground Scale"]),
+            "Depth Resolution": self._parse_int(self.depth_res_dd.value, DEFAULTS["Depth Resolution"]),
+            "FP16": self.fp16_cb.value,
+            "Computing Device": self.device_label_to_index.get(self.device_dd.value, DEFAULTS["Computing Device"]),
+            "Language": self.language,
+            "Run Mode": self.run_mode_key,
+            "XR Preview Window": self.xr_preview_cb.value,
+            "Local VSync": self.local_vsync_cb.value,
+            "Target FPS": 0 if self.target_fps_dd.value == "Auto" else self._parse_int(self.target_fps_dd.value, 0),
+            "Processing Resolution": self._config.get("Processing Resolution", DEFAULTS["Processing Resolution"]),
+            "Upscaler": self._upscaler_from_display(self.upscaler_dd.value),
+            "Upscaler Sharpness": self._parse_float(self.upscaler_sharpness_dd.value, DEFAULTS["Upscaler Sharpness"]),
+            "Stream Protocol": self.stream_proto_dd.value,
+            "Streamer Port": self._parse_int(self.stream_port_tf.value, DEFAULTS["Streamer Port"]),
+            "Stream Quality": self._parse_int(self.stream_quality_dd.value, DEFAULTS["Stream Quality"]),
+            "torch.compile": self.torch_compile_cb.value,
+            "TensorRT": self.tensorrt_cb.value,
+            "Recompile TensorRT": self.recompile_trt_cb.value,
+            "CoreML": self.coreml_cb.value,
+            "Recompile CoreML": self.recompile_coreml_cb.value,
+            "OpenVINO": self.openvino_cb.value,
+            "Recompile OpenVINO": self.recompile_openvino_cb.value,
+            "Capture Tool": self.capture_tool_dd.value,
+            "Fill 16:9": self.fill_16_9_cb.value,
+            "Fix Viewer Aspect": self.fix_aspect_cb.value,
+            "Lossless Scaling Support": self.lossless_cb.value,
+            "Stream Key": self.stream_key_tf.value,
+            "Stereo Mix": self.audio_dd.value,
+            "CRF": self._parse_int(self.crf_tf.value, DEFAULTS["CRF"]),
+            "Audio Delay": self._parse_float(self.audio_delay_tf.value, DEFAULTS["Audio Delay"]),
+            "Stereo Output": stereo_idx,
+            "Controller Model": self.ctrl_model_dd.value,
+            "Environment Model": self.env_model_dd.value,
+        })
+        self.recompile_trt_cb.value = False
+        self.recompile_coreml_cb.value = False
+        self.recompile_openvino_cb.value = False
+
+    async def _countdown_and_run(self, seconds):
+        self._diag("_countdown_and_run scheduled")
+        try:
+            if self.process and self.process.returncode is None:
+                self.set_status(UI_TEXTS[self.language]["A thread already running!"])
+                self._diag("already running, return")
+                return
+            if seconds > 0:
+                await asyncio.sleep(seconds)
+            if self._cancel_starting:
+                self._cancel_starting = False
+                self._diag("cancelled, return")
+                return
+            print(f"[Main] Initializing Desktop2Stereo {self.run_mode_key}…")
+            shutdown_event.clear()
+            if OS_NAME == "Windows":
+                self.process = await asyncio.create_subprocess_exec(
+                    sys.executable, os.path.join(BASE_DIR, "main.py"),
+                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+                )
+            else:
+                self.process = await asyncio.create_subprocess_exec(
+                    sys.executable, os.path.join(BASE_DIR, "main.py"),
+                    start_new_session=True,
+                )
+            self._diag(f"process started, pid={self.process.pid}")
+            self.set_status(UI_TEXTS[self.language]["Running"], key="Running")
+            self.page.update()
+            asyncio.create_task(self._monitor_process_task())
+            self._diag("monitor_task created")
+            # Reset recompile flags after 8s
+            for _ in range(8):
+                await asyncio.sleep(1)
+                if self.process and self.process.returncode is not None:
+                    self._diag(f"process exited during wait, code={self.process.returncode}")
+                    break
+            self._config["Recompile TensorRT"] = False
+            self._config["Recompile CoreML"] = False
+            self._config["Recompile OpenVINO"] = False
+            save_yaml(os.path.join(BASE_DIR, "settings.yaml"), self._config)
+        except Exception as e:
+            self.set_status(UI_TEXTS[self.language]["err_start_failed"].format(e))
+            self.page.update()
+        finally:
+            self._starting = False
+
+    def _diag(self, msg):
+        """Write diagnostic log to file."""
+        import datetime
+        os.makedirs(os.path.dirname(DIAG_LOG), exist_ok=True)
+        line = f"[{datetime.datetime.now().strftime('%H:%M:%S')}] [diag] {msg}"
+        with open(DIAG_LOG, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+
+    async def _monitor_process_task(self):
+        """Wait for process to exit, then update status."""
+        proc = self.process
+        if not proc:
+            self._diag("monitor_task: proc is None, return")
+            return
+        self._diag(f"monitor_task started, pid={proc.pid}")
+        try:
+            await proc.wait()
+            self._diag(f"proc.wait returned, rc={proc.returncode}")
+        except Exception as e:
+            self._diag(f"proc.wait() exception: {e}")
+        finally:
+            self._diag(f"finally: process is proc={self.process is proc}, returncode={proc.returncode}")
+            if self.process is proc:
+                self.process = None
+            self._starting = False
+            code = proc.returncode if proc else None
+            if code and code != 0:
+                self.set_status(UI_TEXTS[self.language]["exited_with_code"].format(code))
+            else:
+                self.set_status(UI_TEXTS[self.language]["Stopped"], key="Stopped")
+            _set_console_quick_edit(True)
+            self._set_running_ui(False)
+            self._diag("monitor_task done, status updated")
+
+    def stop_process(self, e=None):
+        """Stop subprocess (called from UI button)."""
+        future = asyncio.run_coroutine_threadsafe(self._async_stop(), self._loop)
+        future.add_done_callback(lambda f: f.exception() if f.exception() else None)
+
+    async def _on_page_close(self, e=None):
+        """Stop subprocess when user closes the window. Settings are only saved on Run."""
+        self._closed = True
+        if hasattr(self, '_esc_task') and self._esc_task and not self._esc_task.done():
+            self._esc_task.cancel()
+        await self._async_stop()
+
+    async def _async_stop(self):
+        """Actual stop logic — runs in async context."""
+        # Prevent reentry: skip if already stopping
+        if self._stopping:
+            return
+        self._stopping = True
+
+        # Suppress ESC repeat triggers + cancel pending start
+        self._esc_stopped = True
+        self._esc_down = None
+        self._cancel_starting = True
+
+        if self._proc_lock is not None:
+            shutdown_event.set()
+            saved_pid = None
+            proc = None
+            async with self._proc_lock:
+                proc = self.process
+                if proc and proc.returncode is None:
+                    saved_pid = proc.pid
+                    proc.terminate()
+                self.process = None
+
+            if saved_pid and proc:
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=5)
+                except asyncio.TimeoutError:
+                    try:
+                        proc.kill()
+                        await proc.wait()
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+                # Cleanup RTMP process tree
+                if self.run_mode_key == "RTMP Streamer":
+                    try:
+                        if OS_NAME == "Windows":
+                            p = await asyncio.create_subprocess_exec(
+                                'taskkill', '/f', '/t', '/pid', str(saved_pid),
+                                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+                            await p.wait()
+                        else:
+                            import signal
+                            try:
+                                os.killpg(os.getpgid(saved_pid), signal.SIGTERM)
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+        print("[Main] Stopped")
+        self._starting = False
+        self.set_status(UI_TEXTS[self.language]["Stopped"], key="Stopped")
+        _set_console_quick_edit(True)
+        if not self._closed:
+            self._set_running_ui(False)
+
+    def reset_defaults(self, e):
+        """Reset to defaults, preserve language & device."""
+        current_lang = self.language
+        current_device_label = self.device_dd.value
+        current_device_idx = self.device_label_to_index.get(current_device_label, DEFAULTS["Computing Device"])
+        current_primary = get_primary_monitor_index()
+        dynamic_defaults = DEFAULTS.copy()
+        dynamic_defaults["Monitor Index"] = current_primary
+        self.apply_config(dynamic_defaults, keep_optional=False)
+
+        # Restore language & device
+        self.language = current_lang
+        self.lang_dd.value = "English" if current_lang == "EN" else "简体中文"
+        self.device_dd.value = current_device_label
+        self._config["Language"] = current_lang
+        self._config["Computing Device"] = current_device_idx
+
+        self.update_ui_texts()
+        self._sync_visibility()
+        self.on_device_change(None)
+        self.auto_enable_optimizers_based_on_device()
+        self.page.update()
+
+	
+    # ESC long-press monitoring
+
+    VK_ESC = 0x1B
+
+    async def _esc_poll_task(self):
+        """Background polling for ESC long-press (3 seconds).
+
+        Uses Windows GetAsyncKeyState to query key state:
+        - No global hook, won't trigger antivirus
+        - No external dependencies (ctypes only, Python built-in)
+        - Single asyncio task, no extra threads
+        - Can still detect when unfocused, but no hook registration
+        - High-frequency polling only while process is running; low-frequency when idle
+        """
+        if OS_NAME != "Windows":
+            return  # Non-Windows: rely on Flet on_keyboard_event only
+
+        user32 = ctypes.windll.user32
+        try:
+            while not self._closed:
+                await asyncio.sleep(0.2)  # 200ms polling for faster ESC response
+                if self._closed:
+                    break
+                # High bit (0x8000) = key is currently pressed
+                if user32.GetAsyncKeyState(self.VK_ESC) & 0x8000:
+                    if self._esc_down is None:
+                        self._esc_down = time.time()
+                    elif not self._esc_stopped and (time.time() - self._esc_down >= 3.0):
+                        self._esc_stopped = True
+                        self._esc_down = None
+                        self.set_status(UI_TEXTS[self.language]["esc_stop"])
+                        asyncio.ensure_future(self._async_stop())
+                else:
+                    # Reset on release so it can re-trigger next time
+                    if self._esc_down is not None:
+                        self._esc_down = None
+                        self._esc_stopped = False
+        except asyncio.CancelledError:
+            pass  # Normal cancellation on window close
+
+    def _on_key(self, e: ft.KeyboardEvent):
+        """Flet keyboard event (auxiliary, only used on macOS/Linux when window is focused)."""
+        if e.key != "Esc" or self._esc_stopped or OS_NAME == "Windows":
+            return
+        # macOS/Linux fallback: start a short-lived monitor task on first press
+        now = time.time()
+        if self._esc_down is None:
+            self._esc_down = now
+            # Create a short-lived monitor task, not dependent on key repeat events
+            asyncio.create_task(self._esc_watch_task())
+        elif now - self._esc_down >= 3.0:
+            self._esc_stopped = True
+            self._esc_down = None
+            self.set_status(UI_TEXTS[self.language]["esc_stop"])
+            asyncio.ensure_future(self._async_stop())
+
+    async def _esc_watch_task(self):
+        """Non-Windows platforms: monitor 3-second timeout after first ESC press."""
+        try:
+            for _ in range(60):  # 60 × 0.05 = 3s
+                await asyncio.sleep(0.05)
+                if self._esc_down is None or self._esc_stopped or self._closed:
+                    return
+                if time.time() - self._esc_down >= 3.0:
+                    self._esc_stopped = True
+                    self._esc_down = None
+                    self.set_status(UI_TEXTS[self.language]["esc_stop"])
+                    asyncio.ensure_future(self._async_stop())
+                    return
+        except asyncio.CancelledError:
+            pass
+
+
+# Entry point
+def main():
+    ft.run(_async_main)
+
+
+async def _async_main(page: ft.Page):
+    app = Desktop2StereoGUI(page)
+    await app.setup()
+
+
+if __name__ == "__main__":
+    main()
