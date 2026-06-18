@@ -57,7 +57,7 @@ def test_model_registry_is_d2s_model_mapping_source():
 
 
 def test_utils_model_mapping_delegates_to_runtime_registry():
-    utils_source = (ROOT / "src" / "utils.py").read_text(encoding="utf-8")
+    utils_source = (ROOT / "src" / "utils" / "__init__.py").read_text(encoding="utf-8")
 
     assert "from stereo_runtime.model_registry import ModelRegistry" in utils_source
     assert "spec.name: spec.model_id" in utils_source
