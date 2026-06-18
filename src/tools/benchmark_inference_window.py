@@ -94,19 +94,22 @@ class BenchmarkWindow:
 
             import numpy as np
             import torch
-            from depth import (
-                process,
-                predict_depth,
-                DEVICE,
-                DEPTH_RESOLUTION,
-                FP16,
-                USE_TENSORRT,
-                USE_TORCH_COMPILE,
-            )
+            from capture import capture_frame_to_rgb, prepare_rgb_for_depth_runtime
+            from stereo_runtime import DepthRuntime, DepthRuntimeConfig
             from utils import FPS, TARGET_FPS, OUTPUT_RESOLUTION, MODEL, MODEL_ID
 
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            depth_runtime = DepthRuntime(
+                DepthRuntimeConfig(
+                    model_id=MODEL_ID,
+                    cache_dir="./models",
+                    depth_backend="auto",
+                    device=device,
+                )
+            )
+
             self._log(f"model={MODEL} model_id={MODEL_ID}")
-            self._log(f"device={DEVICE} depth_resolution={DEPTH_RESOLUTION} fp16={FP16} trt={USE_TENSORRT} torch_compile={USE_TORCH_COMPILE}")
+            self._log(f"device={device} backend=auto runtime=DepthRuntime")
             self._log(f"target_fps={TARGET_FPS} fps={FPS} output_resolution={OUTPUT_RESOLUTION}")
 
             width, height = 3840, 2160
@@ -118,8 +121,10 @@ class BenchmarkWindow:
 
             self._post("status", "Warmup 中，排除首次加载和引擎初始化...")
             for i in range(warmup):
-                rgb = process(frame, OUTPUT_RESOLUTION)
-                depth = predict_depth(rgb, use_temporal_smooth=False)
+                rgb = capture_frame_to_rgb(frame, OUTPUT_RESOLUTION)
+                runtime_rgb = prepare_rgb_for_depth_runtime(rgb, device=device)
+                depth_result = depth_runtime.predict_depth_frame(runtime_rgb)
+                depth = depth_result.depth
                 if torch.cuda.is_available():
                     torch.cuda.synchronize()
                 self._post("progress", (i + 1) / total_steps * 100)
@@ -129,14 +134,16 @@ class BenchmarkWindow:
             depth_times = []
             total_times = []
 
-            self._post("status", "正式测试 process + predict_depth...")
+            self._post("status", "正式测试 capture RGB prepare + DepthRuntime...")
             for i in range(samples):
                 t0 = time.perf_counter()
-                rgb = process(frame, OUTPUT_RESOLUTION)
+                rgb = capture_frame_to_rgb(frame, OUTPUT_RESOLUTION)
+                runtime_rgb = prepare_rgb_for_depth_runtime(rgb, device=device)
                 if torch.cuda.is_available():
                     torch.cuda.synchronize()
                 t1 = time.perf_counter()
-                depth = predict_depth(rgb, use_temporal_smooth=False)
+                depth_result = depth_runtime.predict_depth_frame(runtime_rgb)
+                depth = depth_result.depth
                 if torch.cuda.is_available():
                     torch.cuda.synchronize()
                 t2 = time.perf_counter()
@@ -157,6 +164,7 @@ class BenchmarkWindow:
             self._report("depth", depth_times)
             self._report("process+depth", total_times)
             self._log(f"depth_output_shape={tuple(depth.shape) if hasattr(depth, 'shape') else None}")
+            self._log(f"last_timing={depth_runtime.last_timing}")
         except Exception as exc:
             self._post("status", "测试失败")
             self._log(f"ERROR: {type(exc).__name__}: {exc}")

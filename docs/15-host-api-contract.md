@@ -6,6 +6,9 @@
 
 本仓库负责：
 
+- Desktop2Stereo 兼容模型 registry；
+- 模型下载、本地模型目录推导和 artifact 准备；
+- ONNX dtype auto 探测、ONNX 导出和 TensorRT engine 构建；
 - depth provider 创建、常驻和推理封装；
 - stereo synthesis：`fast`、`quality_4k`、`hq_4k`；
 - OpenXR per-eye render core；
@@ -15,9 +18,11 @@
 
 外部 host 负责：
 
+- 用户选择模型、backend 和 preset；
+- settings 持久化；
 - 桌面 / 窗口 / 播放器 / 游戏画面捕捉；
 - 捕捉侧颜色前处理，例如 BGR/BGRA 转 RGB；
-- GUI、配置持久化、用户交互；
+- GUI 和用户交互；
 - 完整 OpenXR session / swapchain / frame timing；
 - 系统指标异步采集；
 - 产品级错误提示和恢复策略。
@@ -52,9 +57,42 @@ result = synthesize_stereo(rgb, depth, config, temporal_state=temporal_state)
 | `sbs` | 按 `output_format` 打包后的输出 |
 | `debug_info` | 后端、mask、耗时或调试 tensor，取决于 `debug_output` |
 
-## 数据流 2：Host 只有 RGB
+## 数据流 2：Host 只有 RGB，且 D2S 仍使用 RGB + Depth 渲染
 
-推荐外部 host 使用 `StereoRuntimeConfig` 作为边界对象。Desktop2Stereo 负责下载模型并确定 `model_id` / `model_dir`，本仓库从 `model_dir` 推导 ONNX 与 TensorRT artifact 路径，并负责后续转换、构建、预处理、推理和立体合成。
+Desktop2Stereo 第一阶段接入建议使用 depth-only runtime，只替换 `depth.py` 的模型下载、artifact 准备和 depth inference 职责。`main.py` 到 viewer / xrviewer 的队列合同保持不变：
+
+```python
+(frame_rgb, depth, capture_start_time)
+```
+
+```python
+from stereo_runtime import DepthRuntime, DepthRuntimeConfig, ModelRegistry
+
+registry = ModelRegistry.default()
+spec = registry.get("Distill-Any-Depth-Base")
+
+runtime_config = DepthRuntimeConfig(
+    model_id=spec.model_id,
+    cache_dir="./models",
+    depth_backend="auto",
+    onnx_dtype="auto",
+    depth_upsample="bilinear",
+    depth_upsample_edge_strength=0.35,
+)
+
+runtime = DepthRuntime(runtime_config)
+runtime.load()
+
+for frame_rgb, capture_start_time in frames:
+    result = runtime.predict_depth_frame(frame_rgb)
+    depth_q.put((frame_rgb, result.depth, capture_start_time))
+```
+
+`result.timing` 返回 depth preprocess/model/postprocess/total 耗时；`runtime.to_report()` 返回 provider、artifact、rolling stats 和显存信息。
+
+## 数据流 3：Host 只有 RGB，且直接需要 Stereo/SBS
+
+推荐外部 host 使用 `StereoRuntimeConfig` 作为 RGB -> depth -> stereo/SBS 的完整边界对象。Host 只提供模型选择和 runtime 参数；本仓库根据 `model_id/cache_dir/export_height/export_width/onnx_dtype` 推导模型目录与 artifact 路径，并负责下载、转换、构建、预处理、推理和立体合成。
 
 ```python
 from stereo_runtime import (
@@ -64,7 +102,7 @@ from stereo_runtime import (
 
 runtime_config = StereoRuntimeConfig(
     model_id="lc700x/Distill-Any-Depth-Base-hf",
-    model_dir=r"D:\Desktop2Stereo\models\models--lc700x--Distill-Any-Depth-Base-hf",
+    cache_dir="./models",
     mode="movie",
     stereo_quality="quality_4k",
     output_format="half_sbs",
@@ -131,6 +169,11 @@ Host 只需要保证：
 
 本仓库内部负责：
 
+- 根据 `ModelRegistry` 将 GUI 模型名解析为模型 spec / Hugging Face ID；
+- 根据 `model_id/cache_dir` 推导本地模型目录；
+- 下载或确认本地模型文件；
+- 复用已有 ONNX dtype auto 探测逻辑导出 ONNX；
+- 复用 native TensorRT build 逻辑生成 engine；
 - 从 RGB frame 开始准备 depth provider 输入；
 - 按 `294x518` 路径执行 depth 模型预处理；
 - 运行 depth provider；
@@ -145,14 +188,18 @@ Host 只需要保证：
 - BGR/BGRA 转 RGB；
 - 窗口裁剪、monitor 选择、DPI 处理；
 - capture fallback 策略。
+- 用户配置文件写入策略；
+- GUI 控件布局和产品级错误弹窗。
 
 常驻对象要求：
 
 | 对象 | 创建频率 | 说明 |
 |---|---|---|
-| `StereoRuntime` | 进程启动或模型/模式切换时创建一次 | Host 首选调用对象，内部持有 provider、stereo config、temporal state |
+| `ModelRegistry` | 进程启动时创建或使用默认单例 | 覆盖 D2S 当前完整模型列表，供 GUI 和 runtime 解析模型 |
+| `DepthRuntime` | 进程启动或模型/backend/分辨率切换时创建一次 | D2S 第一阶段首选调用对象，只输出 depth，保持 RGB + depth 渲染合同 |
+| `StereoRuntime` | 进程启动或模型/模式切换时创建一次 | 完整 RGB -> depth -> stereo/SBS 调用对象，内部持有 provider、stereo config、temporal state |
 | `DepthProvider` | 进程启动或模型切换时创建一次 | 内部持有模型、ONNX session 或 TensorRT engine |
-| `StereoRuntimeConfig` | 模型、模式或参数改变时创建 | Host 传 `model_id` 和 `model_dir`，artifact 路径由本仓库推导 |
+| `DepthRuntimeConfig` / `StereoRuntimeConfig` | 模型、backend、模式或参数改变时创建 | Host 传模型选择和 cache/runtime 参数，artifact 路径由本仓库推导 |
 | `StereoConfig` | 由 runtime config 转换生成 | 不需要每帧创建 |
 | `TemporalState` | 每条输入流一个 | 源切换或场景重置时可 reset |
 | OpenXR session/swapchain | Host runtime 管理 | 本仓库不创建完整 runtime |
@@ -163,19 +210,53 @@ Host 只需要保证：
 - 不要每帧调用 `create_depth_provider()`。
 - 不要每帧重新 load ONNX session 或 TensorRT engine。
 - 不要为了提速降低 `depth_resolution=518` 或修改 `294x518` 输入路径。
-- 不要让 GUI 直接拼 ONNX / TensorRT 文件名；GUI 只传 `model_id` 和 `model_dir`。
+- 不要让 GUI 直接拼 Hugging Face cache 目录、ONNX 路径或 TensorRT 文件名；GUI 只传模型选择和 runtime 参数。
 
 Artifact 推导规则：
 
 | 输入 | 规则 |
 |---|---|
-| `model_id` | Desktop2Stereo 模型列表/下载逻辑给出的 Hugging Face ID |
-| `model_dir` | Desktop2Stereo 下载完成后的本地模型目录 |
+| GUI 模型名 | 由 `ModelRegistry` 解析为 `DepthModelSpec` |
+| `model_id` | `DepthModelSpec` 给出的 Hugging Face ID |
+| `cache_dir` | 默认 `./models`，可由 host 覆盖 |
+| `model_dir` | `stereo_runtime` 按 D2S 规则由 `model_id/cache_dir` 推导 |
 | ONNX fp16 | `{model_dir}/model_fp16_294x518.onnx` |
 | ONNX fp32 | `{model_dir}/model_fp32_294x518.onnx` |
 | TensorRT engine | `{model_dir}/model_fp16_294x518.trt` |
 
 ONNX dtype 默认使用 `onnx_dtype="auto"`：优先 fp16 dummy forward 检查，失败则回退 fp32；fp32 也失败时停止并报告错误。
+
+`prepare_model_artifacts()` 应复用并泛化已有 ONNX dtype auto、artifact 命名和 native TensorRT build 能力；它不是让 GUI 或 host 自行拼路径。
+
+### Desktop2Stereo settings 桥接
+
+D2S GUI 可以继续保存旧字段，但进入本仓库时应统一转换为 `DepthRuntimeConfig` / `StereoRuntimeConfig`。推荐入口：
+
+```python
+from stereo_runtime import runtime_config_from_d2s_settings
+
+runtime_config = runtime_config_from_d2s_settings(
+    settings,
+    cache_dir="./models",
+    device="cuda",
+)
+```
+
+桥接规则：
+
+| D2S settings 字段 | runtime 字段 | 说明 |
+|---|---|---|
+| `Depth Model` | `model_id` | 可以传 GUI 模型名或 HF ID，由 `ModelRegistry` 解析 |
+| `TensorRT` | `depth_backend` / `build_trt_engine` | `true` 时走 `tensorrt_native` 并允许构建 engine |
+| `Recompile TensorRT` | `force_rebuild_trt` | 只影响 engine 重建 |
+| `FP16` | `onnx_dtype` | 只作为导出请求；真实可用性仍由 dtype auto / probe 判断 |
+| `Display Mode` | `output_format` | `Half-SBS` / `Full-SBS` 等映射为 runtime 输出格式 |
+| `Run Mode` | `mode` | 映射到 movie/game/image/auto |
+| `Depth Strength` | `depth_strength` | stereo 合成参数 |
+| `Convergence` | `convergence` | stereo 合成参数 |
+| `IPD` | `ipd` | stereo 合成参数 |
+
+GUI 不应直接控制 provider 内部 dtype、ONNX session 输入绑定、TensorRT tensor address、artifact 文件名或模型 cache 子目录。
 
 ## 输出格式
 
@@ -242,6 +323,8 @@ Preset 不控制：
 - capture source；
 - GUI 状态；
 - OpenXR session / swapchain 生命周期。
+
+模型选择、下载和 artifact 准备属于 runtime config / model registry 层，不属于 preset 层。
 
 ## Auto 模式
 

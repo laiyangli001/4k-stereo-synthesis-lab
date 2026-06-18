@@ -8,6 +8,7 @@ from stereo_runtime import (
     StereoRuntimeConfig,
     depth_provider_config_from_runtime,
     runtime_frame_contract,
+    runtime_config_from_d2s_settings,
     stereo_config_from_runtime,
 )
 from stereo_runtime.adapter import preset_for_runtime_mode
@@ -98,3 +99,49 @@ def test_runtime_config_defines_d2s_rgb_frame_contract():
     assert "depth inference" in contract["stereo_runtime_responsibility"]
     assert "BGR/BGRA-to-RGB conversion" in contract["not_stereo_runtime_responsibility"]
     assert config.to_report()["frame_contract"] == contract
+
+
+def test_runtime_config_from_d2s_settings_maps_legacy_model_and_trt_flags():
+    config = runtime_config_from_d2s_settings(
+        {
+            "Depth Model": "Distill-Any-Depth-Base",
+            "TensorRT": True,
+            "Recompile TensorRT": True,
+            "FP16": True,
+            "Display Mode": "Full-SBS",
+            "Run Mode": "Game",
+            "Depth Strength": 1.8,
+            "Convergence": 0.1,
+            "IPD": 0.07,
+        },
+        cache_dir="./models",
+        device="cuda",
+    )
+
+    assert config.resolved_model_id == "lc700x/Distill-Any-Depth-Base-hf"
+    assert config.depth_backend == "tensorrt_native"
+    assert config.onnx_dtype == "fp16"
+    assert config.build_trt_engine is True
+    assert config.force_rebuild_trt is True
+    assert config.output_format == "full_sbs"
+    assert config.mode == "game"
+    assert config.depth_strength == 1.8
+    assert config.convergence == 0.1
+    assert config.ipd == 0.07
+
+
+def test_runtime_config_from_d2s_settings_keeps_gui_fp16_as_export_request_only():
+    config = runtime_config_from_d2s_settings(
+        {
+            "Depth Model": "DepthPro-Large",
+            "TensorRT": False,
+            "FP16": False,
+            "Display Mode": "Half-SBS",
+        },
+        device="cuda",
+    )
+
+    assert config.resolved_model_id == "apple/DepthPro-hf"
+    assert config.depth_backend == "pytorch_cuda"
+    assert config.onnx_dtype == "fp32"
+    assert config.build_trt_engine is False

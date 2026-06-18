@@ -6,7 +6,7 @@ import torch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from stereo_runtime.depth_provider import DepthProviderConfig, DepthProviderInfo, DistillAnyDepthBase518, create_depth_provider, estimate_depth
+from stereo_runtime.depth_provider import DepthProviderConfig, DepthProviderInfo, DistillAnyDepthBase518, GenericAutoDepthProvider, create_depth_provider, estimate_depth
 from stereo_runtime.depth_onnx_provider import DistillPreprocessor, _preprocess_distill_rgb, estimate_distill_any_depth_base_518_onnx_cuda
 from stereo_runtime.depth_trt_provider import estimate_distill_any_depth_base_518_nvidia
 
@@ -100,6 +100,62 @@ def test_create_depth_provider_supports_persistent_pytorch_provider(tmp_path):
 
     assert isinstance(provider, DistillAnyDepthBase518)
     assert provider.info.depth_backend == "pytorch_cpu"
+
+
+def test_create_depth_provider_supports_generic_pytorch_provider(tmp_path):
+    provider = create_depth_provider(
+        DepthProviderConfig(
+            backend="pytorch",
+            model_id="Intel/dpt-large",
+            model_name="dpt-large",
+            device="cpu",
+            cache_dir=tmp_path,
+            local_files_only=True,
+        )
+    )
+
+    assert isinstance(provider, GenericAutoDepthProvider)
+    assert provider.info.model_id == "Intel/dpt-large"
+    assert provider.info.runtime == "transformers-generic"
+
+
+def test_generic_provider_predict_profile_with_fake_transformers_model(monkeypatch, tmp_path):
+    class Output:
+        predicted_depth = torch.arange(16, dtype=torch.float32).view(1, 4, 4)
+
+    class FakeModel:
+        def to(self, device):
+            return self
+
+        def eval(self):
+            return self
+
+        def __call__(self, pixel_values):
+            return Output()
+
+    class FakeAutoModel:
+        @staticmethod
+        def from_pretrained(*args, **kwargs):
+            return FakeModel()
+
+    import transformers
+
+    monkeypatch.setattr(transformers, "AutoModelForDepthEstimation", FakeAutoModel)
+    provider = GenericAutoDepthProvider(
+        model_id="Intel/dpt-large",
+        model_name="dpt-large",
+        device="cpu",
+        cache_dir=tmp_path,
+        local_files_only=True,
+        depth_resolution=8,
+        patch_size=1,
+    )
+
+    result = provider.predict_profile(torch.zeros(1, 3, 8, 8))
+
+    assert result.depth.shape == (1, 1, 8, 8)
+    assert float(result.depth.min()) >= 0.0
+    assert float(result.depth.max()) <= 1.0
 
 
 def test_create_depth_provider_supports_native_tensorrt(tmp_path):

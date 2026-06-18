@@ -4,9 +4,10 @@ from pathlib import Path
 import torch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "scripts" / "tools"))
+sys.path.insert(0, str(ROOT / "src"))
 
-from export_distill_base_onnx import choose_export_dtype, default_output_path, probe_model_dtype
+from stereo_runtime.model_artifacts import artifact_paths_for_model
+from stereo_runtime.onnx_export import choose_export_dtype, probe_model_dtype
 
 
 def test_choose_export_dtype_auto_cuda_defaults_fp16():
@@ -34,7 +35,7 @@ def test_choose_export_dtype_force_fp32_keyword():
 
 
 def test_default_output_path_uses_actual_dtype_name():
-    path = default_output_path("xingyang1/Distill-Any-Depth-Large-hf", "fp16", 294, 518)
+    path = artifact_paths_for_model("xingyang1/Distill-Any-Depth-Large-hf", cache_dir=ROOT / "models").onnx_path_for_dtype("fp16")
 
     assert path.name == "model_fp16_294x518.onnx"
     assert "models--xingyang1--Distill-Any-Depth-Large-hf" in str(path)

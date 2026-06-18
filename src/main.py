@@ -9,8 +9,9 @@ import subprocess
 import os
 from collections import deque
 
-from utils import OS_NAME, OUTPUT_RESOLUTION, DISPLAY_MODE, CAPTURE_MODE, CAPTURE_TOOL, MONITOR_INDEX, SHOW_FPS, FPS, WINDOW_TITLE, IPD, DEPTH_STRENGTH, CONVERGENCE, RUN_MODE, STREAM_MODE, STREAM_PORT, STREAM_QUALITY, STEREOMIX_DEVICE, STREAM_KEY, AUDIO_DELAY, CRF, LOSSLESS_SCALING_SUPPORT, USE_3D_MONITOR, FILL_16_9, LOCAL_VSYNC, UPSCALER, UPSCALER_SHARPNESS, FIX_VIEWER_ASPECT, CAPTURE_MODE, STEREO_DISPLAY_SELECTION, STEREO_DISPLAY_INDEX, shutdown_event, DEVICE_ID, DEVICE_INFO, CONTROLLER_MODEL, ENVIRONMENT_MODEL, XR_PREVIEW_WINDOW
-from depth import process, predict_depth, set_inference_active
+from utils import OS_NAME, OUTPUT_RESOLUTION, DISPLAY_MODE, CAPTURE_MODE, CAPTURE_TOOL, MONITOR_INDEX, SHOW_FPS, FPS, WINDOW_TITLE, IPD, DEPTH_STRENGTH, CONVERGENCE, RUN_MODE, STREAM_MODE, STREAM_PORT, STREAM_QUALITY, STEREOMIX_DEVICE, STREAM_KEY, AUDIO_DELAY, CRF, LOSSLESS_SCALING_SUPPORT, USE_3D_MONITOR, FILL_16_9, LOCAL_VSYNC, UPSCALER, UPSCALER_SHARPNESS, FIX_VIEWER_ASPECT, CAPTURE_MODE, STEREO_DISPLAY_SELECTION, STEREO_DISPLAY_INDEX, shutdown_event, DEVICE_ID, DEVICE_INFO, DEVICE, CONTROLLER_MODEL, ENVIRONMENT_MODEL, XR_PREVIEW_WINDOW, MODEL_ID, CACHE_PATH
+from capture import capture_frame_to_rgb, prepare_rgb_for_depth_runtime
+from stereo_runtime import DepthRuntime, DepthRuntimeConfig
 
 if "CUDA" in DEVICE_INFO and "ZLUDA" not in DEVICE_INFO:
     USE_CUDART = True
@@ -32,6 +33,14 @@ TIME_SLEEP = 1.0 / FPS
 # Queues with size=1 (latest-frame-only logic)
 raw_q = queue.Queue(maxsize=1)
 depth_q = queue.Queue(maxsize=1)
+depth_runtime = DepthRuntime(
+    DepthRuntimeConfig(
+        model_id=MODEL_ID,
+        cache_dir=CACHE_PATH,
+        depth_backend="auto",
+        device=str(DEVICE),
+    )
+)
 openxr_render_active = threading.Event()
 openxr_source_active = threading.Event()
 openxr_wait_idle_active = threading.Event()
@@ -203,10 +212,10 @@ def _openxr_source_paused():
         if _openxr_source_pause_noticed is not paused:
             _openxr_source_pause_noticed = paused
             if paused:
-                set_inference_active(False)
+                depth_runtime.set_inference_active(False)
                 print("[Main] OpenXR source inference paused")
             else:
-                set_inference_active(True)
+                depth_runtime.set_inference_active(True)
                 print("[Main] OpenXR source inference resumed")
     return paused
 
@@ -501,7 +510,13 @@ def process_depth_loop():
             
             # Process: resize / color conversion
             process_start_time = time.perf_counter()
-            frame_rgb = process(frame_raw, size)
+            frame_rgb = capture_frame_to_rgb(
+                frame_raw,
+                size,
+                device=DEVICE,
+                use_torch=USE_CUDART,
+                output="tensor",
+            )
             process_latency = process_start_time - capture_start_time
             thread_latencies['capture'] = process_latency  # capture latency
 
@@ -516,7 +531,9 @@ def process_depth_loop():
             
             # Depth inference
             depth_start_time = time.perf_counter()
-            depth = predict_depth(frame_rgb)
+            runtime_rgb = prepare_rgb_for_depth_runtime(frame_rgb, device=DEVICE)
+            depth_result = depth_runtime.predict_depth_frame(runtime_rgb)
+            depth = depth_result.depth
             if depth is None:
                 _queue_clear_nonblocking(depth_q)
                 _source_stat_inc("depth_none")
@@ -1562,7 +1579,7 @@ def main(mode="Viewer"):
                 print(f"[Main] OpenXR Link error: {e}")
 
         else:
-            from depth import make_sbs, DEVICE_INFO
+            from legacy_sbs import make_sbs, DEVICE_INFO
             from streamer import MJPEGStreamer
 
             streamer = MJPEGStreamer(port=STREAM_PORT, fps=FPS, quality=STREAM_QUALITY)

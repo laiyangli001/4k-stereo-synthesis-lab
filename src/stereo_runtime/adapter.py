@@ -2,31 +2,36 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
-from .depth_provider import DepthProviderConfig
-from .depth_upsample import DepthUpsampleMode
-from .output import OutputFormat
-from .presets import normalize_preset, stereo_config_for_preset
-from .synthesis import HoleFill, StereoConfig
+from .model_artifacts import artifact_paths_for_model
+from .model_registry import ModelRegistry
+
+if TYPE_CHECKING:
+    from .depth_provider import DepthProviderConfig
+    from .synthesis import StereoConfig
 
 RuntimeMode = Literal["auto", "movie", "game", "image"]
 StereoQuality = Literal["fast", "quality_4k", "hq_4k"]
 DepthBackend = Literal["auto", "tensorrt_native", "onnx_cuda", "pytorch_cuda"]
 OnnxDtypeMode = Literal["auto", "fp16", "fp32"]
+DepthUpsampleMode = Literal["bilinear", "guided"]
+OutputFormat = Literal["half_sbs", "full_sbs", "half_tab", "full_tab", "mono", "anaglyph", "interleaved", "leia", "depth_map"]
+HoleFill = Literal["none", "fast", "edge_aware"]
 
 
 @dataclass(frozen=True)
 class StereoRuntimeConfig:
     """Host-facing runtime config.
 
-    The host owns model selection and download. It passes the downloaded
-    model directory here; stereo_runtime derives ONNX/TensorRT artifact paths
-    inside the same directory and owns export/build/inference after that.
+    The host owns user selection and settings persistence. stereo_runtime owns
+    model registry resolution, model_dir derivation, download, artifact paths,
+    ONNX/TensorRT preparation, and depth/stereo inference.
     """
 
     model_id: str
-    model_dir: str | Path
+    model_dir: str | Path | None = None
+    cache_dir: str | Path = "./models"
     mode: RuntimeMode = "movie"
     stereo_quality: StereoQuality = "quality_4k"
     output_format: OutputFormat = "half_sbs"
@@ -35,6 +40,10 @@ class StereoRuntimeConfig:
     onnx_dtype: OnnxDtypeMode = "auto"
     export_height: int = 294
     export_width: int = 518
+    build_trt_engine: bool = False
+    force_rebuild_trt: bool = False
+    trt_workspace_gb: int = 4
+    use_cuda_graph: bool = False
     depth_upsample: DepthUpsampleMode = "bilinear"
     depth_upsample_edge_strength: float = 0.35
     depth_strength: float = 2.0
@@ -55,20 +64,35 @@ class StereoRuntimeConfig:
     depth_safety: bool | None = None
 
     @property
+    def resolved_model_id(self) -> str:
+        return ModelRegistry.default().resolve_model_id(self.model_id)
+
+    @property
     def model_path(self) -> Path:
-        return Path(self.model_dir)
+        if self.model_dir:
+            return Path(self.model_dir)
+        return self._artifact_paths().model_dir
 
     @property
     def onnx_path(self) -> Path:
-        return self.model_path / f"model_fp16_{self.export_height}x{self.export_width}.onnx"
+        return self._artifact_paths().onnx_fp16_path
 
     @property
     def fp32_onnx_path(self) -> Path:
-        return self.model_path / f"model_fp32_{self.export_height}x{self.export_width}.onnx"
+        return self._artifact_paths().onnx_fp32_path
 
     @property
     def trt_engine_path(self) -> Path:
-        return self.model_path / f"model_fp16_{self.export_height}x{self.export_width}.trt"
+        return self._artifact_paths().trt_fp16_path
+
+    def _artifact_paths(self):
+        return artifact_paths_for_model(
+            self.resolved_model_id,
+            cache_dir=self.cache_dir,
+            model_dir=self.model_dir,
+            export_height=self.export_height,
+            export_width=self.export_width,
+        )
 
     def artifact_paths(self) -> dict[str, str]:
         return {
@@ -83,6 +107,7 @@ class StereoRuntimeConfig:
 
     def to_report(self) -> dict[str, Any]:
         report = asdict(self)
+        report["resolved_model_id"] = self.resolved_model_id
         report["model_dir"] = str(self.model_path)
         report.update(self.artifact_paths())
         report["frame_contract"] = self.frame_contract()
@@ -107,6 +132,102 @@ def runtime_frame_contract(config: StereoRuntimeConfig) -> dict[str, str]:
     }
 
 
+def runtime_config_from_d2s_settings(
+    settings: dict[str, Any],
+    *,
+    cache_dir: str | Path = "./models",
+    device: str = "cuda",
+    depth_only: bool = True,
+) -> StereoRuntimeConfig:
+    """Build a runtime config from Desktop2Stereo-style settings.
+
+    GUI/settings keep user-facing choices. Runtime owns model resolution,
+    artifact paths, dtype probing, and backend/provider details.
+    """
+
+    model_name = settings.get("Depth Model") or settings.get("model_id")
+    if not model_name:
+        raise ValueError("D2S settings must include 'Depth Model' or 'model_id'")
+
+    depth_backend: DepthBackend
+    if settings.get("TensorRT", False):
+        depth_backend = "tensorrt_native"
+    elif settings.get("ONNX", False):
+        depth_backend = "onnx_cuda"
+    elif settings.get("Depth Backend"):
+        depth_backend = _normalize_depth_backend(settings["Depth Backend"])
+    else:
+        depth_backend = "pytorch_cuda"
+
+    onnx_dtype: OnnxDtypeMode = "fp16" if settings.get("FP16", True) else "fp32"
+    mode = _normalize_runtime_mode(settings.get("Stereo Runtime Mode", settings.get("Run Mode", "movie")))
+    output_format = _normalize_output_format(settings.get("Display Mode", "half_sbs"))
+
+    return StereoRuntimeConfig(
+        model_id=str(model_name),
+        cache_dir=cache_dir,
+        mode=mode,
+        stereo_quality="fast" if depth_only else "quality_4k",
+        output_format=output_format,
+        depth_backend=depth_backend,
+        device=device,
+        onnx_dtype=onnx_dtype,
+        build_trt_engine=bool(settings.get("TensorRT", False)),
+        force_rebuild_trt=bool(settings.get("Recompile TensorRT", False)),
+        depth_strength=float(settings.get("Depth Strength", 2.0)),
+        convergence=float(settings.get("Convergence", 0.0)),
+        ipd=float(settings.get("IPD", 0.064)),
+    )
+
+
+def _normalize_depth_backend(value: Any) -> DepthBackend:
+    key = str(value).strip().lower().replace("-", "_")
+    mapping: dict[str, DepthBackend] = {
+        "auto": "auto",
+        "tensorrt": "tensorrt_native",
+        "tensorrt_native": "tensorrt_native",
+        "trt": "tensorrt_native",
+        "onnx": "onnx_cuda",
+        "onnx_cuda": "onnx_cuda",
+        "onnx_cuda_iobinding": "onnx_cuda",
+        "pytorch": "pytorch_cuda",
+        "pytorch_cuda": "pytorch_cuda",
+    }
+    try:
+        return mapping[key]
+    except KeyError as exc:
+        raise ValueError(f"unknown depth backend: {value!r}") from exc
+
+
+def _normalize_runtime_mode(value: Any) -> RuntimeMode:
+    key = str(value).strip().lower().replace("-", "_")
+    if key in {"auto"}:
+        return "auto"
+    if key in {"game", "game_low_latency"}:
+        return "game"
+    if key in {"image", "still", "still_image", "still_image_hq"}:
+        return "image"
+    return "movie"
+
+
+def _normalize_output_format(value: Any) -> OutputFormat:
+    key = str(value).strip().lower().replace("-", "_")
+    mapping: dict[str, OutputFormat] = {
+        "half_sbs": "half_sbs",
+        "sbs": "half_sbs",
+        "full_sbs": "full_sbs",
+        "half_tab": "half_tab",
+        "tab": "half_tab",
+        "full_tab": "full_tab",
+        "mono": "mono",
+        "anaglyph": "anaglyph",
+        "interleaved": "interleaved",
+        "leia": "leia",
+        "depth_map": "depth_map",
+    }
+    return mapping.get(key, "half_sbs")
+
+
 def preset_for_runtime_mode(mode: str) -> str:
     key = str(mode).strip().lower().replace("-", "_")
     mapping = {
@@ -127,7 +248,9 @@ def preset_for_runtime_mode(mode: str) -> str:
         raise ValueError(f"unknown runtime mode: {mode!r}") from exc
 
 
-def depth_provider_config_from_runtime(config: StereoRuntimeConfig) -> DepthProviderConfig:
+def depth_provider_config_from_runtime(config: StereoRuntimeConfig) -> "DepthProviderConfig":
+    from .depth_provider import DepthProviderConfig
+
     backend = config.depth_backend
     if backend == "auto":
         backend = "tensorrt_native"
@@ -138,6 +261,8 @@ def depth_provider_config_from_runtime(config: StereoRuntimeConfig) -> DepthProv
 
     return DepthProviderConfig(
         backend=backend,
+        model_id=config.resolved_model_id,
+        model_name=ModelRegistry.default().get(config.resolved_model_id).name,
         device=config.device,
         cache_dir=config.model_path.parent,
         onnx_path=config.onnx_path,
@@ -148,12 +273,17 @@ def depth_provider_config_from_runtime(config: StereoRuntimeConfig) -> DepthProv
         prefer_onnx=backend == "onnx_cuda_iobinding",
         use_iobinding=True,
         use_dlpack=backend == "onnx_cuda_iobinding",
+        build_engine=config.build_trt_engine,
+        force_rebuild=config.force_rebuild_trt,
+        use_cuda_graph=config.use_cuda_graph,
         depth_upsample=config.depth_upsample,
         depth_upsample_edge_strength=config.depth_upsample_edge_strength,
     )
 
 
-def stereo_config_from_runtime(config: StereoRuntimeConfig) -> StereoConfig:
+def stereo_config_from_runtime(config: StereoRuntimeConfig) -> "StereoConfig":
+    from .presets import normalize_preset, stereo_config_for_preset
+
     preset = normalize_preset(preset_for_runtime_mode(config.mode))
     layers = config.layers
     if config.stereo_quality == "hq_4k" and layers < 3:
@@ -184,3 +314,5 @@ def stereo_config_from_runtime(config: StereoRuntimeConfig) -> StereoConfig:
 
 
 StereoLabRuntimeConfig = StereoRuntimeConfig
+DepthRuntimeConfig = StereoRuntimeConfig
+StereoLabDepthRuntimeConfig = StereoRuntimeConfig

@@ -61,6 +61,10 @@ class DepthProfileResult:
 @dataclass(frozen=True)
 class DepthProviderConfig:
     backend: str = "distill_base_nvidia"
+    model_id: str = DISTILL_ANY_DEPTH_BASE_MODEL_ID
+    model_name: str = DISTILL_ANY_DEPTH_BASE_NAME
+    depth_resolution: int = DISTILL_ANY_DEPTH_BASE_RESOLUTION
+    patch_size: int = DISTILL_ANY_DEPTH_PATCH_SIZE
     device: str | torch.device = "cuda"
     cache_dir: str | Path | None = None
     onnx_path: str | Path | None = None
@@ -232,6 +236,164 @@ class DistillAnyDepthBase518:
         return DepthProfileResult(depth, preprocess_ms, model_ms, postprocess_ms)
 
 
+class GenericAutoDepthProvider:
+    def __init__(
+        self,
+        *,
+        model_id: str,
+        model_name: str | None = None,
+        device: str | torch.device = "cuda",
+        cache_dir: str | Path | None = None,
+        dtype: torch.dtype | None = None,
+        depth_resolution: int = DISTILL_ANY_DEPTH_BASE_RESOLUTION,
+        patch_size: int | None = DISTILL_ANY_DEPTH_PATCH_SIZE,
+        local_files_only: bool = False,
+        force_download: bool = False,
+        depth_upsample: DepthUpsampleMode = "bilinear",
+        depth_upsample_edge_strength: float = 0.35,
+    ) -> None:
+        self.model_id = model_id
+        self.model_name = model_name or model_id.rsplit("/", 1)[-1].replace("-hf", "")
+        self.device = torch.device(device)
+        self.cache_dir = Path(cache_dir) if cache_dir is not None else default_lab_cache_dir()
+        self.dtype = dtype or (torch.float16 if self.device.type == "cuda" else torch.float32)
+        self.depth_resolution = int(depth_resolution)
+        self.patch_size = patch_size
+        self.local_files_only = bool(local_files_only)
+        self.force_download = bool(force_download)
+        self.depth_upsample = depth_upsample
+        self.depth_upsample_edge_strength = float(depth_upsample_edge_strength)
+        self.info = DepthProviderInfo(
+            provider="transformers.AutoModelForDepthEstimation",
+            model_name=self.model_name,
+            model_id=self.model_id,
+            depth_resolution=self.depth_resolution,
+            cache_dir=str(self.cache_dir),
+            load_mode="local_files_only" if self.local_files_only else "online_force_download" if self.force_download else "online",
+            depth_backend="pytorch_cuda" if self.device.type == "cuda" else "pytorch_cpu",
+            runtime="transformers-generic",
+        )
+        self._model = None
+
+    def load(self):
+        if self._model is not None:
+            return self._model
+
+        from transformers import AutoModelForDepthEstimation
+
+        kwargs = {
+            "cache_dir": str(self.cache_dir),
+            "dtype": self.dtype,
+            "weights_only": True,
+            "local_files_only": self.local_files_only,
+            "force_download": self.force_download,
+        }
+        model = AutoModelForDepthEstimation.from_pretrained(
+            self.model_id,
+            **kwargs,
+        )
+        self._model = model.to(self.device).eval()
+        return self._model
+
+    def predict(self, rgb: torch.Tensor) -> torch.Tensor:
+        return self.predict_profile(rgb).depth
+
+    def predict_profile(self, rgb: torch.Tensor) -> DepthProfileResult:
+        import time
+
+        def sync() -> None:
+            if self.device.type == "cuda" and torch.cuda.is_available():
+                torch.cuda.synchronize()
+
+        sync()
+        start = time.perf_counter()
+        rgb = ensure_bchw(rgb, name="rgb").to(self.device).float().clamp(0, 1)
+        _, _, height, width = rgb.shape
+        input_h, input_w = _model_input_size(
+            height,
+            width,
+            self.depth_resolution,
+            self.patch_size or 1,
+        )
+
+        tensor = F.interpolate(
+            rgb,
+            size=(input_h, input_w),
+            mode="bicubic" if self.device.type == "cuda" else "bilinear",
+            align_corners=False,
+            antialias=True if self.device.type == "cuda" else False,
+        ).to(self.dtype)
+
+        mean, std = _normalization_tensors_for_model(self.model_id, self.device, self.dtype)
+        tensor = (tensor - mean) / std
+        sync()
+        preprocess_ms = (time.perf_counter() - start) * 1000.0
+
+        model = self.load()
+        use_autocast = self.device.type == "cuda" and self.dtype == torch.float16
+        sync()
+        start = time.perf_counter()
+        with torch.inference_mode(), torch.autocast(device_type=self.device.type, enabled=use_autocast):
+            output = model(pixel_values=tensor)
+        predicted = _extract_depth_output(output)
+        sync()
+        model_ms = (time.perf_counter() - start) * 1000.0
+
+        start = time.perf_counter()
+        depth = ensure_b1hw(predicted)
+        depth = _postprocess_generic_depth(depth, self.model_id)
+        depth = upsample_depth(
+            depth,
+            height,
+            width,
+            rgb=rgb,
+            mode=self.depth_upsample,
+            edge_strength=self.depth_upsample_edge_strength,
+        )
+        sync()
+        postprocess_ms = (time.perf_counter() - start) * 1000.0
+        return DepthProfileResult(depth, preprocess_ms, model_ms, postprocess_ms)
+
+
+def _normalization_tensors_for_model(model_id: str, device: torch.device, dtype: torch.dtype) -> tuple[torch.Tensor, torch.Tensor]:
+    model_lower = model_id.lower()
+    if any(key in model_lower for key in ("depthpro", "zoedepth", "dpt")):
+        mean_values = [0.5, 0.5, 0.5]
+        std_values = [0.5, 0.5, 0.5]
+    else:
+        mean_values = [0.485, 0.456, 0.406]
+        std_values = [0.229, 0.224, 0.225]
+    mean = torch.tensor(mean_values, device=device, dtype=dtype).view(1, 3, 1, 1)
+    std = torch.tensor(std_values, device=device, dtype=dtype).view(1, 3, 1, 1)
+    return mean, std
+
+
+def _extract_depth_output(output):
+    if isinstance(output, torch.Tensor):
+        return output
+    if hasattr(output, "predicted_depth"):
+        return output.predicted_depth
+    if isinstance(output, dict) and "predicted_depth" in output:
+        return output["predicted_depth"]
+    if isinstance(output, (tuple, list)):
+        for item in output:
+            if isinstance(item, torch.Tensor):
+                return item
+    raise RuntimeError(f"unsupported model output type: {type(output).__name__}")
+
+
+def _is_metric_model(model_id: str) -> bool:
+    model_lower = model_id.lower()
+    return any(key in model_lower for key in ("metric", "kitti", "nyu", "depth-ai", "da3"))
+
+
+def _postprocess_generic_depth(depth: torch.Tensor, model_id: str) -> torch.Tensor:
+    depth = ensure_b1hw(depth).float()
+    if _is_metric_model(model_id):
+        depth = depth.clamp_min(5e-3).reciprocal()
+    return _normalize_depth(depth)
+
+
 def create_depth_provider(config: DepthProviderConfig | dict[str, Any] | None = None):
     cfg = config if isinstance(config, DepthProviderConfig) else DepthProviderConfig(**(config or {}))
     backend = cfg.backend
@@ -280,6 +442,19 @@ def create_depth_provider(config: DepthProviderConfig | dict[str, Any] | None = 
         )
 
     if backend in {"distill_base_518", "pytorch_cuda", "pytorch"}:
+        if cfg.model_id != DISTILL_ANY_DEPTH_BASE_MODEL_ID:
+            return GenericAutoDepthProvider(
+                model_id=cfg.model_id,
+                model_name=cfg.model_name,
+                device=device,
+                cache_dir=cfg.cache_dir,
+                depth_resolution=cfg.depth_resolution,
+                patch_size=cfg.patch_size,
+                local_files_only=cfg.local_files_only,
+                force_download=cfg.force_download,
+                depth_upsample=cfg.depth_upsample,
+                depth_upsample_edge_strength=cfg.depth_upsample_edge_strength,
+            )
         return DistillAnyDepthBase518(
             device=device,
             cache_dir=cfg.cache_dir,

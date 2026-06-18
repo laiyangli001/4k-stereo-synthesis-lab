@@ -16,6 +16,149 @@ from .temporal import TemporalState
 
 
 @dataclass(frozen=True)
+class DepthRuntimeResult:
+    depth: torch.Tensor
+    timing: dict[str, float] = field(default_factory=dict)
+    provider_info: dict[str, Any] = field(default_factory=dict)
+
+
+class DepthRuntime:
+    """Persistent host-facing runtime for RGB frame -> depth only."""
+
+    def __init__(
+        self,
+        config: StereoRuntimeConfig,
+        *,
+        depth_provider: Any | None = None,
+        stats_window: int = 300,
+        collect_memory_stats: bool = True,
+    ) -> None:
+        self.config = config
+        self.depth_config = depth_provider_config_from_runtime(config)
+        self.depth_provider = depth_provider if depth_provider is not None else create_depth_provider(self.depth_config)
+        self._loaded = False
+        self._active = True
+        self.last_timing: dict[str, float] = {}
+        self.last_memory: dict[str, float] = {}
+        self.stats = RollingRuntimeStats(maxlen=stats_window)
+        self.collect_memory_stats = bool(collect_memory_stats)
+
+    def load(self) -> None:
+        if self._loaded:
+            return
+        load = getattr(self.depth_provider, "load", None)
+        if callable(load):
+            load()
+        self._loaded = True
+
+    def set_inference_active(self, active: bool) -> None:
+        self._active = bool(active)
+
+    def reset_stats(self) -> None:
+        self.stats.reset()
+        self.last_timing = {}
+        self.last_memory = {}
+
+    def close(self) -> None:
+        close = getattr(self.depth_provider, "close", None)
+        if callable(close):
+            close()
+        self._loaded = False
+
+    def provider_report(self) -> dict[str, Any]:
+        return _provider_report(self.depth_provider)
+
+    def to_report(self) -> dict[str, Any]:
+        report = self.config.to_report()
+        report["depth_provider"] = self.provider_report()
+        report["depth_backend_resolved"] = self.depth_config.backend
+        report["last_timing"] = dict(self.last_timing)
+        report["last_memory"] = dict(self.last_memory)
+        report["rolling_stats"] = self.stats.to_report()
+        report["inference_active"] = self._active
+        return report
+
+    def predict_depth_frame(self, rgb_frame: torch.Tensor) -> DepthRuntimeResult:
+        if not self._active:
+            raise RuntimeError("DepthRuntime inference is paused")
+        self.load()
+        self._reset_cuda_peak_if_needed()
+        rgb_frame = _validate_runtime_rgb_frame(rgb_frame)
+
+        total_start = time.perf_counter()
+        profile = self._predict_depth_profile(rgb_frame)
+        total_ms = (time.perf_counter() - total_start) * 1000.0
+        timing = {
+            "depth_preprocess_ms": float(profile.preprocess_ms),
+            "depth_model_ms": float(profile.model_ms),
+            "depth_postprocess_ms": float(profile.postprocess_ms),
+            "depth_total_ms": float(total_ms),
+            "total_ms": float(total_ms),
+        }
+        memory = self._collect_memory_stats(rgb_frame)
+        self.last_timing = timing
+        self.last_memory = memory
+        self.stats.update(timing, memory)
+        return DepthRuntimeResult(depth=profile.depth, timing=timing, provider_info=self.provider_report())
+
+    def _predict_depth_profile(self, rgb_frame: torch.Tensor) -> DepthProfileResult:
+        predict_profile = getattr(self.depth_provider, "predict_profile", None)
+        if callable(predict_profile):
+            result = predict_profile(rgb_frame)
+            if isinstance(result, DepthProfileResult):
+                return result
+            depth = getattr(result, "depth", None)
+            if depth is not None:
+                return DepthProfileResult(
+                    depth=depth,
+                    preprocess_ms=float(getattr(result, "preprocess_ms", 0.0)),
+                    model_ms=float(getattr(result, "model_ms", 0.0)),
+                    postprocess_ms=float(getattr(result, "postprocess_ms", 0.0)),
+                )
+
+        start = time.perf_counter()
+        depth = self.depth_provider.predict(rgb_frame)
+        elapsed = (time.perf_counter() - start) * 1000.0
+        return DepthProfileResult(depth=depth, preprocess_ms=0.0, model_ms=float(elapsed), postprocess_ms=0.0)
+
+    def _reset_cuda_peak_if_needed(self) -> None:
+        if not self.collect_memory_stats or not torch.cuda.is_available():
+            return
+        device = self._runtime_cuda_device()
+        if device is None:
+            return
+        try:
+            torch.cuda.reset_peak_memory_stats(device)
+        except Exception:
+            pass
+
+    def _collect_memory_stats(self, rgb_frame: torch.Tensor) -> dict[str, float]:
+        if not self.collect_memory_stats or not torch.cuda.is_available():
+            return {}
+        device = self._runtime_cuda_device(rgb_frame)
+        if device is None:
+            return {}
+        try:
+            return {
+                "cuda_memory_allocated_mb": torch.cuda.memory_allocated(device) / (1024.0 * 1024.0),
+                "cuda_memory_reserved_mb": torch.cuda.memory_reserved(device) / (1024.0 * 1024.0),
+                "cuda_peak_memory_allocated_mb": torch.cuda.max_memory_allocated(device) / (1024.0 * 1024.0),
+                "cuda_peak_memory_reserved_mb": torch.cuda.max_memory_reserved(device) / (1024.0 * 1024.0),
+            }
+        except Exception:
+            return {}
+
+    def _runtime_cuda_device(self, rgb_frame: torch.Tensor | None = None) -> torch.device | None:
+        if isinstance(rgb_frame, torch.Tensor) and rgb_frame.is_cuda:
+            return rgb_frame.device
+        try:
+            device = torch.device(self.config.device)
+        except Exception:
+            return None
+        return device if device.type == "cuda" else None
+
+
+@dataclass(frozen=True)
 class StereoRuntimeResult:
     depth: torch.Tensor
     left_eye: torch.Tensor
@@ -154,15 +297,7 @@ class StereoRuntime:
         self._loaded = False
 
     def provider_report(self) -> dict[str, Any]:
-        info = getattr(self.depth_provider, "info", None)
-        if info is None:
-            return {}
-        to_report = getattr(info, "to_report", None)
-        if callable(to_report):
-            return to_report()
-        if isinstance(info, dict):
-            return dict(info)
-        return {"info": str(info)}
+        return _provider_report(self.depth_provider)
 
     def to_report(self) -> dict[str, Any]:
         report = self.config.to_report()
@@ -177,6 +312,7 @@ class StereoRuntime:
     def process_rgb_frame(self, rgb_frame: torch.Tensor) -> StereoRuntimeResult:
         self.load()
         self._reset_cuda_peak_if_needed()
+        rgb_frame = _validate_runtime_rgb_frame(rgb_frame)
 
         total_start = time.perf_counter()
         depth_start = time.perf_counter()
@@ -300,3 +436,31 @@ class StereoRuntime:
 
 StereoLabRuntime = StereoRuntime
 StereoLabRuntimeResult = StereoRuntimeResult
+StereoLabDepthRuntime = DepthRuntime
+StereoLabDepthRuntimeResult = DepthRuntimeResult
+
+
+def _provider_report(depth_provider: Any) -> dict[str, Any]:
+    info = getattr(depth_provider, "info", None)
+    if info is None:
+        return {}
+    to_report = getattr(info, "to_report", None)
+    if callable(to_report):
+        return to_report()
+    if isinstance(info, dict):
+        return dict(info)
+    return {"info": str(info)}
+
+
+def _validate_runtime_rgb_frame(rgb_frame: Any) -> torch.Tensor:
+    """Validate the capture/runtime boundary without doing capture adaptation."""
+    if not isinstance(rgb_frame, torch.Tensor):
+        raise TypeError("rgb_frame must be a torch.Tensor prepared by the capture layer")
+    if rgb_frame.ndim not in (3, 4):
+        raise ValueError(f"rgb_frame must be CHW or BCHW, got shape {tuple(rgb_frame.shape)}")
+    channel_dim = 0 if rgb_frame.ndim == 3 else 1
+    if rgb_frame.shape[channel_dim] != 3:
+        raise ValueError(f"rgb_frame must be RGB with 3 channels in CHW/BCHW layout, got shape {tuple(rgb_frame.shape)}")
+    if not rgb_frame.is_floating_point():
+        raise TypeError(f"rgb_frame must be float 0..1; got dtype {rgb_frame.dtype}")
+    return rgb_frame
