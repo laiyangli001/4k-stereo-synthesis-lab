@@ -1,6 +1,8 @@
 import sys, requests
 import yaml, threading, time
 import os, platform, socket
+import importlib.util
+from pathlib import Path
 
 # Debug Mode
 DEBUG = False
@@ -247,29 +249,15 @@ RECOMPILE_COREML = settings["Recompile CoreML"] # recompile CoreML mlpackage
 USE_OPENVINO = settings["OpenVINO"]  # use OpenVINO for Intel
 RECOMPILE_OPENVINO = settings["Recompile OpenVINO"] # recompile OpenVINO IR
 
-def _resolve_capture_tool(raw_value):
-    """If Capture Tool is 'none', pick the OS- and device-specific default."""
-    if raw_value and raw_value != "none":
-        return raw_value
-    if OS_NAME == "Windows":
-        try:
-            import torch
-            if torch.cuda.is_available():
-                if getattr(torch.version, "hip", None) is not None:
-                    return "WindowsCaptureROCm"
-                return "WindowsCaptureCUDA"
-        except Exception:
-            pass
-        try:
-            import torch_directml
-            if torch_directml.is_available() and torch_directml.device_count() > 0:
-                return "DXCamera"
-        except Exception:
-            pass
-        return "DXCamera"
-    if OS_NAME == "Darwin":
-        return "ScreenCaptureKit"
-    return "DXCamera"
+def _load_capture_select():
+    path = Path(__file__).resolve().parents[1] / "capture" / "capture_select.py"
+    spec = importlib.util.spec_from_file_location("_d2s_capture_select", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_resolve_capture_tool = _load_capture_select().resolve_capture_tool
 
 CAPTURE_TOOL = _resolve_capture_tool(settings["Capture Tool"])
 FILL_16_9 = settings["Fill 16:9"]
@@ -541,24 +529,6 @@ ENVIRONMENT_MODEL = settings.get("Environment Model", "Default")
 XR_PREVIEW_WINDOW = settings.get("XR Preview Window", True)
 
 # Initialize Device
-import torch
-def get_device(index=0):
-    try:
-        try:
-            import torch_directml
-            if torch_directml.is_available():
-                return torch_directml.device(index), f"Using DirectML device: {torch_directml.device_name(index)}"
-        except ImportError:
-            pass
-        if torch.backends.mps.is_available() and index==0:
-            return torch.device("mps"), "Using Apple Silicon (MPS) device"
-        if torch.cuda.is_available():
-            return torch.device("cuda"), f"Using CUDA device: {torch.cuda.get_device_name(index)}"
-        if torch.xpu.is_available():
-            return torch.device("xpu"), f"Using XPU device: {torch.xpu.get_device_name(index)}"
-        else:
-            return torch.device("cpu"), "Using CPU device"
-    except:
-        return torch.device("cpu"), "Using CPU device"
+from .device import get_device
     
 DEVICE, DEVICE_INFO = get_device(DEVICE_ID)
