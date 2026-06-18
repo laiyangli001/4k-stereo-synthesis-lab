@@ -13,7 +13,7 @@ from .depth_provider import (
     DISTILL_ANY_DEPTH_PATCH_SIZE,
     DepthProfileResult,
     DepthProviderInfo,
-    DistillAnyDepthBase518,
+    TorchDepthProvider,
     _model_input_size,
     _normalize_depth,
     default_lab_cache_dir,
@@ -25,6 +25,10 @@ from .output import ensure_b1hw, ensure_bchw, match_depth
 def default_distill_base_onnx_path(cache_dir: str | Path | None = None) -> Path:
     cache = Path(cache_dir) if cache_dir is not None else default_lab_cache_dir()
     return cache / "models--lc700x--Distill-Any-Depth-Base-hf" / "model_fp16_294x518.onnx"
+
+
+def default_onnx_path(cache_dir: str | Path | None = None) -> Path:
+    return default_distill_base_onnx_path(cache_dir)
 
 
 def _preprocess_distill_rgb(rgb: torch.Tensor, *, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
@@ -100,7 +104,7 @@ class DistillAnyDepthBaseOnnxCuda:
     ) -> None:
         self.device = torch.device(device)
         self.cache_dir = Path(cache_dir) if cache_dir is not None else default_lab_cache_dir()
-        self.onnx_path = Path(onnx_path) if onnx_path is not None else default_distill_base_onnx_path(self.cache_dir)
+        self.onnx_path = Path(onnx_path) if onnx_path is not None else default_onnx_path(self.cache_dir)
         self.dtype = torch.float16 if self.device.type == "cuda" else torch.float32
         self.model_id = model_id
         self.model_name = model_name
@@ -224,9 +228,9 @@ def estimate_distill_any_depth_base_518_nvidia(
     local_files_only: bool = False,
     force_download: bool = False,
 ) -> tuple[torch.Tensor, DepthProviderInfo]:
-    from .providers.nvidia.tensorrt_ort import estimate_distill_any_depth_base_518_nvidia as estimate_with_nvidia_chain
+    from .providers.nvidia.tensorrt_ort import estimate_depth_nvidia_chain
 
-    return estimate_with_nvidia_chain(
+    return estimate_depth_nvidia_chain(
         rgb,
         device=device,
         cache_dir=cache_dir,
@@ -238,7 +242,8 @@ def estimate_distill_any_depth_base_518_nvidia(
         force_download=force_download,
     )
 
-def estimate_distill_any_depth_base_518_onnx_cuda(
+
+def estimate_depth_onnx_cuda(
     rgb: torch.Tensor,
     *,
     device: str | torch.device = "cuda",
@@ -251,7 +256,7 @@ def estimate_distill_any_depth_base_518_onnx_cuda(
 ) -> tuple[torch.Tensor, DepthProviderInfo]:
     fallback_reason = None
     try:
-        provider = DistillAnyDepthBaseOnnxCuda(
+        provider = OnnxCudaDepthProvider(
             device=device,
             cache_dir=cache_dir,
             onnx_path=onnx_path,
@@ -264,7 +269,7 @@ def estimate_distill_any_depth_base_518_onnx_cuda(
         if not allow_pytorch_fallback:
             raise
 
-    provider = DistillAnyDepthBase518(
+    provider = TorchDepthProvider(
         device=device,
         cache_dir=cache_dir,
         local_files_only=local_files_only,
@@ -274,6 +279,10 @@ def estimate_distill_any_depth_base_518_onnx_cuda(
     info = replace(
         provider.info,
         fallback_reason=fallback_reason,
-        onnx_path=str(onnx_path or default_distill_base_onnx_path(cache_dir)),
+        onnx_path=str(onnx_path or default_onnx_path(cache_dir)),
     )
     return depth, info
+
+
+OnnxCudaDepthProvider = DistillAnyDepthBaseOnnxCuda
+estimate_distill_any_depth_base_518_onnx_cuda = estimate_depth_onnx_cuda

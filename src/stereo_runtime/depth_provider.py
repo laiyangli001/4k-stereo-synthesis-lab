@@ -355,6 +355,10 @@ class GenericAutoDepthProvider:
         return DepthProfileResult(depth, preprocess_ms, model_ms, postprocess_ms)
 
 
+TorchDepthProvider = DistillAnyDepthBase518
+GenericTorchDepthProvider = GenericAutoDepthProvider
+
+
 def _normalization_tensors_for_model(model_id: str, device: torch.device, dtype: torch.dtype) -> tuple[torch.Tensor, torch.Tensor]:
     model_lower = model_id.lower()
     if any(key in model_lower for key in ("depthpro", "zoedepth", "dpt")):

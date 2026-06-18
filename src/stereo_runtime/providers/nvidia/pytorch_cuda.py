@@ -1,7 +1,12 @@
-from stereo_runtime.depth_provider import DistillAnyDepthBase518, GenericAutoDepthProvider
+from stereo_runtime.depth_provider import (
+    DistillAnyDepthBase518,
+    GenericAutoDepthProvider,
+    GenericTorchDepthProvider,
+    TorchDepthProvider,
+)
 
-TorchCudaDepthProvider = DistillAnyDepthBase518
-GenericTorchCudaDepthProvider = GenericAutoDepthProvider
+TorchCudaDepthProvider = TorchDepthProvider
+GenericTorchCudaDepthProvider = GenericTorchDepthProvider
 
 __all__ = [
     "TorchCudaDepthProvider",

@@ -6,7 +6,7 @@ import time
 
 import torch
 
-from ...depth_onnx_provider import DistillPreprocessor, default_distill_base_onnx_path
+from ...depth_onnx_provider import DistillPreprocessor, default_onnx_path
 from ...depth_provider import (
     DISTILL_ANY_DEPTH_BASE_MODEL_ID,
     DISTILL_ANY_DEPTH_BASE_NAME,
@@ -24,6 +24,10 @@ from .tensorrt_ort import ensure_tensorrt_dll_path
 def default_distill_base_native_trt_path(cache_dir: str | Path | None = None) -> Path:
     cache = Path(cache_dir) if cache_dir is not None else default_lab_cache_dir()
     return cache / "models--lc700x--Distill-Any-Depth-Base-hf" / "model_fp16_294x518.trt"
+
+
+def default_native_tensorrt_engine_path(cache_dir: str | Path | None = None) -> Path:
+    return default_distill_base_native_trt_path(cache_dir)
 
 
 def _infer_model_metadata_from_paths(
@@ -251,8 +255,8 @@ class DistillAnyDepthBaseNativeTensorRt:
         if self.device.type != "cuda":
             raise RuntimeError("Native TensorRT depth provider requires CUDA")
         self.cache_dir = Path(cache_dir) if cache_dir is not None else default_lab_cache_dir()
-        self.onnx_path = Path(onnx_path) if onnx_path is not None else default_distill_base_onnx_path(self.cache_dir)
-        self.engine_path = Path(engine_path) if engine_path is not None else default_distill_base_native_trt_path(self.cache_dir)
+        self.onnx_path = Path(onnx_path) if onnx_path is not None else default_onnx_path(self.cache_dir)
+        self.engine_path = Path(engine_path) if engine_path is not None else default_native_tensorrt_engine_path(self.cache_dir)
         self.model_id, self.model_name = _infer_model_metadata_from_paths(
             self.onnx_path,
             self.engine_path,

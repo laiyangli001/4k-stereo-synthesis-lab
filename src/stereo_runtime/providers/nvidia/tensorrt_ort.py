@@ -9,7 +9,7 @@ import torch
 
 from ...depth_onnx_provider import (
     DistillPreprocessor,
-    default_distill_base_onnx_path,
+    default_onnx_path,
 )
 from ...depth_provider import (
     DISTILL_ANY_DEPTH_BASE_MODEL_ID,
@@ -17,7 +17,7 @@ from ...depth_provider import (
     DISTILL_ANY_DEPTH_BASE_RESOLUTION,
     DepthProfileResult,
     DepthProviderInfo,
-    DistillAnyDepthBase518,
+    TorchDepthProvider,
     _normalize_depth,
     default_lab_cache_dir,
 )
@@ -29,6 +29,10 @@ from .onnx_cuda import OnnxCudaDepthProvider
 def default_distill_base_trt_cache_dir(cache_dir: str | Path | None = None) -> Path:
     cache = Path(cache_dir) if cache_dir is not None else default_lab_cache_dir()
     return cache / "models--lc700x--Distill-Any-Depth-Base-hf" / "trt_cache"
+
+
+def default_tensorrt_cache_dir(cache_dir: str | Path | None = None) -> Path:
+    return default_distill_base_trt_cache_dir(cache_dir)
 
 
 def candidate_tensorrt_lib_dirs() -> list[Path]:
@@ -88,8 +92,8 @@ class DistillAnyDepthBaseTensorRtOrt:
         if self.device.type != "cuda":
             raise RuntimeError("TensorRT depth provider requires CUDA")
         self.cache_dir = Path(cache_dir) if cache_dir is not None else default_lab_cache_dir()
-        self.onnx_path = Path(onnx_path) if onnx_path is not None else default_distill_base_onnx_path(self.cache_dir)
-        self.trt_cache_dir = Path(trt_cache_dir) if trt_cache_dir is not None else default_distill_base_trt_cache_dir(self.cache_dir)
+        self.onnx_path = Path(onnx_path) if onnx_path is not None else default_onnx_path(self.cache_dir)
+        self.trt_cache_dir = Path(trt_cache_dir) if trt_cache_dir is not None else default_tensorrt_cache_dir(self.cache_dir)
         self.dtype = torch.float16
         self.model_id = model_id
         self.model_name = model_name
@@ -204,7 +208,7 @@ class DistillAnyDepthBaseTensorRtOrt:
 TensorRtOrtDepthProvider = DistillAnyDepthBaseTensorRtOrt
 
 
-def estimate_distill_any_depth_base_518_nvidia(
+def estimate_depth_nvidia_chain(
     rgb: torch.Tensor,
     *,
     device: str | torch.device = "cuda",
@@ -221,7 +225,7 @@ def estimate_distill_any_depth_base_518_nvidia(
     fallback_reasons: list[str] = []
     if prefer_tensorrt:
         try:
-            provider = DistillAnyDepthBaseTensorRtOrt(
+            provider = TensorRtOrtDepthProvider(
                 device=device,
                 cache_dir=cache_dir,
                 onnx_path=onnx_path,
@@ -250,7 +254,7 @@ def estimate_distill_any_depth_base_518_nvidia(
             if not allow_pytorch_fallback:
                 raise
 
-    provider = DistillAnyDepthBase518(
+    provider = TorchDepthProvider(
         device=device,
         cache_dir=cache_dir,
         local_files_only=local_files_only,
@@ -260,6 +264,9 @@ def estimate_distill_any_depth_base_518_nvidia(
     info = replace(
         provider.info,
         fallback_reason="; ".join(fallback_reasons) or None,
-        onnx_path=str(onnx_path or default_distill_base_onnx_path(cache_dir)),
+        onnx_path=str(onnx_path or default_onnx_path(cache_dir)),
     )
     return depth, info
+
+
+estimate_distill_any_depth_base_518_nvidia = estimate_depth_nvidia_chain
