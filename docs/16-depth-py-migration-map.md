@@ -73,6 +73,7 @@
 ## 删除 depth.py 的验收条件
 
 - `Select-String` 或 CodeGraph 确认无 `from depth import` / `import depth` 外部调用。
+- `tests/test_no_legacy_depth_imports.py` 持续防止新增外部 `depth.py` import。
 - `DepthRuntime` 能完成 D2S 第一阶段 depth-only 队列合同。
 - viewer/xrviewer 显示不变暗、不改变 RGB 数值语义。
 - Distill base/large 的 PyTorch、ONNX CUDA、Native TensorRT 路径可用。
