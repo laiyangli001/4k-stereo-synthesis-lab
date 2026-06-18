@@ -399,6 +399,22 @@ def create_depth_provider(config: DepthProviderConfig | dict[str, Any] | None = 
     backend = cfg.backend
     device = torch.device(cfg.device)
 
+    if backend in {"pytorch_rocm", "rocm", "amd_rocm"}:
+        from .providers.amd import create_pytorch_rocm_provider
+
+        return create_pytorch_rocm_provider(
+            model_id=cfg.model_id,
+            model_name=cfg.model_name,
+            device=device,
+            cache_dir=cfg.cache_dir,
+            depth_resolution=cfg.depth_resolution,
+            patch_size=cfg.patch_size,
+            local_files_only=cfg.local_files_only,
+            force_download=cfg.force_download,
+            depth_upsample=cfg.depth_upsample,
+            depth_upsample_edge_strength=cfg.depth_upsample_edge_strength,
+        )
+
     if backend in {"tensorrt_native", "native_tensorrt", "tensorrt_native_graph"} or (
         backend in {"distill_base_nvidia", "nvidia_chain"} and cfg.prefer_native_tensorrt
     ):
