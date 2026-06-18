@@ -26,12 +26,13 @@ from .display import (
     _get_device_name_from_mss_monitor,
     get_monitor_size,
 )
+from .device_runtime import resolve_device_runtime
 from .network import get_local_ip
 from .runtime_exports import resolve_runtime_exports
 from .settings import read_yaml
 
 settings = bootstrap_settings("settings.yaml", os_name=OS_NAME)
-from viewer.window_control import (
+from viewer import (
     hide_window_from_capture,
     send_ctrl_cmd_f,
     set_window_to_bottom,
@@ -93,7 +94,6 @@ CONTROLLER_MODEL = _RUNTIME_EXPORTS.controller_model
 ENVIRONMENT_MODEL = _RUNTIME_EXPORTS.environment_model
 XR_PREVIEW_WINDOW = _RUNTIME_EXPORTS.xr_preview_window
 
-# Initialize Device
-from .device import get_device
-    
-DEVICE, DEVICE_INFO = get_device(DEVICE_ID)
+_DEVICE_RUNTIME = resolve_device_runtime(DEVICE_ID)
+DEVICE = _DEVICE_RUNTIME.device
+DEVICE_INFO = _DEVICE_RUNTIME.device_info
