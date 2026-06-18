@@ -57,6 +57,7 @@ from viewer.window_control import (
     set_window_to_bottom,
     show_window_in_capture,
 )
+from viewer.upscaler import normalize_upscaler, normalize_upscaler_sharpness
         
 # Set Hugging Face environment variable
 configure_huggingface_endpoint()
@@ -136,18 +137,8 @@ _resolve_capture_tool = _load_capture_select().resolve_capture_tool
 CAPTURE_TOOL = _resolve_capture_tool(settings["Capture Tool"])
 FILL_16_9 = settings["Fill 16:9"]
 LOCAL_VSYNC = settings.get("Local VSync", True)
-UPSCALER = str(settings.get("Upscaler", "Off") or "Off")
-if UPSCALER.strip().lower() in ("auto", "自动"):
-    UPSCALER = "Auto"
-elif UPSCALER.strip().lower() in ("off", "关闭"):
-    UPSCALER = "Off"
-elif UPSCALER.strip().lower() == "fsr1":
-    UPSCALER = "FSR1"
-try:
-    UPSCALER_SHARPNESS = float(settings.get("Upscaler Sharpness", 0.35))
-except (TypeError, ValueError):
-    UPSCALER_SHARPNESS = 0.35
-UPSCALER_SHARPNESS = max(0.0, min(1.0, UPSCALER_SHARPNESS))
+UPSCALER = normalize_upscaler(settings.get("Upscaler", "Off"))
+UPSCALER_SHARPNESS = normalize_upscaler_sharpness(settings.get("Upscaler Sharpness", 0.35))
 FIX_VIEWER_ASPECT = _RUN_MODE_CONFIG.fix_viewer_aspect
 STEREOMIX_DEVICE = settings["Stereo Mix"] # RTMP StereoMix Device
 STREAM_KEY = settings["Stream Key"]
