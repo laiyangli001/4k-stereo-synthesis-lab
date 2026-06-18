@@ -8,9 +8,11 @@
 
 `adapter.py` 只负责把 GUI/settings/host 参数转换成 runtime config。
 
-`providers/factory.py` 负责根据 `vendor/backend/device` 选择 provider。
+`providers/factory.py` 负责根据 Host 已经传入的 `vendor/backend/device` 选择 provider。
 
 各平台 provider 只处理自己的 runtime、artifact 和后端细节。
+
+设备枚举、厂商识别和 capture backend 选择发生在 capture 之前，属于 Host / GUI / capture bootstrap 层，不属于 `stereo_runtime`。
 
 ## 推荐目录
 
@@ -59,6 +61,8 @@ src/stereo_runtime/
 ```
 
 ## 平台默认策略
+
+`vendor` 必须由 Host 传入。`stereo_runtime` 不主动枚举 GPU，不调用 `torch_directml.is_available()`，不根据系统环境猜测当前厂商。`backend=auto` 只表示“在 Host 已确认的 vendor 内选择默认 provider”。
 
 | vendor | backend=auto 优先级 |
 |---|---|
@@ -124,9 +128,21 @@ models/models--owner--repo/
 
 新增 `providers/*` 作为未来平台分层入口，逐步迁移时必须保持旧 import 兼容。
 
+当前 D2S 的设备识别仍由 GUI / Host 层完成：
+
+- DirectML：`torch_directml.is_available()`；
+- NVIDIA CUDA：设备 label 含 `CUDA` 且非 ROCm；
+- AMD ROCm：`torch.version.hip is not None`；
+- Apple：`torch.backends.mps.is_available()`；
+- Intel：`torch.xpu.is_available()`；
+- CPU：Host fallback。
+
+这些检测结果后续应由 Host 转成 `vendor` / `device` / `backend` 参数传给 `stereo_runtime`。
+
 ## 非目标
 
 - 不把 CoreML / OpenVINO / DirectML 塞进 `depth_provider.py` 主文件；
 - 不在 `runtime.py` 内写平台判断；
+- 不在 `stereo_runtime` 内做设备枚举或 capture backend 选择；
 - 不让 GUI 拼后端 artifact 路径；
 - 不为了平台兼容降低 depth inference 分辨率。
