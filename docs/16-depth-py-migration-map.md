@@ -2,7 +2,7 @@
 
 本文用于记录 Desktop2Stereo `depth.py` 平替前的功能拆分，避免把模型推理、捕捉预处理、立体生成、GUI 设置和多后端兼容混在一起迁移。
 
-结论先行：`depth.py` 不能直接删除。当前主流程可以逐步切到 `stereo_runtime`，但 `depth.py` 仍包含多模型加载、多后端 artifact 构建、旧 depth-shift SBS、temporal stabilizer、overlay 等功能。删除条件是下表所有必要项都有明确替代实现并通过 smoke/benchmark。
+结论先行：`src/depth.py` 已删除。删除前已完成主流程 `DepthRuntime` 接入、legacy `make_sbs` 迁出、模型 registry/artifact/ONNX 导出迁出、D2S depth-only smoke、真实 provider 小尺寸 smoke，以及外部 legacy depth import 防回归测试。
 
 ## 边界原则
 
@@ -80,6 +80,15 @@
 - 至少一个非 Distill 模型 PyTorch provider 可用，用于验证通用模型列表不是空壳。
 - 旧 MJPEG stream 如仍保留，改用 `legacy_sbs.py` 或新 viewer 输出路径。
 - 文档说明第一阶段暂不支持或已支持 CoreML/OpenVINO/DirectML。
+
+当前状态：
+
+- `src/depth.py` 已删除；
+- `src/main.py` 使用 `runtime_config_from_d2s_settings()` 创建 `DepthRuntime`；
+- 旧 MJPEG stream 使用 `legacy_sbs.make_sbs()`；
+- `scripts/tools/benchmark_inference_window.py` 使用 `DepthRuntime`；
+- 小尺寸真实 provider smoke 已验证 `pytorch_cuda`、`onnx_cuda`、`tensorrt_native` 可运行；
+- 4K 真实 provider 性能 smoke 按用户要求跳过，留待后续总体测试。
 
 ## 已完成 smoke
 
