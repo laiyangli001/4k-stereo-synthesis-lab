@@ -1,15 +1,5 @@
-import sys
-import threading, time
-import os, platform
-import importlib.util
-from pathlib import Path
+import threading
 
-# Debug Mode
-DEBUG = False
-# App Version
-VERSION = "2.5.0Beta"
-# Get OS name
-OS_NAME = platform.system()
 from streaming.audio import STEREO_MIX_NAMES
 from streaming.config import DEFAULT_PORT, resolve_streaming_config
 
@@ -32,11 +22,14 @@ shutdown_event = threading.Event()
 from viewer.assets import crop_icon, get_font_type
 
 
+from .app_info import DEBUG, OS_NAME, VERSION
+from .capture_tool import resolve_capture_tool
 from .display import (
     _get_device_name_from_mss_monitor,
     get_monitor_size,
 )
 from .network import configure_huggingface_endpoint, get_local_ip
+from .platform_env import configure_platform_environment
 from .run_mode import resolve_run_mode
 from .settings import load_settings, read_yaml
 from viewer.settings import resolve_viewer_settings
@@ -44,14 +37,7 @@ from viewer.settings import resolve_viewer_settings
 # load customized settings
 settings = load_settings("settings.yaml")
 
-# Ignore wanning for MPS
-if OS_NAME == "Darwin":
-    import os, warnings
-    os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
-    warnings.filterwarnings(
-        "ignore",
-        message=".*aten::upsample_bicubic2d.out.*MPS backend.*",
-        category=UserWarning)
+configure_platform_environment(OS_NAME)
 from viewer.window_control import (
     hide_window_from_capture,
     send_ctrl_cmd_f,
@@ -116,19 +102,7 @@ RECOMPILE_COREML = _DEPTH_SETTINGS.recompile_coreml
 USE_OPENVINO = _DEPTH_SETTINGS.use_openvino
 RECOMPILE_OPENVINO = _DEPTH_SETTINGS.recompile_openvino
 
-def _load_capture_select():
-    # Load the selector without importing capture.__init__, which still depends
-    # on utils during the package migration.
-    path = Path(__file__).resolve().parents[1] / "capture" / "capture_select.py"
-    spec = importlib.util.spec_from_file_location("_d2s_capture_select", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-_resolve_capture_tool = _load_capture_select().resolve_capture_tool
-
-CAPTURE_TOOL = _resolve_capture_tool(settings["Capture Tool"])
+CAPTURE_TOOL = resolve_capture_tool(settings["Capture Tool"])
 FILL_16_9 = _VIEWER_SETTINGS.fill_16_9
 LOCAL_VSYNC = _VIEWER_SETTINGS.local_vsync
 UPSCALER = _VIEWER_SETTINGS.upscaler
