@@ -138,11 +138,9 @@ STEREOMIX_DEVICE = _STREAMING_CONFIG.stereo_mix_device
 STREAM_KEY = _STREAMING_CONFIG.stream_key
 AUDIO_DELAY = _STREAMING_CONFIG.audio_delay
 CRF = _STREAMING_CONFIG.crf
-LANG = settings["Language"]
-
-from viewer.controller_help import get_controller_help_rows
-
-ROWS, ENV_ROWS = get_controller_help_rows(LANG)
+LANG = _VIEWER_SETTINGS.language
+ROWS = _VIEWER_SETTINGS.controller_help_rows
+ENV_ROWS = _VIEWER_SETTINGS.environment_help_rows
 
 # Specify the Stereo Display for output
 CONTROLLER_MODEL = _VIEWER_SETTINGS.controller_model

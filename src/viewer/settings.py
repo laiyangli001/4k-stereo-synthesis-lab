@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from utils.display import compute_output_resolution, get_fps
+from viewer.controller_help import get_controller_help_rows
 from viewer.upscaler import normalize_upscaler, normalize_upscaler_sharpness
 
 
@@ -25,6 +26,9 @@ class ViewerSettings:
     local_vsync: bool
     upscaler: str
     upscaler_sharpness: float
+    language: str
+    controller_help_rows: list
+    environment_help_rows: list
     controller_model: str
     environment_model: str
     xr_preview_window: bool
@@ -45,6 +49,8 @@ def resolve_viewer_settings(settings: dict) -> ViewerSettings:
     window_title = settings["Window Title"] if capture_mode == "Window" else None
     target_fps = int(settings.get("Target FPS", 0) or 0)
     fps = target_fps if 1 <= target_fps <= 240 else get_fps(window_title, monitor_index)
+    language = settings["Language"]
+    controller_help_rows, environment_help_rows = get_controller_help_rows(language)
 
     return ViewerSettings(
         monitor_index=monitor_index,
@@ -64,6 +70,9 @@ def resolve_viewer_settings(settings: dict) -> ViewerSettings:
         local_vsync=settings.get("Local VSync", True),
         upscaler=normalize_upscaler(settings.get("Upscaler", "Off")),
         upscaler_sharpness=normalize_upscaler_sharpness(settings.get("Upscaler Sharpness", 0.35)),
+        language=language,
+        controller_help_rows=controller_help_rows,
+        environment_help_rows=environment_help_rows,
         controller_model=settings["Controller Model"],
         environment_model=settings.get("Environment Model", "Default"),
         xr_preview_window=settings.get("XR Preview Window", True),
