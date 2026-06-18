@@ -108,18 +108,7 @@ DISABLE_TRITON_KEYWORDS = ["520", "160"]
 # Global shutdown event
 shutdown_event = threading.Event()
 
-def get_font_type(os=OS_NAME):
-    if os == "Darwin":
-        return "Verdana.ttf"
-    elif os == "Windows": 
-        return "verdana.ttf"
-    elif os == "Linux":
-        try:
-            return "/usr/share/fonts/truetype/freefont/FreeSans.ttf" # fix for Ubuntu
-        except:
-            return "Verdana.ttf"
-    else:
-        return "Verdana.ttf"
+from viewer.assets import crop_icon, get_font_type
 
 
 def get_fps(window_title="", monitor_index=None):
@@ -425,14 +414,6 @@ def get_local_ip():
     except Exception:
         return "127.0.0.1"
 
-def crop_icon(icon_img):
-    """Crop to make icon larger by cropping for Windows"""
-    if OS_NAME == "Windows":
-        icon_img = icon_img.convert("RGBA")
-        bbox = icon_img.getbbox()
-        icon_img = icon_img.crop(bbox)
-    return icon_img
-
 # load customized settings
 settings = read_yaml("settings.yaml")
 
@@ -444,26 +425,12 @@ if OS_NAME == "Darwin":
         "ignore",
         message=".*aten::upsample_bicubic2d.out.*MPS backend.*",
         category=UserWarning)
-    import time
-    import Quartz  # PyObjC binding for CoreGraphics
-    
-    # macOS virtual keycode for the 'F' key (physical key 'F')
-    KEY_F = 3
-    # modifier flags: Control + Command
-    MODIFY_FLAGS = Quartz.kCGEventFlagMaskControl | Quartz.kCGEventFlagMaskCommand
-
-    def send_ctrl_cmd_f(key=KEY_F, flags=MODIFY_FLAGS):
-        # key-down
-        ev_down = Quartz.CGEventCreateKeyboardEvent(None, key, True)
-        Quartz.CGEventSetFlags(ev_down, flags)
-        Quartz.CGEventPost(Quartz.kCGHIDEventTap, ev_down)
-
-        time.sleep(0.02)  # short hold
-
-        # key-up
-        ev_up = Quartz.CGEventCreateKeyboardEvent(None, key, False)
-        Quartz.CGEventSetFlags(ev_up, flags)
-        Quartz.CGEventPost(Quartz.kCGHIDEventTap, ev_up)
+from viewer.window_control import (
+    hide_window_from_capture,
+    send_ctrl_cmd_f,
+    set_window_to_bottom,
+    show_window_in_capture,
+)
         
 # Set Hugging Face environment variable
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
@@ -491,39 +458,6 @@ if is_cn_ip():
 else:
     os.environ['HF_ENDPOINT'] = "https://huggingface.co"
 
-if OS_NAME == "Windows":
-    import ctypes, win32gui, win32con
-    # get windows Hi-DPI scale
-    try:
-        ctypes.windll.shcore.SetProcessDpiAwareness(2)
-    except:
-        ctypes.windll.user32.SetProcessDPIAware()
-
-    import ctypes, glfw
-
-    user32 = ctypes.windll.user32
-    SetWindowDisplayAffinity = user32.SetWindowDisplayAffinity
-    WDA_EXCLUDEFROMCAPTURE = 0x00000011   # Windows 10 2004+
-    
-
-    def hide_window_from_capture(glfw_window):
-        hwnd = glfw.get_win32_window(glfw_window)
-        SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE)
-        print("StereoWindow is now hidden from screen capture.")
-
-    def show_window_in_capture(glfw_window):
-        hwnd = glfw.get_win32_window(glfw_window)
-        SetWindowDisplayAffinity(hwnd, 0)
-        print("StereoWindow is now visible to screen capture.")
-
-    def set_window_to_bottom(glfw_window):
-        """
-        Finds a window by its title and sets its Z-order to the bottom.
-        """
-        hwnd = glfw.get_win32_window(glfw_window)
-        if hwnd:
-            win32gui.SetWindowPos(hwnd, win32con.HWND_BOTTOM, 0, 0, 0, 0, win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE)
-    
 # Model Mapping Dict. Keep the Desktop2Stereo settings shape, but make
 # stereo_runtime.model_registry the single source of truth for model names.
 from stereo_runtime.model_registry import ModelRegistry

@@ -7,12 +7,13 @@ import time
 from PIL import Image, ImageDraw, ImageFont
 from OpenGL.GL import *
 # Get OS name and settings
-from utils import OS_NAME, crop_icon, get_font_type, DEVICE_INFO
+from utils import OS_NAME, DEVICE_INFO
+from viewer.assets import crop_icon, get_font_type
 # 3D monitor mode to hide viewer
 if OS_NAME == "Windows":
-    from utils import hide_window_from_capture, show_window_in_capture
+    from viewer.window_control import hide_window_from_capture, show_window_in_capture
 elif OS_NAME == "Darwin":
-    from utils import send_ctrl_cmd_f
+    from viewer.window_control import send_ctrl_cmd_f
 BACKEND = None
 # NVIDIA CUDA Version
 if "NVIDIA" in DEVICE_INFO:

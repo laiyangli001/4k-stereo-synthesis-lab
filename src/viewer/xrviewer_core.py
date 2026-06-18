@@ -23,7 +23,8 @@ import moderngl
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 Image.MAX_IMAGE_PIXELS = None  # Allow loading large 16K atlas images.
-from utils import get_font_type, ROWS, ENV_ROWS
+from utils import ROWS, ENV_ROWS
+from viewer.assets import get_font_type
 from OpenGL.GL import (
     glGenFramebuffers, glBindFramebuffer, glFramebufferTexture2D,
     glDeleteFramebuffers, glCheckFramebufferStatus,
