@@ -101,3 +101,13 @@
 - `DepthRuntime` 常驻 provider 只加载一次；
 - 输出 depth 与 runtime RGB 尺寸一致；
 - `depth_result.timing` 包含 preprocess/model/postprocess/total。
+
+真实 provider smoke 手动命令：
+
+```powershell
+.\src\python3\python.exe -B scripts\smoke\d2s_depth_runtime_smoke.py --real-provider --device cuda --backend pytorch_cuda --width 3840 --height 2160 --target-height 2160 --out -
+.\src\python3\python.exe -B scripts\smoke\d2s_depth_runtime_smoke.py --real-provider --device cuda --backend onnx_cuda --width 3840 --height 2160 --target-height 2160 --out -
+.\src\python3\python.exe -B scripts\smoke\d2s_depth_runtime_smoke.py --real-provider --device cuda --backend tensorrt_native --width 3840 --height 2160 --target-height 2160 --out -
+```
+
+默认不加 `--real-provider` 时不会加载模型，适合常规回归；加 `--real-provider` 才用于本机 PyTorch/ONNX/TensorRT 真实链路验证。

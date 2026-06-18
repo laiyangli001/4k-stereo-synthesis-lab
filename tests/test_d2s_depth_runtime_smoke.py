@@ -46,3 +46,37 @@ def test_d2s_depth_runtime_smoke_queue_contract():
     assert report["queue_contract"] == "(frame_rgb, depth, capture_start_time)"
     assert report["provider_load_count"] == 1
     assert report["provider_predict_count"] == 1
+    assert report["provider_info"]["provider"] == "fake"
+    assert report["real_provider"] is False
+    assert report["runtime_backend"] == "pytorch_cuda"
+
+
+def test_d2s_depth_runtime_smoke_accepts_backend_cli_without_real_provider():
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-B",
+            str(SCRIPT),
+            "--device",
+            "cpu",
+            "--width",
+            "16",
+            "--height",
+            "10",
+            "--target-height",
+            "8",
+            "--backend",
+            "onnx_cuda",
+            "--out",
+            "-",
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    report = json.loads(proc.stdout)
+
+    assert report["real_provider"] is False
+    assert report["runtime_backend"] == "onnx_cuda"
+    assert report["provider_info"]["provider"] == "fake"

@@ -60,17 +60,27 @@ def _make_bgra_frame(width: int, height: int) -> np.ndarray:
     return np.stack([b, g, r, a], axis=-1)
 
 
-def run_smoke(width: int, height: int, target_height: int, device: str) -> dict:
+def run_smoke(
+    width: int,
+    height: int,
+    target_height: int,
+    device: str,
+    *,
+    backend: str = "pytorch_cuda",
+    real_provider: bool = False,
+    model: str = "Distill-Any-Depth-Base",
+) -> dict:
     settings = {
-        "Depth Model": "Distill-Any-Depth-Base",
-        "TensorRT": False,
+        "Depth Model": model,
+        "TensorRT": backend in {"auto", "tensorrt_native"},
         "FP16": False,
         "Display Mode": "Half-SBS",
         "Run Mode": "Movie",
+        "Depth Backend": backend,
     }
     config = runtime_config_from_d2s_settings(settings, cache_dir="./models", device=device)
-    provider = FakeDepthProvider()
-    runtime = DepthRuntime(config, depth_provider=provider, collect_memory_stats=False)
+    provider = None if real_provider else FakeDepthProvider()
+    runtime = DepthRuntime(config, depth_provider=provider, collect_memory_stats=real_provider)
     depth_q: queue.Queue = queue.Queue(maxsize=1)
 
     frame_raw = _make_bgra_frame(width, height)
@@ -95,10 +105,12 @@ def run_smoke(width: int, height: int, target_height: int, device: str) -> dict:
         "depth_max": float(queued_depth.max().item()),
         "capture_timestamp_type": type(queued_ts).__name__,
         "queue_contract": "(frame_rgb, depth, capture_start_time)",
-        "provider_load_count": provider.load_count,
-        "provider_predict_count": provider.predict_count,
+        "provider_load_count": getattr(provider, "load_count", None),
+        "provider_predict_count": getattr(provider, "predict_count", None),
+        "provider_info": depth_result.provider_info,
         "timing": depth_result.timing,
         "runtime_backend": config.depth_backend,
+        "real_provider": real_provider,
         "resolved_model_id": config.resolved_model_id,
     }
 
@@ -109,10 +121,21 @@ def main() -> int:
     parser.add_argument("--height", type=int, default=2160)
     parser.add_argument("--target-height", type=int, default=2160)
     parser.add_argument("--device", default="cpu")
+    parser.add_argument("--backend", default="pytorch_cuda", choices=["auto", "pytorch_cuda", "onnx_cuda", "tensorrt_native"])
+    parser.add_argument("--model", default="Distill-Any-Depth-Base")
+    parser.add_argument("--real-provider", action="store_true")
     parser.add_argument("--out", default="-")
     args = parser.parse_args()
 
-    report = run_smoke(args.width, args.height, args.target_height, args.device)
+    report = run_smoke(
+        args.width,
+        args.height,
+        args.target_height,
+        args.device,
+        backend=args.backend,
+        real_provider=args.real_provider,
+        model=args.model,
+    )
     text = json.dumps(report, ensure_ascii=False, indent=2)
     if args.out == "-":
         print(text)
