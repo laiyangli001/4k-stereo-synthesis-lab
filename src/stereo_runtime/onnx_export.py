@@ -6,11 +6,7 @@ from typing import Literal
 
 OnnxDtypeMode = Literal["auto", "fp16", "fp32"]
 
-FORCE_FP32_KEYWORDS = (
-    "depthpro",
-    "zoedepth",
-    "infinidepth-large",
-)
+from .model_capabilities import FORCE_FP32_KEYWORDS
 
 
 @dataclass(frozen=True)

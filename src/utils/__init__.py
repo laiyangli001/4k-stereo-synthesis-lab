@@ -30,82 +30,17 @@ STEREO_MIX_NAMES = [
 "monitor"
 ]
 
-# Models with Disabled TRT 
-DISABLE_TRT_KEYWORDS = [
-    "dpt-hybrid-midas",
-    "depthpro",
-    "da3-giant",
-    "da3nested-giant",
-    "video-depth-anything",
-]
-
-TRT_FIX_KEYWORDS = [
-    # DA3 models
-    "depth-anything/DA3-SMALL",
-    "depth-anything/DA3-BASE",
-    "depth-anything/DA3-LARGE",
-    # "depth-anything/DA3-GIANT",
-    "depth-anything/DA3-LARGE-1.1",
-    "depth-anything/DA3METRIC-LARGE",
-    # "depth-anything/DA3NESTED-GIANT-LARGE",
-    "depth-anything/DA3NESTED-GIANT-LARGE-1.1",
-    "depth-anything/DA3MONO-LARGE",
-    # Video-Depth-Anything
-    "depth-anything/Video-Depth-Anything-Small",
-    "depth-anything/Video-Depth-Anything-Base",
-    "depth-anything/Video-Depth-Anything-Large",
-    # Metric-Video-Depth-Anything
-    "depth-anything/Metric-Video-Depth-Anything-Small",
-    "depth-anything/Metric-Video-Depth-Anything-Base",
-    "depth-anything/Metric-Video-Depth-Anything-Large",
-    # Intel/zoedepth
-    "Intel/zoedepth-nyu-kitti",
-    # LC700X/InfiniDepth
-    "lc700x/InfiniDepth-Small",
-    "lc700x/InfiniDepth-SmallPlus",
-    "lc700x/InfiniDepth-Base",
-    "lc700x/InfiniDepth-Large",
-]
-
-FORCE_FP32_KEYWORDS = [
-    # ZoeDepth models
-    "Intel/zoedepth-nyu",
-    "Intel/zoedepth-kitti",
-]
-
-COMPILE_FIX_KEYWORDS = [
-    # Video-Depth-Anything
-    "depth-anything/Video-Depth-Anything-Small",
-    "depth-anything/Video-Depth-Anything-Base",
-    "depth-anything/Video-Depth-Anything-Large",
-    # Metric-Video-Depth-Anything
-    "depth-anything/Metric-Video-Depth-Anything-Small",
-    "depth-anything/Metric-Video-Depth-Anything-Base",
-    "depth-anything/Metric-Video-Depth-Anything-Large",
-]
-
-# Models with Disabled CoreML 
-DISABLE_COREML_KEYWORDS = [
-    "video-depth-anything",
-    "da3-",
-    "da3nested",
-    "dpt-beit",
-    "zoedepth",
-    "depthpro",
-    "infinidepth",
-]
-
-# Models with Disabled OpenVINO 
-DISABLE_OPENVINO_KEYWORDS = [
-    "da3-",
-    "dpt-hybrid-midas-hf",
-]
-
-# Disable CuDNN for RX 6000 and 5000 series GPUs
-DISABLE_CUDNN_KEYWORDS = ["6950", "6900", "6850", "6800", "6750", "6700", "6650", "6600", "6550", "6500", "6400", "6300", "680", "6100", "5700", "5600", "5500", "5400", "5300", "520", "160", "AMD Radeon(TM) Graphics"]
-# Disable Triton for RX 5000 series
-DISABLE_TRITON_KEYWORDS = ["520", "160"]
-# DISABLE_TRITON_KEYWORDS = ["5700", "5600", "5500", "5400", "5300", "520", "160"]
+from stereo_runtime.model_capabilities import (
+    COMPILE_FIX_KEYWORDS,
+    DISABLE_COREML_KEYWORDS,
+    DISABLE_CUDNN_KEYWORDS,
+    DISABLE_OPENVINO_KEYWORDS,
+    DISABLE_TRITON_KEYWORDS,
+    DISABLE_TRT_KEYWORDS,
+    FORCE_FP32_KEYWORDS,
+    TRT_FIX_KEYWORDS,
+    model_name_mapping,
+)
 
 # Global shutdown event
 shutdown_event = threading.Event()
@@ -145,12 +80,7 @@ configure_huggingface_endpoint()
 
 # Model Mapping Dict. Keep the Desktop2Stereo settings shape, but make
 # stereo_runtime.model_registry the single source of truth for model names.
-from stereo_runtime.model_registry import ModelRegistry
-
-MODEL_MAPPING = {
-    spec.name: spec.model_id
-    for spec in ModelRegistry.default().list()
-}
+MODEL_MAPPING = model_name_mapping()
 
 # Streamer Settings
 DEFAULT_PORT = 1122
