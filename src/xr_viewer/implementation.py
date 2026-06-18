@@ -1453,9 +1453,9 @@ else:
     def _create_d3d11_device(adapter_luid=None):
         raise RuntimeError("D3D11 only available on Windows")
 
-from ..viewer import FRAGMENT_SHADER, BACKEND
+from viewer.viewer import FRAGMENT_SHADER, BACKEND
 try:
-    from ..viewer import CUDART_GL
+    from viewer.viewer import CUDART_GL
 except ImportError:
     CUDART_GL = None
 
