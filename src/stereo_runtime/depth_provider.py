@@ -415,6 +415,38 @@ def create_depth_provider(config: DepthProviderConfig | dict[str, Any] | None = 
             depth_upsample_edge_strength=cfg.depth_upsample_edge_strength,
         )
 
+    if backend in {"pytorch_xpu", "xpu", "intel_xpu"}:
+        from .providers.intel import create_pytorch_xpu_provider
+
+        return create_pytorch_xpu_provider(
+            model_id=cfg.model_id,
+            model_name=cfg.model_name,
+            device=device,
+            cache_dir=cfg.cache_dir,
+            depth_resolution=cfg.depth_resolution,
+            patch_size=cfg.patch_size,
+            local_files_only=cfg.local_files_only,
+            force_download=cfg.force_download,
+            depth_upsample=cfg.depth_upsample,
+            depth_upsample_edge_strength=cfg.depth_upsample_edge_strength,
+        )
+
+    if backend in {"pytorch_mps", "mps", "apple_mps"}:
+        from .providers.apple import create_pytorch_mps_provider
+
+        return create_pytorch_mps_provider(
+            model_id=cfg.model_id,
+            model_name=cfg.model_name,
+            device=device,
+            cache_dir=cfg.cache_dir,
+            depth_resolution=cfg.depth_resolution,
+            patch_size=cfg.patch_size,
+            local_files_only=cfg.local_files_only,
+            force_download=cfg.force_download,
+            depth_upsample=cfg.depth_upsample,
+            depth_upsample_edge_strength=cfg.depth_upsample_edge_strength,
+        )
+
     if backend in {"tensorrt_native", "native_tensorrt", "tensorrt_native_graph"} or (
         backend in {"distill_base_nvidia", "nvidia_chain"} and cfg.prefer_native_tensorrt
     ):
