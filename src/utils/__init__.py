@@ -1,6 +1,6 @@
-import sys, requests
+import sys
 import yaml, threading, time
-import os, platform, socket
+import os, platform
 import importlib.util
 from pathlib import Path
 
@@ -119,6 +119,7 @@ from .display import (
     get_fps,
     get_monitor_size,
 )
+from .network import configure_huggingface_endpoint, get_local_ip
 
 def read_yaml(path):
     try:
@@ -132,16 +133,6 @@ def read_yaml(path):
         except Exception as e:
             print(f"Failed to load settings.yaml with GBK encoding: {e}")
             return {}
-
-def get_local_ip():
-    """Return the local IP address by creating a UDP socket to a public IP."""
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-            # doesn't need to be reachable
-            s.connect(("8.8.8.8", 80))
-            return s.getsockname()[0]
-    except Exception:
-        return "127.0.0.1"
 
 # load customized settings
 settings = read_yaml("settings.yaml")
@@ -162,30 +153,7 @@ from viewer.window_control import (
 )
         
 # Set Hugging Face environment variable
-os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
-
-def is_cn_ip():
-    try:
-        # Get your public IP
-        ip = requests.get("https://api.ipify.org").text.strip()
-        
-        # Query geolocation info from ip-api.com
-        response = requests.get(f"http://ip-api.com/json/{ip}", timeout=10)
-        response.raise_for_status()
-        
-        data = response.json()
-        country = data.get("country", "")
-        
-        # print(f"Your IP: {ip}, Country: {country}")
-        return country == "China"
-    except Exception as e:
-        # print(f"Error checking IP location: {e}")
-        return False
-
-if is_cn_ip():
-    os.environ['HF_ENDPOINT'] = "https://hf-mirror.com"
-else:
-    os.environ['HF_ENDPOINT'] = "https://huggingface.co"
+configure_huggingface_endpoint()
 
 # Model Mapping Dict. Keep the Desktop2Stereo settings shape, but make
 # stereo_runtime.model_registry the single source of truth for model names.
