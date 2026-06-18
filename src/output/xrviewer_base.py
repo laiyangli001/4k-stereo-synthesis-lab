@@ -1,7 +1,7 @@
 # xrviewer_final.py
 # Desktop2Stereo OpenXR viewer: no-room profile with built-in screen effects.
 
-from xrviewer_core import *
+from .xrviewer_core import *
 
 
 class ScreenEffectsMixin:

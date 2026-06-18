@@ -1452,9 +1452,9 @@ else:
     def _create_d3d11_device(adapter_luid=None):
         raise RuntimeError("D3D11 only available on Windows")
 
-from viewer import FRAGMENT_SHADER, BACKEND
+from .viewer import FRAGMENT_SHADER, BACKEND
 try:
-    from viewer import CUDART_GL
+    from .viewer import CUDART_GL
 except ImportError:
     CUDART_GL = None
 
@@ -4217,7 +4217,7 @@ class OpenXRViewerCore:
         # transfer entirely; interop/PBO remain fallback paths only.
         if self._d3d11_native_requested:
             try:
-                from xrviewer_d3d11_renderer import D3D11NativeRenderer
+                from .xrviewer_d3d11_renderer import D3D11NativeRenderer
                 self._d3d11_native_renderer = D3D11NativeRenderer(
                     self._d3d11_device, self._d3d11_context, self._d3d11_swapchain_fmt
                 )

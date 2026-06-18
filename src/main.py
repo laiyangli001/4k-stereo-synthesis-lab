@@ -1342,7 +1342,7 @@ def main(mode="Viewer"):
     
     try:
         if mode == "Viewer":
-            from viewer import StereoWindow
+            from output.viewer import StereoWindow
             # Get initial frame to determine window size (block until first frame arrives)
             rgb, depth, capture_start_time = depth_q.get()
             import torch
@@ -1391,7 +1391,7 @@ def main(mode="Viewer"):
                 rtmp_thread.start()
                 print(f"[Main] RTMP Streamer Started (auto-restart on resize)")
             elif STREAM_MODE == "MJPEG":
-                from streamer import MJPEGStreamer
+                from output.streamer import MJPEGStreamer
                 streamer = MJPEGStreamer(port=STREAM_PORT, fps=FPS, quality=STREAM_QUALITY)
                 streamer.start()
                 print(f"[Main] MJPEG Streamer Started")
@@ -1539,9 +1539,9 @@ def main(mode="Viewer"):
             env_name = str(ENVIRONMENT_MODEL or "").strip()
             use_environment_viewer = bool(env_name) and env_name.lower() != "none"
             if use_environment_viewer:
-                from xrviewer_env import OpenXRViewer, OPENXR_AVAILABLE
+                from output.xrviewer_env import OpenXRViewer, OPENXR_AVAILABLE
             else:
-                from xrviewer_base import OpenXRViewer, OPENXR_AVAILABLE
+                from output.xrviewer_base import OpenXRViewer, OPENXR_AVAILABLE
             if not OPENXR_AVAILABLE:
                 raise ImportError("pyopenxr not installed — run: pip install pyopenxr")
             rgb, depth, capture_start_time = depth_q.get()
@@ -1579,7 +1579,7 @@ def main(mode="Viewer"):
 
         else:
             from legacy_sbs import make_sbs, DEVICE_INFO
-            from streamer import MJPEGStreamer
+            from output.streamer import MJPEGStreamer
 
             streamer = MJPEGStreamer(port=STREAM_PORT, fps=FPS, quality=STREAM_QUALITY)
             streamer.start()

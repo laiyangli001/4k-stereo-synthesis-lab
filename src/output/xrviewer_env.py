@@ -2,7 +2,7 @@
 # Desktop2Stereo OpenXR viewer: room/environment profile.
 # Shared runtime/rendering code is in xrviewer_core.py; room-specific code lives here.
 
-from xrviewer_core import *
+from .xrviewer_core import *
 
 
 class OpenXRViewer(OpenXRViewerCore):
