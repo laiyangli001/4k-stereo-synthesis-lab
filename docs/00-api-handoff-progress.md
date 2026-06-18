@@ -1,4 +1,4 @@
-# Handoff - 2026-06-16
+# Handoff - 2026-06-19
 
 ## Project
 
@@ -30,6 +30,7 @@ Important docs:
 - `docs/13-realtime-stereo-parameter-guide.md`
 - `docs/14-host-api-preset-examples.md`
 - `docs/15-host-api-contract.md`
+- `docs/19-capture-architecture-flow.md`
 - This file: `docs/00-api-handoff-progress.md`
 
 Note:
@@ -58,6 +59,13 @@ Do not change these unless the user explicitly approves a separate quality evalu
 
 This repository is the algorithm / inference / stereo synthesis core library. It should provide stable external function calls, configuration parameters, output formats, performance verification, and visual regression tooling for another GUI/runtime host to call.
 
+2026-06-19 scope update:
+
+- The repo now also contains the active Desktop2Stereo host integration path in `src/main.py`, `src/capture/`, and `src/viewer/`.
+- The long-term module boundary still remains: `stereo_runtime` owns depth inference, stereo synthesis, OpenXR per-eye render core, output tensors, timings, and provider/artifact contracts.
+- The host layer owns capture, GUI/window/session lifecycle, OpenXR session/swapchain timing, runtime settings persistence, and final display/submit.
+- Do not move GUI/OpenXR session policy back into `stereo_runtime`; only move reusable RGB->depth->output computation there.
+
 In scope for this repository:
 
 - Depth inference providers and benchmarks.
@@ -71,24 +79,188 @@ In scope for this repository:
 
 Out of scope for this repository:
 
-- Desktop capture and player/window capture.
-- GUI implementation.
-- Full OpenXR session / swapchain / frame timing runtime.
+- New standalone product GUI implementation.
 - Installer / packaging.
 - Product logging UI and runtime configuration persistence UI.
 - Product-level error recovery UI.
 
-Those product pipeline pieces should live in a separate Desktop2Stereo / GUI runtime / OpenXR host project. This repository only needs to expose a stable API/preset layer for that host project.
+Now present as host integration code, but still outside `stereo_runtime` core:
+
+- Desktop capture and player/window capture.
+- Full OpenXR session / swapchain / frame timing runtime.
+
+Those host pipeline pieces should remain separated from `stereo_runtime` by the API boundary documented in `docs/15-host-api-contract.md`.
 
 Current completion estimate for this repository:
 
 ```text
-Core algorithm and performance validation: 85-90%
+Core algorithm and performance validation: 90-95%
 External API/preset stability: 90-95%
-Product runtime pipeline: out of scope for this repository
+Capture/runtime host integration: runtime-direct GPU paths integrated, real-device validation pending
 ```
 
 ## Current Status
+
+### 2026-06-19 Capture Split + Runtime Output Handoff
+
+Latest pushed commits:
+
+```text
+1ec01e9 refactor: split capture and route runtime output
+bbbc72d feat: route openxr viewer runtime eyes
+d5fcb32 feat: add runtime eye gpu interop paths
+40f9451 refactor: split xrviewer runtime package
+adb57c8 refactor: move xr_viewer to top-level package
+9127a2d refactor: remove legacy xrviewer wrappers
+```
+
+Capture architecture was split out of the former monolithic `src/capture/__init__.py`.
+
+New capture package layout:
+
+- `src/capture/__init__.py`: thin public re-export layer.
+- `src/capture/types.py`: `CaptureConfig`, frame/source/runner protocols.
+- `src/capture/factory.py`: backend selection by `os_name` and `capture_tool`.
+- `src/capture/runners.py`: polling/event runner loop behavior.
+- `src/capture/preprocess.py`: `capture_frame_to_rgb()` and `prepare_rgb_for_depth_runtime()`.
+- `src/capture/geometry.py`: monitor/window geometry helpers.
+- `src/capture/backends/windows_dxcamera.py`
+- `src/capture/backends/windows_desktop_duplication.py`
+- `src/capture/backends/windows_capture_event.py`
+- `src/capture/backends/macos_screencapturekit.py`
+- `src/capture/backends/macos_coregraphics.py`
+- `src/capture/backends/linux_mss.py`
+
+Public compatibility imports remain valid:
+
+```python
+from capture import DesktopGrabber, capture_frame_to_rgb, prepare_rgb_for_depth_runtime
+```
+
+Recommended capture entry for `main.py` / host code:
+
+```python
+from capture import CaptureConfig, create_capture_runner
+```
+
+Detailed capture flow document:
+
+```text
+docs/19-capture-architecture-flow.md
+```
+
+`src/main.py` capture path now builds a `CaptureConfig`, calls `create_capture_runner(config)`, and receives frames through callbacks. Raw queue write/statistics still remain in `main.py`; the capture package does not depend on app state.
+
+### 2026-06-19 StereoRuntime Second-Stage Integration
+
+The main host pipeline has moved from depth-only runtime output toward full `stereo_runtime` output ownership.
+
+Current ordinary Viewer / SBS path:
+
+```text
+capture runner
+-> capture_frame_to_rgb()
+-> prepare_rgb_for_depth_runtime()
+-> StereoRuntime.process_rgb_frame()
+-> StereoRuntimeResult.sbs
+-> StereoWindow.update_runtime_frame()
+```
+
+The ordinary viewer no longer feeds RGB+depth back into the old viewer shader for SBS synthesis. It displays the final `StereoRuntimeResult.sbs` texture directly.
+
+Legacy MJPEG streamer now uses `StereoRuntimeResult.sbs` directly instead of `streaming.legacy_sbs.make_sbs()`.
+
+New runtime OpenXR API:
+
+```python
+result = runtime.process_openxr_frame(rgb_frame, openxr_config)
+```
+
+Returns:
+
+```python
+OpenXRRuntimeResult(
+    depth=...,
+    left_eye=...,
+    right_eye=...,
+    timing=...,
+    debug_info=...,
+    provider_info=...,
+)
+```
+
+Current OpenXR host path:
+
+```text
+capture runner
+-> prepare_rgb_for_depth_runtime()
+-> StereoRuntime.process_openxr_frame()
+-> OpenXRRuntimeResult.left_eye/right_eye
+-> src/xr_viewer runtime-direct per-eye upload
+   - CUDA/GL image interop direct write when available
+   - GL PBO GPU fallback when image interop is unavailable
+   - CPU/GL texture upload fallback
+   - D3D11 native runtime-eye upload/render when D3D11 session path is active
+-> _render_eye() or render_runtime_eye() direct texture display on virtual screen
+-> OpenXR swapchain submit
+```
+
+Fallback preserved:
+
+```text
+(rgb, depth, frame_ts) queue item
+-> old xrviewer RGB+depth upload
+-> old DIBR shader path
+```
+
+OpenXR runtime parameter feedback:
+
+- `xrviewer` reports current `ipd`, `depth_ratio`, `convergence`, and `screen_roll` back to `main.py`.
+- `main.py` builds `OpenXRRenderConfig` from that state before calling `process_openxr_frame()`.
+- This keeps controller/keyboard-driven OpenXR parameter changes aligned with runtime per-eye generation.
+
+Current OpenXR GPU path status:
+
+- The active OpenXR viewer package is now `src/xr_viewer/`, at the same level as `src/viewer/`.
+- Legacy `src/viewer/xrviewer*.py` compatibility wrappers were removed; host code imports from `xr_viewer.base`, `xr_viewer.environment`, and `xr_viewer.implementation` directly.
+- OpenGL runtime-eye fast path is implemented:
+  - preferred: CUDA tensor -> `cudaGraphicsGLRegisterImage(GL texture)` -> CUDA array -> `cudaMemcpy2DToArray`,
+  - fallback: CUDA/GL PBO upload,
+  - final fallback: CPU/GL texture upload.
+- D3D11 native runtime-eye path is implemented in `src/xr_viewer/d3d11_native_renderer.py`:
+  - `D3D11NativeRenderer.update_runtime_eyes(left, right)`,
+  - `render_runtime_eye(...)`,
+  - CUDA-D3D11 interop copy to D3D11 textures when available,
+  - automatic fallback to the OpenGL/PBO/CPU path if D3D11 native upload/render fails.
+- Runtime direct can be disabled with `D2S_OPENXR_RUNTIME_DIRECT=0`; runtime-eye GPU upload can be disabled with `D2S_OPENXR_RUNTIME_EYE_GPU_UPLOAD=0`.
+
+Latest verification after capture split and OpenXR runtime-eye integration:
+
+```text
+.\src\python3\python.exe -B -m pytest -q
+143 passed, 1 warning
+```
+
+Targeted verification:
+
+```text
+tests/test_capture_preprocess.py
+tests/test_capture_factory.py
+tests/test_capture_public_api.py
+tests/test_runtime_openxr.py
+tests/test_openxr_render.py
+tests/test_host_api_smoke.py
+tests/test_d2s_depth_runtime_smoke.py
+```
+
+New/updated tests:
+
+- `tests/test_capture_preprocess.py`
+- `tests/test_capture_factory.py`
+- `tests/test_capture_public_api.py`
+- `tests/test_runtime_openxr.py`
+- `tests/test_runtime_depth_safety.py`
+- `tests/test_adapter_config.py`
 
 ### 2026-06-17 `stereo_runtime` API Migration
 
@@ -351,7 +523,7 @@ Important:
 - `profile_synthesis_4k.py` reports `end_to_end_mean_ms` for real fused `synthesize_stereo` timing and `breakdown_mean_ms` for manual unfused component attribution.
 - `generate_visual_regression_set.py` now accepts `--onnx` and `--trt-engine`; pass them explicitly for Large or other non-default engines.
 
-Latest verification:
+Historical verification for this 2026-06-17 benchmark/API state:
 
 ```text
 61 passed, 1 warning
@@ -547,87 +719,97 @@ Important:
 Syntax:
 
 ```powershell
-.\python3\python.exe -B -c "import ast, pathlib; files=list(pathlib.Path('src').rglob('*.py'))+list(pathlib.Path('scripts').rglob('*.py'))+list(pathlib.Path('tests').rglob('*.py')); [ast.parse(p.read_text(encoding='utf-8'), filename=str(p)) for p in files]; print('syntax ok', len(files), 'files')"
+.\src\python3\python.exe -B -m py_compile src\main.py src\tools\preview_room_layout.py src\xr_viewer\implementation.py src\xr_viewer\base.py src\xr_viewer\environment.py src\xr_viewer\d3d11_native_renderer.py src\stereo_runtime\runtime.py src\capture\__init__.py
 ```
 
 Tests:
 
 ```powershell
-.\python3\python.exe -B -m pytest -q
+.\src\python3\python.exe -B -m pytest -q
 ```
 
 Current latest result:
 
 ```text
-61 passed, 1 warning
-compileall syntax ok
+143 passed, 1 warning
+py_compile targeted syntax checks pass
 ```
 
 Synthesis profile:
 
 ```powershell
-.\python3\python.exe -B scripts\benchmark\profile_synthesis_4k.py --rgb 4K.jpg --out outputs\synthesis_profile_4k\<name>.json --backend quality_4k --layers 2 --output-format half_sbs --iters 5
+.\src\python3\python.exe -B scripts\benchmark\profile_synthesis_4k.py --rgb 4K.jpg --out outputs\synthesis_profile_4k\<name>.json --backend quality_4k --layers 2 --output-format half_sbs --iters 5
 ```
 
 End-to-end:
 
 ```powershell
-.\python3\python.exe -B scripts\benchmark\bench_end_to_end_4k.py --rgb 4K.jpg --out outputs\end_to_end_4k\<name>.json --warmup 2 --iters 5 --backend quality_4k --layers 2 --depth-backend tensorrt_native --output-format half_sbs --output-format full_sbs
+.\src\python3\python.exe -B scripts\benchmark\bench_end_to_end_4k.py --rgb 4K.jpg --out outputs\end_to_end_4k\<name>.json --warmup 2 --iters 5 --backend quality_4k --layers 2 --depth-backend tensorrt_native --output-format half_sbs --output-format full_sbs
 ```
 
 Visual regression:
 
 ```powershell
-.\python3\python.exe -B scripts\tools\generate_visual_regression_set.py --rgb 4K.jpg --auto-depth --depth-backend tensorrt_native --out-dir outputs\visual_regression\<name>
+.\src\python3\python.exe -B scripts\tools\generate_visual_regression_set.py --rgb 4K.jpg --auto-depth --depth-backend tensorrt_native --out-dir outputs\visual_regression\<name>
 ```
 
 Host API smoke:
 
 ```powershell
-.\python3\python.exe -B scripts\smoke\host_api_smoke.py --preset cinema --output-format half_sbs --out outputs\host_api_smoke_cinema.json
-.\python3\python.exe -B scripts\smoke\host_api_smoke.py --preset cinema --output-format half_sbs --out -
-.\python3\python.exe -B scripts\smoke\host_api_smoke.py --openxr --preset cinema --screen-roll 0.25 --out -
-.\python3\python.exe -B scripts\smoke\auto_mode_runtime_demo.py --selected-preset auto --out -
-.\python3\python.exe -B scripts\smoke\host_api_smoke.py --rgb 4K.jpg --auto-depth --depth-backend tensorrt_native --preset cinema --output-format half_sbs --out outputs\host_api_smoke_4k_native.json
+.\src\python3\python.exe -B scripts\smoke\host_api_smoke.py --preset cinema --output-format half_sbs --out outputs\host_api_smoke_cinema.json
+.\src\python3\python.exe -B scripts\smoke\host_api_smoke.py --preset cinema --output-format half_sbs --out -
+.\src\python3\python.exe -B scripts\smoke\host_api_smoke.py --openxr --preset cinema --screen-roll 0.25 --out -
+.\src\python3\python.exe -B scripts\smoke\auto_mode_runtime_demo.py --selected-preset auto --out -
+.\src\python3\python.exe -B scripts\smoke\host_api_smoke.py --rgb 4K.jpg --auto-depth --depth-backend tensorrt_native --preset cinema --output-format half_sbs --out outputs\host_api_smoke_4k_native.json
 ```
 
 ## Recommended Next Steps
 
-1. Keep GUI/OpenXR host integration aligned with:
+1. Run a real OpenXR/headset validation pass for the current runtime-direct GPU/CPU fallback chain:
+   - verify left/right eye order,
+   - verify no Y flip or color-space regression,
+   - verify `screen_roll`, `depth_ratio`, `ipd`, and `convergence` update correctly through the runtime config callback,
+   - verify CUDA/GL image interop, GL PBO fallback, CPU/GL fallback, and D3D11 native runtime-eye fallback behavior on the target headset/runtime.
+2. Improve OpenXR runtime-direct telemetry:
+   - log current path: `runtime_direct_gpu_gl_texture`, `runtime_direct_gpu_gl_pbo`, `runtime_direct_cpu_gl`, `runtime_direct_d3d11_cuda`, or `rgb_depth_fallback`,
+   - log left/right shape, dtype, device, upload timing, render mode, and fallback reason,
+   - keep `D2S_OPENXR_RUNTIME_DIRECT=0` and `D2S_OPENXR_RUNTIME_EYE_GPU_UPLOAD=0` as forced fallback switches.
+3. Keep `src/xr_viewer/` as the OpenXR viewer package boundary; do not reintroduce `src/viewer/xrviewer*.py` wrappers unless a legacy downstream dependency requires them.
+4. Keep GUI/OpenXR host integration aligned with:
    - `docs/14-host-api-preset-examples.md`
    - `docs/15-host-api-contract.md`
    - `scripts/smoke/host_api_smoke.py`
    - `scripts/smoke/auto_mode_runtime_demo.py`
-2. When implementing a real GUI/runtime host, start async scene detection only when `auto_detection_required(selected_preset)` is true.
-3. Real system metric collection remains out of scope for this core repo:
+5. Start async scene detection only when `auto_detection_required(selected_preset)` is true.
+6. Real system metric collection remains outside `stereo_runtime`:
    - GPU 3D / Video Decode sampling
    - keyboard/mouse activity sampling
    - audio activity sampling
    - foreground window/fullscreen detection
-4. Re-run API and preset unit tests after host-facing changes:
+7. Re-run API and preset unit tests after host-facing changes:
    - `tests/test_host_api_smoke.py` locks the CLI JSON report contract for stereo and OpenXR host smoke paths.
    - `tests/test_auto_mode_runtime_demo.py` locks the simulated Auto host state-machine integration path.
-5. Optimize `hole_fill` only after the API/preset boundary is stable.
-6. Re-run formal benchmarks on RTX 3090 / RTX 5070 when available:
+8. Re-run formal benchmarks on RTX 3090 / RTX 5070 when available:
    - `bench_depth_backends.py`
    - `profile_synthesis_4k.py`
    - `bench_end_to_end_4k.py`
    - `generate_visual_regression_set.py`
-7. Add true iw3 same-scene comparison later, after fixed RGB/depth/output format is locked.
-8. Final locking step: generate visual regression sets for representative Cinema, Game / Low Latency, Still Image / HQ, and Debug / Export samples, then use those results to finalize preset default values.
+9. Final locking step: generate visual regression sets for representative Cinema, Game / Low Latency, Still Image / HQ, and Debug / Export samples, then use those results to finalize preset default values.
 
 ## Current Bottleneck
 
-Depth is usable. The main bottleneck is now stereo synthesis:
+For the integrated host path, the current bottleneck is no longer the absence of a GPU upload path; it is real-device validation and fallback telemetry:
 
-- `hole_fill`
-- `warp_layers`
-- memory bandwidth in 4K PyTorch tensor operations
+- `StereoRuntime.process_openxr_frame()` produces `left_eye/right_eye`.
+- `src/xr_viewer/` consumes `OpenXRRuntimeResult.left_eye/right_eye` directly.
+- OpenGL CUDA image interop, GL PBO fallback, CPU/GL fallback, and D3D11 native runtime-eye upload/render paths are implemented.
+- The next risk is correctness on real OpenXR runtimes: eye order, Y orientation, color format, swapchain runtime differences, sync behavior, and fallback selection.
 
-The next major jump likely requires:
+For the algorithm path, fused Triton synthesis already covers the main 4K SBS/TAB/display output formats. Further algorithm performance work should be benchmark-driven.
 
-- fused CUDA/shader warp + composite, or
-- a semantically equivalent lower-bandwidth hole fill, or
-- stronger hardware such as RTX 3090 / RTX 5070 for the current prototype path.
+The next major host-runtime jump likely requires:
 
+- real headset validation of the runtime-direct path matrix,
+- tighter telemetry and timing around upload/render fallback choice,
+- then targeted fixes for the runtime/driver combination that fails first.
 
