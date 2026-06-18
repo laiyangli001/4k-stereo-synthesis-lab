@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from utils.display import compute_output_resolution, get_fps
 from viewer.upscaler import normalize_upscaler, normalize_upscaler_sharpness
-
-from .display import compute_output_resolution, get_fps
 
 
 @dataclass(frozen=True)

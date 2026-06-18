@@ -39,7 +39,7 @@ from .display import (
 from .network import configure_huggingface_endpoint, get_local_ip
 from .run_mode import resolve_run_mode
 from .settings import load_settings, read_yaml
-from .viewer_settings import resolve_viewer_settings
+from viewer.settings import resolve_viewer_settings
 
 # load customized settings
 settings = load_settings("settings.yaml")
