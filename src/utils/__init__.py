@@ -1,5 +1,5 @@
 import sys
-import yaml, threading, time
+import threading, time
 import os, platform
 import importlib.util
 from pathlib import Path
@@ -120,22 +120,10 @@ from .display import (
     get_monitor_size,
 )
 from .network import configure_huggingface_endpoint, get_local_ip
-
-def read_yaml(path):
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return yaml.safe_load(f) or {}
-    except UnicodeDecodeError:
-        # Fallback to try other common encodings if UTF-8 fails
-        try:
-            with open(path, "r", encoding="gbk") as f:
-                return yaml.safe_load(f) or {}
-        except Exception as e:
-            print(f"Failed to load settings.yaml with GBK encoding: {e}")
-            return {}
+from .settings import load_settings, read_yaml
 
 # load customized settings
-settings = read_yaml("settings.yaml")
+settings = load_settings("settings.yaml")
 
 # Ignore wanning for MPS
 if OS_NAME == "Darwin":
