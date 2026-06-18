@@ -120,7 +120,7 @@ def test_runtime_config_from_d2s_settings_maps_legacy_model_and_trt_flags():
 
     assert config.resolved_model_id == "lc700x/Distill-Any-Depth-Base-hf"
     assert config.depth_backend == "tensorrt_native"
-    assert config.onnx_dtype == "fp16"
+    assert config.onnx_dtype == "auto"
     assert config.build_trt_engine is True
     assert config.force_rebuild_trt is True
     assert config.output_format == "full_sbs"
@@ -130,7 +130,7 @@ def test_runtime_config_from_d2s_settings_maps_legacy_model_and_trt_flags():
     assert config.ipd == 0.07
 
 
-def test_runtime_config_from_d2s_settings_keeps_gui_fp16_as_export_request_only():
+def test_runtime_config_from_d2s_settings_uses_dtype_auto_for_gui_fp16_flag():
     config = runtime_config_from_d2s_settings(
         {
             "Depth Model": "DepthPro-Large",
@@ -143,5 +143,5 @@ def test_runtime_config_from_d2s_settings_keeps_gui_fp16_as_export_request_only(
 
     assert config.resolved_model_id == "apple/DepthPro-hf"
     assert config.depth_backend == "pytorch_cuda"
-    assert config.onnx_dtype == "fp32"
+    assert config.onnx_dtype == "auto"
     assert config.build_trt_engine is False

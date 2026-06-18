@@ -11,6 +11,7 @@ import torch
 from .adapter import StereoRuntimeConfig, depth_provider_config_from_runtime, stereo_config_from_runtime
 from .depth_safety import apply_depth_safety
 from .depth_provider import DepthProfileResult, create_depth_provider
+from .openxr_render import OpenXRRenderConfig, render_openxr_stereo
 from .synthesis import StereoResult, synthesize_stereo
 from .temporal import TemporalState
 
@@ -164,6 +165,16 @@ class StereoRuntimeResult:
     left_eye: torch.Tensor
     right_eye: torch.Tensor
     sbs: torch.Tensor
+    debug_info: dict[str, Any] = field(default_factory=dict)
+    timing: dict[str, float] = field(default_factory=dict)
+    provider_info: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class OpenXRRuntimeResult:
+    depth: torch.Tensor
+    left_eye: torch.Tensor
+    right_eye: torch.Tensor
     debug_info: dict[str, Any] = field(default_factory=dict)
     timing: dict[str, float] = field(default_factory=dict)
     provider_info: dict[str, Any] = field(default_factory=dict)
@@ -372,6 +383,61 @@ class StereoRuntime:
             provider_info=self.provider_report(),
         )
 
+    def process_openxr_frame(
+        self,
+        rgb_frame: torch.Tensor,
+        openxr_config: OpenXRRenderConfig | None = None,
+    ) -> OpenXRRuntimeResult:
+        self.load()
+        self._reset_cuda_peak_if_needed()
+        rgb_frame = _validate_runtime_rgb_frame(rgb_frame)
+
+        total_start = time.perf_counter()
+        depth_start = time.perf_counter()
+        profile = self._predict_depth_profile(rgb_frame)
+        depth_total_ms = (time.perf_counter() - depth_start) * 1000.0
+        depth = profile.depth
+        depth_safety_report: dict[str, Any] | None = None
+        if self._depth_safety_enabled():
+            depth, decision = apply_depth_safety(rgb_frame, depth)
+            depth_safety_report = decision.to_report()
+
+        render_start = time.perf_counter()
+        openxr = render_openxr_stereo(rgb_frame, depth, openxr_config)
+        openxr_render_ms = (time.perf_counter() - render_start) * 1000.0
+        total_ms = (time.perf_counter() - total_start) * 1000.0
+
+        timing = {
+            "depth_preprocess_ms": float(profile.preprocess_ms),
+            "depth_model_ms": float(profile.model_ms),
+            "depth_postprocess_ms": float(profile.postprocess_ms),
+            "depth_total_ms": float(depth_total_ms),
+            "openxr_render_ms": float(openxr_render_ms),
+            "total_ms": float(total_ms),
+        }
+        memory = self._collect_memory_stats(rgb_frame)
+        self.last_timing = timing
+        self.last_memory = memory
+        self.stats.update(timing, memory)
+
+        debug = dict(openxr.debug_info)
+        debug["runtime_depth_backend"] = self.depth_config.backend
+        debug["runtime_output_format"] = "openxr_eye_views"
+        debug["runtime_depth_upsample"] = self.config.depth_upsample
+        if memory:
+            debug.update(memory)
+        if depth_safety_report is not None:
+            debug["depth_safety"] = depth_safety_report
+
+        return OpenXRRuntimeResult(
+            depth=depth,
+            left_eye=openxr.left_eye,
+            right_eye=openxr.right_eye,
+            debug_info=debug,
+            timing=timing,
+            provider_info=self.provider_report(),
+        )
+
     def _predict_depth_profile(self, rgb_frame: torch.Tensor) -> DepthProfileResult:
         predict_profile = getattr(self.depth_provider, "predict_profile", None)
         if callable(predict_profile):
@@ -436,6 +502,7 @@ class StereoRuntime:
 
 StereoLabRuntime = StereoRuntime
 StereoLabRuntimeResult = StereoRuntimeResult
+StereoLabOpenXRRuntimeResult = OpenXRRuntimeResult
 StereoLabDepthRuntime = DepthRuntime
 StereoLabDepthRuntimeResult = DepthRuntimeResult
 

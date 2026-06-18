@@ -13,7 +13,7 @@ from stereo_runtime.runtime import StereoRuntime
 def test_image_runtime_applies_depth_safety_by_default(tmp_path):
     runtime = StereoRuntime(
         StereoRuntimeConfig(
-            model_id="test",
+            model_id="Distill-Any-Depth-Base",
             model_dir=tmp_path,
             mode="image",
             device="cpu",
@@ -35,7 +35,7 @@ def test_movie_runtime_does_not_apply_depth_safety_by_default(tmp_path):
     depth = _center_bias_depth()
     runtime = StereoRuntime(
         StereoRuntimeConfig(
-            model_id="test",
+            model_id="Distill-Any-Depth-Base",
             model_dir=tmp_path,
             mode="movie",
             device="cpu",

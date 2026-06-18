@@ -159,7 +159,7 @@ def runtime_config_from_d2s_settings(
     else:
         depth_backend = "pytorch_cuda"
 
-    onnx_dtype: OnnxDtypeMode = "fp16" if settings.get("FP16", True) else "fp32"
+    onnx_dtype: OnnxDtypeMode = "auto"
     mode = _normalize_runtime_mode(settings.get("Stereo Runtime Mode", settings.get("Run Mode", "movie")))
     output_format = _normalize_output_format(settings.get("Display Mode", "half_sbs"))
 

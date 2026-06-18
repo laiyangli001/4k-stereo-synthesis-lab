@@ -1443,6 +1443,7 @@ class StereoWindow:
         self.feather_enabled = feather_enabled
         self.feather_width = 0.02       # 2% of view width
         self.display_mode = display_mode
+        self._runtime_direct_output = False
         self._texture_size = None
         self.fill_16_9 = fill_16_9
         self.frame_size = frame_size
@@ -2594,6 +2595,7 @@ class StereoWindow:
 
     def update_frame(self, rgb, depth, current_fps=None, current_latency=None):
         """Update frame textures. CUDA tensors stay on GPU when GL interop works."""
+        self._runtime_direct_output = False
         if current_fps is not None:
             self.actual_fps = current_fps
         if current_latency is not None:
@@ -2718,6 +2720,86 @@ class StereoWindow:
                 if not self.stream_mode == "RTMP" or self.lossless_scaling:
                     self.toggle_fullscreen()
 
+    def update_runtime_frame(self, runtime_result, current_fps=None, current_latency=None):
+        """Display a stereo_runtime result that already contains the final output frame."""
+        if current_fps is not None:
+            self.actual_fps = current_fps
+        if current_latency is not None:
+            self.total_latency = current_latency * 1000
+
+        frame = runtime_result.sbs
+        if hasattr(frame, "detach"):
+            frame_gpu = frame.detach()
+            if frame_gpu.ndim == 4:
+                frame_gpu = frame_gpu[0]
+            if frame_gpu.ndim == 3 and frame_gpu.shape[0] in (3, 4):
+                frame_gpu = frame_gpu[:3].permute(1, 2, 0)
+            elif frame_gpu.ndim == 3 and frame_gpu.shape[-1] >= 3:
+                frame_gpu = frame_gpu[..., :3]
+            else:
+                raise RuntimeError(f"Unsupported runtime output shape: {tuple(frame_gpu.shape)}")
+            if frame_gpu.is_floating_point():
+                frame_gpu = frame_gpu.clamp(0.0, 1.0).mul(255.0)
+            rgb_np = frame_gpu.contiguous().to(torch.uint8).cpu().numpy()
+        else:
+            rgb_np = np.asarray(frame)
+            if rgb_np.ndim == 4:
+                rgb_np = rgb_np[0]
+            if rgb_np.ndim == 3 and rgb_np.shape[0] in (3, 4):
+                rgb_np = np.transpose(rgb_np[:3], (1, 2, 0))
+            elif rgb_np.ndim == 3 and rgb_np.shape[-1] >= 3:
+                rgb_np = rgb_np[..., :3]
+            else:
+                raise RuntimeError(f"Unsupported runtime output shape: {tuple(rgb_np.shape)}")
+            if np.issubdtype(rgb_np.dtype, np.floating):
+                rgb_np = np.clip(rgb_np, 0.0, 1.0) * 255.0
+            rgb_np = rgb_np.astype("uint8", copy=False)
+
+        h, w = rgb_np.shape[:2]
+        if self.stream_mode is None:
+            self._update_overlay_texture()
+        elif self.display_mode != "Depth Map":
+            rgb_np = self._add_overlay(rgb_np)
+
+        if self._texture_size != (w, h):
+            if self.color_tex:
+                self.color_tex.release()
+            if self.depth_tex:
+                self.depth_tex.release()
+            self.color_tex = self.ctx.texture((w, h), 3, dtype='f1')
+            self.depth_tex = self.ctx.texture((w, h), 1, dtype='f4')
+            self.prog['tex_color'].value = 0
+            self.prog['tex_depth'].value = 1
+            self._texture_size = (w, h)
+
+        self.color_tex.write(rgb_np.tobytes())
+        self.depth_tex.write(np.zeros((h, w), dtype=np.float32).tobytes())
+        self._runtime_direct_output = True
+        if not self._has_real_frame:
+            self._has_real_frame = True
+            if self.stream_mode != "MJPEG":
+                glfw.show_window(self.window)
+            self.position_on_monitor(self.monitor_index)
+            if self.use_3d:
+                if not self.specify_display:
+                    self.toggle_fullscreen()
+                self.apply_3d_settings()
+            if self.stream_mode == "RTMP":
+                if not self.specify_display:
+                    self.move_to_adjacent_monitor(direction=1)
+                if OS_NAME != "Darwin":
+                    if not self.lossless_scaling:
+                        glfw.set_window_opacity(self.window, 0.0)
+                    glfw.set_window_attrib(self.window, glfw.DECORATED, glfw.FALSE)
+                else:
+                    self.fix_aspect = True
+                    glfw.set_window_attrib(self.window, glfw.RESIZABLE, True)
+                    glfw.set_window_attrib(self.window, glfw.DECORATED, glfw.FALSE)
+                    self.toggle_fullscreen()
+            if self.specify_display:
+                if not self.stream_mode == "RTMP" or self.lossless_scaling:
+                    self.toggle_fullscreen()
+
     def _compute_render_size(self, max_w, max_h, src_w, src_h):
         """Calculate render size maintaining aspect ratio"""
         if src_w == 0 or src_h == 0:
@@ -2777,7 +2859,7 @@ class StereoWindow:
 
     def _render_scene(self, defer_overlay=False):
         """Ultra-optimized rendering with minimal GL calls"""
-        if not self.color_tex or not self.depth_tex:
+        if not self.color_tex:
             return
 
         # Get window dimensions once
@@ -2785,6 +2867,36 @@ class StereoWindow:
         if self._scene_render_size_override is not None:
             win_w, win_h = self._scene_render_size_override
         tex_w, tex_h = self._texture_size
+
+        if self._runtime_direct_output:
+            if self.fix_aspect:
+                glfw.set_window_aspect_ratio(self.window, tex_w, tex_h)
+            else:
+                glfw.set_window_aspect_ratio(self.window, glfw.DONT_CARE, glfw.DONT_CARE)
+            self.ctx.clear(0.0, 0.0, 0.0)
+            if self.fill_16_9:
+                render_w, render_h = self._compute_render_size(win_w, win_h, tex_w, tex_h)
+                center_x, center_y = win_w / 2.0, win_h / 2.0
+                viewport = (int(center_x - render_w / 2), int(center_y - render_h / 2), render_w, render_h)
+            else:
+                viewport = (0, 0, win_w, win_h)
+            self.ctx.viewport = viewport
+            self.color_tex.use(location=0)
+            self.depth_tex.use(location=1)
+            self.prog['u_eye_offset'].value = 0.0
+            self.prog['u_depth_strength'].value = 0.0
+            self.prog['u_feather_enabled'].value = False
+            self.prog['u_feather_width'].value = self.feather_width
+            self.prog['u_viewport'].value = viewport
+            self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+            if not defer_overlay:
+                self._render_overlay()
+            if self.stream_mode is None:
+                glfw.poll_events()
+            return
+
+        if not self.depth_tex:
+            return
         
         # Early exit for depth map mode - fully optimized path
         if self.display_mode == "Depth Map":

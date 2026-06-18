@@ -10,8 +10,8 @@ import os
 from collections import deque
 
 from utils import OS_NAME, OUTPUT_RESOLUTION, DISPLAY_MODE, CAPTURE_MODE, CAPTURE_TOOL, MONITOR_INDEX, SHOW_FPS, FPS, WINDOW_TITLE, IPD, DEPTH_STRENGTH, CONVERGENCE, RUN_MODE, STREAM_MODE, STREAM_PORT, STREAM_QUALITY, STEREOMIX_DEVICE, STREAM_KEY, AUDIO_DELAY, CRF, LOSSLESS_SCALING_SUPPORT, USE_3D_MONITOR, FILL_16_9, LOCAL_VSYNC, UPSCALER, UPSCALER_SHARPNESS, FIX_VIEWER_ASPECT, CAPTURE_MODE, STEREO_DISPLAY_SELECTION, STEREO_DISPLAY_INDEX, shutdown_event, DEVICE_ID, DEVICE_INFO, DEVICE, CONTROLLER_MODEL, ENVIRONMENT_MODEL, XR_PREVIEW_WINDOW, CACHE_PATH, settings
-from capture import capture_frame_to_rgb, prepare_rgb_for_depth_runtime
-from stereo_runtime import DepthRuntime, runtime_config_from_d2s_settings
+from capture import CaptureConfig, capture_frame_to_rgb, create_capture_runner, prepare_rgb_for_depth_runtime
+from stereo_runtime import StereoRuntime, runtime_config_from_d2s_settings
 
 if "CUDA" in DEVICE_INFO and "ZLUDA" not in DEVICE_INFO:
     USE_CUDART = True
@@ -33,11 +33,12 @@ TIME_SLEEP = 1.0 / FPS
 # Queues with size=1 (latest-frame-only logic)
 raw_q = queue.Queue(maxsize=1)
 depth_q = queue.Queue(maxsize=1)
-depth_runtime = DepthRuntime(
+stereo_runtime = StereoRuntime(
     runtime_config_from_d2s_settings(
         settings,
         cache_dir=CACHE_PATH,
         device=str(DEVICE),
+        depth_only=False,
     )
 )
 openxr_render_active = threading.Event()
@@ -211,10 +212,8 @@ def _openxr_source_paused():
         if _openxr_source_pause_noticed is not paused:
             _openxr_source_pause_noticed = paused
             if paused:
-                depth_runtime.set_inference_active(False)
                 print("[Main] OpenXR source inference paused")
             else:
-                depth_runtime.set_inference_active(True)
                 print("[Main] OpenXR source inference resumed")
     return paused
 
@@ -273,6 +272,38 @@ def _queue_clear_nonblocking(q):
         except queue.Empty:
             return
 
+
+def _runtime_output_to_numpy(frame):
+    import numpy as np
+    import torch
+
+    if isinstance(frame, torch.Tensor):
+        frame = frame.detach()
+        if frame.ndim == 4:
+            frame = frame[0]
+        if frame.ndim == 3 and frame.shape[0] in (3, 4):
+            frame = frame[:3].permute(1, 2, 0)
+        elif frame.ndim == 3 and frame.shape[-1] >= 3:
+            frame = frame[..., :3]
+        else:
+            raise RuntimeError(f"Unsupported runtime output shape: {tuple(frame.shape)}")
+        if frame.is_floating_point():
+            frame = frame.clamp(0.0, 1.0).mul(255.0)
+        return frame.contiguous().to(torch.uint8).cpu().numpy()
+
+    frame_np = np.asarray(frame)
+    if frame_np.ndim == 4:
+        frame_np = frame_np[0]
+    if frame_np.ndim == 3 and frame_np.shape[0] in (3, 4):
+        frame_np = np.transpose(frame_np[:3], (1, 2, 0))
+    elif frame_np.ndim == 3 and frame_np.shape[-1] >= 3:
+        frame_np = frame_np[..., :3]
+    else:
+        raise RuntimeError(f"Unsupported runtime output shape: {tuple(frame_np.shape)}")
+    if np.issubdtype(frame_np.dtype, np.floating):
+        frame_np = np.clip(frame_np, 0.0, 1.0) * 255.0
+    return frame_np.astype("uint8", copy=False)
+
 # Thread latency tracking dictionaries
 thread_latencies = {
     'capture': 0.0,
@@ -283,194 +314,64 @@ thread_latencies = {
 }
 
 # Initialize capture
-if CAPTURE_TOOL in ["WindowsCapture", "WindowsCaptureROCm", "WindowsCaptureCUDA"] and OS_NAME == "Windows":
-    import ctypes
-    from ctypes import wintypes
-    import threading
+capture_config = CaptureConfig(
+    output_resolution=OUTPUT_RESOLUTION,
+    fps=FPS,
+    window_title=WINDOW_TITLE,
+    capture_mode=CAPTURE_MODE,
+    monitor_index=MONITOR_INDEX,
+    capture_tool=CAPTURE_TOOL,
+    os_name=OS_NAME,
+)
 
-    # Import capture library (regular or CUDA-accelerated)
-    if CAPTURE_TOOL == "WindowsCaptureROCm":
-        from wc_rocm import WindowsCapture, Frame, InternalCaptureControl
-    elif CAPTURE_TOOL == "WindowsCaptureCUDA":
-        from wc_cuda import WindowsCapture, Frame, InternalCaptureControl
-    else:
-        from windows_capture import WindowsCapture, Frame, InternalCaptureControl
-    
-    # optional small delay (seconds) after capture event before performing actions
-    CAPTURE_CURSOR_DELAY_S = 0.2
 
-    # Handle Windows Hi-DPI scaling
-    try:
-        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # Per-monitor DPI awareness
-    except Exception:
-        ctypes.windll.user32.SetProcessDPIAware()
+def _capture_session_update(session, control):
+    global capture_control, capture_session
+    capture_session = session
+    capture_control = control
 
-    # Windows API Setup
-    user32 = ctypes.windll.user32
-    user32.ShowCursor.argtypes = [wintypes.BOOL]
-    user32.ShowCursor.restype = ctypes.c_int
-    # Add keybd_event for simulating keyboard input
-    user32.keybd_event.argtypes = [ctypes.c_ubyte, ctypes.c_ubyte, wintypes.DWORD, ctypes.c_ulonglong]
-    user32.keybd_event.restype = None
 
-    # Virtual key codes
-    VK_MENU = 0x12   # Left Alt key
-    VK_TAB = 0x09    # Tab key
-    KEYEVENTF_KEYUP = 0x0002
+def _capture_paused(reason):
+    _queue_clear_nonblocking(raw_q)
+    if reason == "paused":
+        _source_stat_inc("capture_dropped_paused")
 
-    def simulate_alt_tab():
-        """
-        Simulate pressing Alt+Tab to switch windows, then again to return.
-        Returns True if successful, False otherwise.
-        """
-        try:
 
-            # Second Alt+Tab (switch back)
-            user32.keybd_event(VK_MENU, 0, 0, 0)   # Alt down
-            user32.keybd_event(VK_TAB, 0, 0, 0)    # Tab down
-            time.sleep(0.01)
-            user32.keybd_event(VK_TAB, 0, KEYEVENTF_KEYUP, 0)  # Tab up
-            user32.keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0) # Alt up
+def _capture_frame_arrived(frame_raw, size, capture_start_time):
+    _source_stat_inc("capture_frames", last_capture_ts=capture_start_time)
+    _breakdown_inc("capture")
+    if shutdown_event.is_set():
+        return
+    _queue_put_latest(raw_q, (frame_raw, size, capture_start_time))
+    _source_stat_inc("raw_put")
 
-            return True
-        except Exception:
 
-            print(f"[simulate_alt_tab] Failed to simulate Win+Tab: {e}")
-            return False
+def _capture_error(exc):
+    _source_stat_inc(
+        "capture_errors",
+        last_error=f"capture_loop {type(exc).__name__}: {exc}",
+    )
+    print(f"[capture_loop] Capture session error: {type(exc).__name__}: {exc}", flush=True)
 
-    # Waits for capture_started_event to be set, then simulates Win+Tab twice
-    capture_started_event = threading.Event()
 
-    def _keyboard():
-        """
-        Wait for capture_started_event, then simulate Win+Tab to show desktop and restore windows.
-        Exits if shutdown_event is set.
-        """
-        while not shutdown_event.is_set():
-            triggered = capture_started_event.wait(timeout=0.1)
-            if shutdown_event.is_set():
-                break
-            if not triggered:
-                continue
+def _capture_closed():
+    if not shutdown_event.is_set():
+        print("[capture_loop] Capture session closed")
 
-            try:
-                # print("[keyboard] Simulating Win+Tab to show desktop and restore windows...")
-                simulate_alt_tab()
-                time.sleep(0.2)
-                simulate_alt_tab()
 
-                if CAPTURE_CURSOR_DELAY_S:
-                    time.sleep(CAPTURE_CURSOR_DELAY_S)
-                
-                # if not success:
-                    # print("[keyboard] Win+Tab simulation reported failure.")
-            except Exception as e:
-                print(f"[keyboard] Exception during action: {e}")
-            finally:
-                break
-
-        # print("[keyboard] Exiting cursor worker thread.")
-
-    # Start worker thread (daemon so it won't block shutdown)
-    alt_tab_thread = threading.Thread(target=_keyboard, name="CursorWorker", daemon=True)
-    alt_tab_thread.start()
-    
-    def capture_loop():
-        global capture_control, capture_session
-
-        while not shutdown_event.is_set():
-            _log_source_health()
-            if _openxr_hard_idle_active():
-                _queue_clear_nonblocking(raw_q)
-                time.sleep(0.1)
-                continue
-
-            cap = (
-                WindowsCapture(window_name=WINDOW_TITLE)
-                if CAPTURE_MODE == "Window"
-                else WindowsCapture(monitor_index=MONITOR_INDEX)
-            )
-            capture_session = cap
-            capture_control = None
-
-            @cap.event
-            def on_frame_arrived(frame: Frame, internal_capture_control: InternalCaptureControl):
-                global capture_control
-                capture_control = internal_capture_control
-                capture_start_time = time.perf_counter()
-                _source_stat_inc("capture_frames", last_capture_ts=capture_start_time)
-                _breakdown_inc("capture")
-                if shutdown_event.is_set():
-                    return
-                if _openxr_hard_idle_active() or _openxr_source_paused():
-                    _source_stat_inc("capture_dropped_paused")
-                    return
-                if hasattr(frame.frame_buffer, "copy"):
-                    raw = frame.frame_buffer.copy()
-                else:
-                    raw = frame.frame_buffer.clone()
-
-                _queue_put_latest(raw_q, (raw, OUTPUT_RESOLUTION, capture_start_time))
-                _source_stat_inc("raw_put")
-
-            @cap.event
-            def on_closed():
-                if not shutdown_event.is_set():
-                    print("[capture_loop] Capture session closed")
-
-            try:
-                cap.start()
-            except Exception as e:
-                _source_stat_inc(
-                    "capture_errors",
-                    last_error=f"capture_loop {type(e).__name__}: {e}",
-                )
-                print(f"[capture_loop] Capture session error: {type(e).__name__}: {e}", flush=True)
-                time.sleep(0.5)
-            finally:
-                capture_control = None
-                capture_session = None
-
-            if shutdown_event.is_set():
-                break
-            time.sleep(0.1)
-else:
-    # DXCamera based wincam
-    from capture import DesktopGrabber
-    
-    def capture_loop():
-        cap = DesktopGrabber(output_resolution=OUTPUT_RESOLUTION, fps=FPS, window_title=WINDOW_TITLE, capture_mode=CAPTURE_MODE, monitor_index=MONITOR_INDEX)
-        while not shutdown_event.is_set():
-            _log_source_health()
-            try:
-                if _openxr_hard_idle_active():
-                    _queue_clear_nonblocking(raw_q)
-                    time.sleep(0.1)
-                    continue
-                if _openxr_source_paused():
-                    _queue_clear_nonblocking(raw_q)
-                    _source_stat_inc("capture_dropped_paused")
-                    time.sleep(0.05)
-                    continue
-                capture_start_time = time.perf_counter()
-                frame_raw, size = cap.grab()
-                _source_stat_inc("capture_frames", last_capture_ts=capture_start_time)
-                _breakdown_inc("capture")
-                
-                if shutdown_event.is_set():
-                    break
-                
-                _queue_put_latest(raw_q, (frame_raw, size, capture_start_time))
-                _source_stat_inc("raw_put")
-            except queue.Empty:
-                continue
-            except Exception as e:
-                _source_stat_inc(
-                    "capture_errors",
-                    last_error=f"capture_loop {type(e).__name__}: {e}",
-                )
-                print(f"[Warning] Error: {e}")
-                continue
+def capture_loop():
+    runner = create_capture_runner(capture_config)
+    runner.run(
+        shutdown_event=shutdown_event,
+        on_frame=_capture_frame_arrived,
+        on_error=_capture_error,
+        on_closed=_capture_closed,
+        is_paused=_openxr_source_paused,
+        is_hard_idle=_openxr_hard_idle_active,
+        on_paused=_capture_paused,
+        on_session_update=_capture_session_update,
+        on_tick=_log_source_health,
+    )
 
 # Combined processing + depth thread (replaces process_loop and depth_loop)
 def process_depth_loop():
@@ -528,12 +429,11 @@ def process_depth_loop():
                     time.sleep(min(sleep, 0.05))
                 continue
             
-            # Depth inference
+            # Runtime inference + stereo synthesis
             depth_start_time = time.perf_counter()
             runtime_rgb = prepare_rgb_for_depth_runtime(frame_rgb, device=DEVICE)
-            depth_result = depth_runtime.predict_depth_frame(runtime_rgb)
-            depth = depth_result.depth
-            if depth is None:
+            runtime_result = stereo_runtime.process_rgb_frame(runtime_rgb)
+            if runtime_result.depth is None:
                 _queue_clear_nonblocking(depth_q)
                 _source_stat_inc("depth_none")
                 sleep = target_time - time.perf_counter()
@@ -545,7 +445,7 @@ def process_depth_loop():
             thread_latencies['depth'] = depth_latency      # depth latency
             
             # Send to render queue
-            _queue_put_latest(depth_q, (frame_rgb, depth, capture_start_time))
+            _queue_put_latest(depth_q, (runtime_result, capture_start_time))
             _source_stat_inc(
                 "depth_frames",
                 last_depth_ts=time.perf_counter(),
@@ -1344,14 +1244,16 @@ def main(mode="Viewer"):
         if mode == "Viewer":
             from viewer.viewer import StereoWindow
             # Get initial frame to determine window size (block until first frame arrives)
-            rgb, depth, capture_start_time = depth_q.get()
+            runtime_result, capture_start_time = depth_q.get()
             import torch
-            if isinstance(rgb, torch.Tensor):
-                w, h = rgb.shape[2], rgb.shape[1] # CUDA Tensor, (C, H, W)
+            output_frame = runtime_result.sbs
+            if isinstance(output_frame, torch.Tensor):
+                if output_frame.ndim == 4:
+                    w, h = output_frame.shape[3], output_frame.shape[2]
+                else:
+                    w, h = output_frame.shape[2], output_frame.shape[1]
             else:
-                w, h = rgb.shape[1], rgb.shape[0] # (H, W, C)
-            if DISPLAY_MODE == "Full-SBS":
-                w = 2 * w
+                w, h = output_frame.shape[1], output_frame.shape[0] # (H, W, C)
             if not STREAM_MODE:
                 # For local viewer only
                 h = int(1280 / w * h)
@@ -1400,7 +1302,7 @@ def main(mode="Viewer"):
             
             # Process the first frame we already retrieved
             render_start_time = time.perf_counter()
-            window.update_frame(rgb, depth, current_fps, 0.0)  # initial latency unknown
+            window.update_runtime_frame(runtime_result, current_fps, 0.0)  # initial latency unknown
             render_latency = time.perf_counter() - render_start_time
             total_latency = (render_start_time - capture_start_time) + render_latency
             thread_latencies['render'] = render_latency
@@ -1416,7 +1318,7 @@ def main(mode="Viewer"):
 
                 try:
                     # Get next frame (already processed + depth)
-                    rgb, depth, capture_start_time = depth_q.get(timeout=0.001)
+                    runtime_result, capture_start_time = depth_q.get(timeout=0.001)
                     _breakdown_inc("viewer_get")
                     
                     # Calculate total latency for this frame
@@ -1491,12 +1393,12 @@ def main(mode="Viewer"):
                         
                         # Update the viewer OSD with new FPS and latency (once per second)
                         update_start_time = time.perf_counter()
-                        window.update_frame(rgb, depth, current_fps, last_latency_display)
+                        window.update_runtime_frame(runtime_result, current_fps, last_latency_display)
                         _breakdown_add_time("update", time.perf_counter() - update_start_time)
                     else:
                         # Update only frame, keep previous stats (no FPS/latency change)
                         update_start_time = time.perf_counter()
-                        window.update_frame(rgb, depth)
+                        window.update_runtime_frame(runtime_result)
                         _breakdown_add_time("update", time.perf_counter() - update_start_time)
 
                     # Render latency and MJPEG frame capture
@@ -1544,8 +1446,9 @@ def main(mode="Viewer"):
                 from viewer.xrviewer_base import OpenXRViewer, OPENXR_AVAILABLE
             if not OPENXR_AVAILABLE:
                 raise ImportError("pyopenxr not installed — run: pip install pyopenxr")
-            rgb, depth, capture_start_time = depth_q.get()
+            runtime_result, capture_start_time = depth_q.get()
             import torch
+            rgb, depth = runtime_result.left_eye, runtime_result.depth
             if isinstance(rgb, torch.Tensor):
                 w, h = rgb.shape[2], rgb.shape[1]
             else:
@@ -1578,7 +1481,6 @@ def main(mode="Viewer"):
                 print(f"[Main] OpenXR Link error: {e}")
 
         else:
-            from streaming.legacy_sbs import make_sbs, DEVICE_INFO
             from streaming.mjpeg_streamer import MJPEGStreamer
 
             streamer = MJPEGStreamer(port=STREAM_PORT, fps=FPS, quality=STREAM_QUALITY)
@@ -1596,9 +1498,8 @@ def main(mode="Viewer"):
             while not shutdown_event.is_set():
                 try:
                     # Fix for unstable dml runtime error
-                    rgb, depth, _ = depth_q.get(timeout=TIME_SLEEP)
-                    sbs = make_sbs(rgb, depth, ipd_uv=IPD, depth_ratio=DEPTH_STRENGTH, convergence=CONVERGENCE, display_mode=DISPLAY_MODE, fill_16_9=FILL_16_9, fps=current_fps)
-                    streamer.set_frame(sbs)
+                    runtime_result, _ = depth_q.get(timeout=TIME_SLEEP)
+                    streamer.set_frame(_runtime_output_to_numpy(runtime_result.sbs))
                     
                     # Calculate FPS
                     frame_count += 1

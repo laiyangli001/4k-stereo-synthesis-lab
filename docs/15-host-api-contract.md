@@ -1,10 +1,10 @@
 # Host API 合同
 
-本文定义 GUI、Desktop2Stereo runtime、OpenXR host 与本仓库核心库之间的职责边界。目标是让外部 host 能稳定调用算法能力，同时避免把捕捉、GUI、模型管理和立体合成参数混在一起。
+本文定义 GUI、Desktop2Stereo runtime、OpenXR host 与 `stereo_runtime` 核心库之间的职责边界。目标是让外部 host 能稳定调用算法能力，同时避免把捕捉、GUI、模型管理和立体合成参数混在一起。
 
 ## 职责边界
 
-本仓库负责：
+`stereo_runtime` 核心库负责：
 
 - Desktop2Stereo 兼容模型 registry；
 - 模型下载、本地模型目录推导和 artifact 准备；
@@ -92,7 +92,9 @@ for frame_rgb, capture_start_time in frames:
 
 ## 数据流 3：Host 只有 RGB，且直接需要 Stereo/SBS
 
-推荐外部 host 使用 `StereoRuntimeConfig` 作为 RGB -> depth -> stereo/SBS 的完整边界对象。Host 只提供模型选择和 runtime 参数；本仓库根据 `model_id/cache_dir/export_height/export_width/onnx_dtype` 推导模型目录与 artifact 路径，并负责下载、转换、构建、预处理、推理和立体合成。
+推荐外部 host 使用 `StereoRuntimeConfig` 作为 RGB -> depth -> stereo/SBS 的完整边界对象。Host 只提供模型选择和 runtime 参数；`stereo_runtime` 根据 `model_id/cache_dir/export_height/export_width/onnx_dtype` 推导模型目录与 artifact 路径，并负责预处理、推理和立体合成。
+
+模型下载、ONNX 导出和 TensorRT engine 构建由 `prepare_model_artifacts()` 显式执行。`StereoRuntime.load()` 只加载已准备好的 provider/session/engine，不会自动下载模型或补齐缺失 artifact。
 
 ```python
 from stereo_runtime import (
@@ -167,7 +169,7 @@ Host 只需要保证：
 - 不要提前缩到 depth 模型尺寸；
 - 不要为了性能改动 depth inference 分辨率语义。
 
-本仓库内部负责：
+`stereo_runtime` 内部负责：
 
 - 根据 `ModelRegistry` 将 GUI 模型名解析为模型 spec / Hugging Face ID；
 - 根据 `model_id/cache_dir` 推导本地模型目录；
@@ -182,7 +184,7 @@ Host 只需要保证：
 - 执行立体合成和输出打包；
 - 在 capture source、分辨率或场景变化时配合 Host 重置 `TemporalState`。
 
-本仓库不负责：
+`stereo_runtime` 核心库不负责：
 
 - 桌面/窗口/显示器捕捉；
 - BGR/BGRA 转 RGB；
@@ -195,7 +197,7 @@ Host 只需要保证：
 
 | 对象 | 创建频率 | 说明 |
 |---|---|---|
-| `ModelRegistry` | 进程启动时创建或使用默认单例 | 覆盖 D2S 当前完整模型列表，供 GUI 和 runtime 解析模型 |
+| `ModelRegistry` | 进程启动时创建或使用 `ModelRegistry.default()` 默认实例 | 覆盖 D2S 当前完整模型列表，供 GUI 和 runtime 解析模型 |
 | `DepthRuntime` | 进程启动或模型/backend/分辨率切换时创建一次 | D2S 第一阶段首选调用对象，只输出 depth，保持 RGB + depth 渲染合同 |
 | `StereoRuntime` | 进程启动或模型/模式切换时创建一次 | 完整 RGB -> depth -> stereo/SBS 调用对象，内部持有 provider、stereo config、temporal state |
 | `DepthProvider` | 进程启动或模型切换时创建一次 | 内部持有模型、ONNX session 或 TensorRT engine |
@@ -255,7 +257,7 @@ runtime_config = runtime_config_from_d2s_settings(
 | `Depth Model` | `model_id` | 可以传 GUI 模型名或 HF ID，由 `ModelRegistry` 解析 |
 | `TensorRT` | `depth_backend` / `build_trt_engine` | `true` 时走 `tensorrt_native` 并允许构建 engine |
 | `Recompile TensorRT` | `force_rebuild_trt` | 只影响 engine 重建 |
-| `FP16` | `onnx_dtype` | 只作为导出请求；真实可用性仍由 dtype auto / probe 判断 |
+| `FP16` | `onnx_dtype` | 旧 GUI 字段不再强制 fp16/fp32；桥接层统一使用 `auto`，真实可用性由 dtype auto / probe 判断 |
 | `Display Mode` | `output_format` | `Half-SBS` / `Full-SBS` 等映射为 runtime 输出格式 |
 | `Run Mode` | `mode` | 映射到 movie/game/image/auto |
 | `Depth Strength` | `depth_strength` | stereo 合成参数 |
