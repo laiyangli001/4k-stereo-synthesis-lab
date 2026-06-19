@@ -82,6 +82,7 @@ class DepthProviderConfig:
     build_engine: bool = False
     force_rebuild: bool = False
     use_cuda_graph: bool = False
+    profile_sync: bool = False
     depth_upsample: DepthUpsampleMode = "bilinear"
     depth_upsample_edge_strength: float = 0.35
 
@@ -464,6 +465,7 @@ def create_depth_provider(config: DepthProviderConfig | dict[str, Any] | None = 
             build_engine=cfg.build_engine,
             force_rebuild=cfg.force_rebuild,
             use_cuda_graph=cfg.use_cuda_graph or backend == "tensorrt_native_graph",
+            profile_sync=cfg.profile_sync,
             depth_upsample=cfg.depth_upsample,
             depth_upsample_edge_strength=cfg.depth_upsample_edge_strength,
         )

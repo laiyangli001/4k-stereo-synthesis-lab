@@ -1459,7 +1459,7 @@ class Desktop2StereoGUI:
             value="Auto",
             width=S(130))
         self.stereo_quality_label = ft.Text("Synthetic View:", size=FONT_SIZE, width=S(130))
-        self.stereo_quality_dd = CompactDropdown(options=["fast", "quality_4k", "hq_4k"], value="quality_4k", width=S(130))
+        self.stereo_quality_dd = CompactDropdown(options=["fast", "fast_plus", "quality_4k", "hq_4k"], value="quality_4k", width=S(130))
         stereo_row0 = ft.Row([self.stereo_preset_label, self.stereo_preset_dd, ft.Container(width=S(40)), self.stereo_quality_label, self.stereo_quality_dd], spacing=1)
 
         self.max_shift_label = ft.Text("Max Shift Ratio:", size=FONT_SIZE, width=S(130))
@@ -1966,7 +1966,7 @@ class Desktop2StereoGUI:
         self.antialiasing_dd.value = str(cfg.get("Anti-aliasing", DEFAULTS["Anti-aliasing"]))
         self.foreground_scale_dd.value = str(cfg.get("Foreground Scale", DEFAULTS["Foreground Scale"]))
         self.convergence_dd.value = str(cfg.get("Convergence", DEFAULTS["Convergence"]))
-        self.stereo_preset_dd.value = self._preset_to_display(DEFAULTS["Stereo Preset"])
+        self.stereo_preset_dd.value = self._preset_to_display(cfg.get("Stereo Preset", DEFAULTS["Stereo Preset"]))
         self.stereo_quality_dd.value = cfg.get("Stereo Quality", cfg.get("Synthetic View", DEFAULTS["Stereo Quality"]))
         self.max_shift_dd.value = f'{self._parse_float(cfg.get("Max Shift Ratio", DEFAULTS["Max Shift Ratio"]), DEFAULTS["Max Shift Ratio"]):.2f}'
         self.temporal_strength_dd.value = f'{self._parse_float(cfg.get("Temporal Strength", DEFAULTS["Temporal Strength"]), DEFAULTS["Temporal Strength"]):.2f}'
@@ -3054,7 +3054,7 @@ class Desktop2StereoGUI:
             "Depth Quick": self._display_to_depth_quick(self.depth_quick_dd.value),
             "Anti-aliasing": self._parse_int(self.antialiasing_dd.value, DEFAULTS["Anti-aliasing"]),
             "Depth Antialias Strength": self._parse_float(self.antialiasing_dd.value, DEFAULTS["Depth Antialias Strength"]),
-            "Stereo Preset": DEFAULTS["Stereo Preset"],
+            "Stereo Preset": self._display_to_preset(self.stereo_preset_dd.value),
             "Stereo Quality": self.stereo_quality_dd.value,
             "Synthetic View": self.stereo_quality_dd.value,
             "Max Shift Ratio": self._parse_float(self.max_shift_dd.value, DEFAULTS["Max Shift Ratio"]),
@@ -3368,3 +3368,4 @@ async def _async_main(page: ft.Page):
 
 if __name__ == "__main__":
     main()
+

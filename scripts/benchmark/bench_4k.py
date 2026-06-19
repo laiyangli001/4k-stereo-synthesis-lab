@@ -24,7 +24,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--width", type=int, default=3840)
     parser.add_argument("--height", type=int, default=2160)
-    parser.add_argument("--backend", choices=["fast", "quality_4k", "hq_4k"], default="quality_4k")
+    parser.add_argument("--backend", choices=["fast", "fast_plus", "quality_4k", "hq_4k"], default="quality_4k")
     parser.add_argument(
         "--output-format",
         choices=OUTPUT_FORMAT_CHOICES,
@@ -111,3 +111,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

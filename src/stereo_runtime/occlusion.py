@@ -43,7 +43,12 @@ def make_occlusion_mask(
 ) -> torch.Tensor:
     depth = ensure_b1hw(depth).float()
     shift_px = ensure_b1hw(shift_px).float()
-    if occlusion_backend(depth, shift_px, edge_threshold=edge_threshold, dilation=dilation, fused=fused) == "triton_occlusion_radius2":
+    backend = occlusion_backend(depth, shift_px, edge_threshold=edge_threshold, dilation=dilation, fused=fused)
+    if backend == "triton_occlusion_radius1":
+        from .occlusion_triton import make_occlusion_mask_radius1
+
+        return suppress_screen_edge_mask(make_occlusion_mask_radius1(depth, shift_px), border_px=screen_edge_suppression)
+    if backend == "triton_occlusion_radius2":
         from .occlusion_triton import make_occlusion_mask_radius2
 
         return suppress_screen_edge_mask(make_occlusion_mask_radius2(depth, shift_px), border_px=screen_edge_suppression)
@@ -64,9 +69,11 @@ def occlusion_backend(
     if not fused or _triton_disabled_by_env():
         return "torch_max_pool"
     try:
-        from .occlusion_triton import can_use_triton_occlusion_radius2
+        from .occlusion_triton import can_use_triton_occlusion_radius1, can_use_triton_occlusion_radius2
     except Exception:
         return "torch_max_pool"
+    if can_use_triton_occlusion_radius1(depth, shift_px, edge_threshold=edge_threshold, dilation=dilation):
+        return "triton_occlusion_radius1"
     if can_use_triton_occlusion_radius2(depth, shift_px, edge_threshold=edge_threshold, dilation=dilation):
         return "triton_occlusion_radius2"
     return "torch_max_pool"

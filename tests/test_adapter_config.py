@@ -204,3 +204,42 @@ def test_runtime_config_accepts_full_sbs_display_name_variants():
         config = runtime_config_from_d2s_settings({**base, "Display Mode": value})
         assert config.output_format == "full_sbs"
         assert stereo_config_from_runtime(config).output_format == "full_sbs"
+
+
+def test_runtime_config_accepts_fast_plus_stereo_quality_variants():
+    base = {"Depth Model": "Distill-Any-Depth-Base"}
+    for value in ("fast_plus", "fastplus", "fast+"):
+        config = runtime_config_from_d2s_settings({**base, "Stereo Quality": value})
+        assert config.stereo_quality == "fast_plus"
+        assert stereo_config_from_runtime(config).backend == "fast_plus"
+
+
+def test_runtime_config_profile_sync_defaults_off_and_maps_setting():
+    base = {"Depth Model": "Distill-Any-Depth-Base", "TensorRT": True}
+
+    default_config = runtime_config_from_d2s_settings(base, device="cuda")
+    assert default_config.profile_sync is False
+    assert depth_provider_config_from_runtime(default_config).profile_sync is False
+
+    profiled_config = runtime_config_from_d2s_settings({**base, "Depth Profile Sync": True}, device="cuda")
+    assert profiled_config.profile_sync is True
+    assert depth_provider_config_from_runtime(profiled_config).profile_sync is True
+
+
+def test_runtime_config_keeps_fixed_stereo_preset_separate_from_run_mode():
+    config = runtime_config_from_d2s_settings(
+        {
+            "Depth Model": "Distill-Any-Depth-Base",
+            "Run Mode": "Auto",
+            "Stereo Preset": "Still Image / HQ",
+            "Stereo Quality": "quality_4k",
+        },
+        device="cuda",
+    )
+
+    assert config.mode == "auto"
+    assert config.stereo_preset == "Still Image / HQ"
+    stereo = stereo_config_from_runtime(config)
+    assert stereo.backend == "quality_4k"
+    assert stereo.temporal is True
+

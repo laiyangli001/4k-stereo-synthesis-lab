@@ -141,11 +141,12 @@ class NativeTensorRtEngine:
         if ok is False:
             raise RuntimeError("TensorRT execute_async_v3 failed")
 
-    def __call__(self, tensor: torch.Tensor) -> torch.Tensor:
+    def __call__(self, tensor: torch.Tensor, *, synchronize: bool = True) -> torch.Tensor:
         outputs = self._bind_input_output(tensor)
         self._execute()
-        stream = torch.cuda.current_stream(self.device)
-        stream.synchronize()
+        if synchronize:
+            stream = torch.cuda.current_stream(self.device)
+            stream.synchronize()
 
         if "predicted_depth" in outputs:
             return outputs["predicted_depth"]
@@ -260,6 +261,7 @@ class DistillAnyDepthBaseNativeTensorRt:
         build_engine: bool = False,
         force_rebuild: bool = False,
         use_cuda_graph: bool = False,
+        profile_sync: bool = False,
         depth_upsample: DepthUpsampleMode = "bilinear",
         depth_upsample_edge_strength: float = 0.35,
     ) -> None:
@@ -278,6 +280,7 @@ class DistillAnyDepthBaseNativeTensorRt:
         self.build_engine = bool(build_engine)
         self.force_rebuild = bool(force_rebuild)
         self.use_cuda_graph = bool(use_cuda_graph)
+        self.profile_sync = bool(profile_sync)
         self.depth_upsample = depth_upsample
         self.depth_upsample_edge_strength = float(depth_upsample_edge_strength)
         self.dtype = torch.float16
@@ -289,7 +292,7 @@ class DistillAnyDepthBaseNativeTensorRt:
             cache_dir=str(self.cache_dir),
             load_mode="local_onnx_native_tensorrt",
             depth_backend="tensorrt_native_graph" if self.use_cuda_graph else "tensorrt_native",
-            runtime="tensorrt-native-cudagraph" if self.use_cuda_graph else "tensorrt-native",
+            runtime=("tensorrt-native-cudagraph" if self.use_cuda_graph else "tensorrt-native") + ("-profile-sync" if self.profile_sync else "-async"),
             onnx_path=str(self.onnx_path),
             io_binding=False,
             output_device="cuda",
@@ -318,8 +321,8 @@ class DistillAnyDepthBaseNativeTensorRt:
 
     def predict_profile(self, rgb: torch.Tensor) -> DepthProfileResult:
         def sync() -> None:
-            if torch.cuda.is_available():
-                torch.cuda.synchronize()
+            if self.profile_sync and torch.cuda.is_available():
+                torch.cuda.synchronize(self.device)
 
         engine = self.load()
         sync()
@@ -332,7 +335,13 @@ class DistillAnyDepthBaseNativeTensorRt:
 
         sync()
         start = time.perf_counter()
-        predicted = engine.run_graph(tensor) if self.use_cuda_graph else engine(tensor)
+        if self.use_cuda_graph:
+            predicted = engine.run_graph(tensor)
+        else:
+            try:
+                predicted = engine(tensor, synchronize=self.profile_sync)
+            except TypeError:
+                predicted = engine(tensor)
         sync()
         model_ms = (time.perf_counter() - start) * 1000.0
 

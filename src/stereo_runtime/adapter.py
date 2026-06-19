@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from .synthesis import StereoConfig
 
 RuntimeMode = Literal["auto", "movie", "game", "image", "debug"]
-StereoQuality = Literal["fast", "quality_4k", "hq_4k"]
+StereoQuality = Literal["fast", "fast_plus", "quality_4k", "hq_4k"]
 DepthBackend = Literal["auto", "tensorrt_native", "onnx_cuda", "pytorch_cuda"]
 OnnxDtypeMode = Literal["auto", "fp16", "fp32"]
 DepthUpsampleMode = Literal["bilinear", "guided"]
@@ -45,6 +45,7 @@ class StereoRuntimeConfig:
     force_rebuild_trt: bool = False
     trt_workspace_gb: int = 4
     use_cuda_graph: bool = False
+    profile_sync: bool = False
     depth_upsample: DepthUpsampleMode = "bilinear"
     depth_upsample_edge_strength: float = 0.35
     depth_strength: float = 2.0
@@ -171,7 +172,9 @@ def runtime_config_from_d2s_settings(
 
     onnx_dtype: OnnxDtypeMode = "auto"
     preset_value = settings.get("Stereo Preset", settings.get("Stereo Mode Preset"))
-    mode_source = preset_value if preset_value is not None else settings.get("Stereo Runtime Mode", settings.get("Run Mode", "movie"))
+    mode_source = settings.get("Stereo Runtime Mode", settings.get("Run Mode"))
+    if mode_source is None:
+        mode_source = preset_value if preset_value is not None else "movie"
     mode = _normalize_runtime_mode(mode_source)
     output_format = _normalize_output_format(settings.get("Display Mode", "half_sbs"))
     stereo_quality = _normalize_stereo_quality(settings.get("Stereo Quality", settings.get("Synthetic View", "fast" if depth_only else "quality_4k")))
@@ -208,6 +211,7 @@ def runtime_config_from_d2s_settings(
         cross_eyed=_to_bool(settings.get("Cross Eyed", False)),
         anaglyph_method=str(settings.get("Anaglyph Method", "red_cyan")),
         debug_output=_to_bool(settings.get("Debug Stereo Output", False)),
+        profile_sync=_to_bool(settings.get("Depth Profile Sync", settings.get("Profile Sync", False))),
         depth_safety=_normalize_optional_bool(settings.get("Depth Safety")),
     )
 
@@ -253,9 +257,11 @@ def _normalize_runtime_mode(value: Any) -> RuntimeMode:
 
 
 def _normalize_stereo_quality(value: Any) -> StereoQuality:
-    key = str(value).strip().lower().replace("-", "_").replace(" ", "_")
+    key = str(value).strip().lower().replace("-", "_").replace("+", "_plus").replace(" ", "_")
     mapping: dict[str, StereoQuality] = {
         "fast": "fast",
+        "fast_plus": "fast_plus",
+        "fastplus": "fast_plus",
         "quality": "quality_4k",
         "quality_4k": "quality_4k",
         "hq": "hq_4k",
@@ -347,6 +353,7 @@ def depth_provider_config_from_runtime(config: StereoRuntimeConfig) -> "DepthPro
         build_engine=config.build_trt_engine,
         force_rebuild=config.force_rebuild_trt,
         use_cuda_graph=config.use_cuda_graph,
+        profile_sync=config.profile_sync,
         depth_upsample=config.depth_upsample,
         depth_upsample_edge_strength=config.depth_upsample_edge_strength,
     )

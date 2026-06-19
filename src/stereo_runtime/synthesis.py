@@ -15,7 +15,7 @@ from .output import AnaglyphMethod, OutputFormat, ensure_bchw, make_sbs, match_d
 from .refine import refine_local
 from .temporal import TemporalState, apply_temporal, detect_scene_change
 
-Backend = Literal["fast", "quality_4k", "hq_4k"]
+Backend = Literal["fast", "fast_plus", "quality_4k", "hq_4k"]
 HoleFill = Literal["none", "fast", "edge_aware"]
 
 
@@ -183,7 +183,7 @@ def synthesize_stereo(
         )
         if temporal_reset:
             temporal_state.reset_stereo()
-    if config.backend == "fast":
+    if config.backend in {"fast", "fast_plus"}:
         params = ShiftParams(
             depth_strength=config.depth_strength,
             convergence=config.convergence,
@@ -198,8 +198,41 @@ def synthesize_stereo(
             antialias_strength=config.depth_antialias_strength,
         )
         left, right, shift_px = synthesize_baseline(rgb, depth, params)
-        mask = None
-        debug = {"backend": config.backend, "shift_px": shift_px}
+        if config.backend == "fast_plus":
+            depth_for_mask = match_depth(depth, left.shape[-2], left.shape[-1])
+            mask = make_occlusion_mask(
+                depth_for_mask,
+                shift_px,
+                edge_threshold=0.03,
+                dilation=1,
+                fused=config.fused,
+                screen_edge_suppression=config.screen_edge_mask_suppression,
+            )
+            eyes = torch.cat([left, right], dim=0)
+            fill_mask = mask.expand(eyes.shape[0], -1, -1, -1)
+            hole_fill_backend = edge_aware_fill_backend(eyes, fill_mask, radius=1, strength=0.60, fused=config.fused)
+            eyes = edge_aware_fill(eyes, fill_mask, radius=1, strength=0.60, fused=config.fused)
+            left, right = eyes.chunk(2, dim=0)
+            debug = {
+                "backend": config.backend,
+                "shift_px": shift_px,
+                "occlusion_mask": mask,
+                "occlusion_mask_backend": occlusion_backend(
+                    depth_for_mask,
+                    shift_px,
+                    edge_threshold=0.03,
+                    dilation=1,
+                    fused=config.fused,
+                ),
+                "hole_fill_backend": hole_fill_backend,
+                "fast_plus_edge_threshold": 0.03,
+                "fast_plus_edge_dilation": 1,
+                "fast_plus_hole_fill_radius": 1,
+                "fast_plus_hole_fill_strength": 0.60,
+            }
+        else:
+            mask = None
+            debug = {"backend": config.backend, "shift_px": shift_px}
     else:
         if config.backend == "hq_4k" and config.layers < 3:
             config = StereoConfig(**{**config.__dict__, "layers": 3})
@@ -243,3 +276,4 @@ def synthesize_stereo(
     if not config.debug_output:
         debug = {k: v for k, v in debug.items() if isinstance(v, (float, int, str))}
     return StereoResult(left_eye=left, right_eye=right, sbs=sbs, debug_info=debug)
+

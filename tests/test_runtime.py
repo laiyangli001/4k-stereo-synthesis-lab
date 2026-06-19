@@ -117,3 +117,29 @@ def test_stereo_runtime_exports_new_public_names():
     assert StereoRuntimeConfig.__name__ == "StereoRuntimeConfig"
     assert DepthProviderConfig.__name__ == "DepthProviderConfig"
     assert AliasRollingStats is RollingRuntimeStats
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required for fast_plus_fused Triton")
+def test_fast_plus_fused_runtime_emits_uint8_half_sbs(monkeypatch):
+    provider = FakeDepthProvider()
+    config = StereoRuntimeConfig(
+        model_id="lc700x/Distill-Any-Depth-Base-hf",
+        model_dir=r"D:\Desktop2Stereo\models\models--lc700x--Distill-Any-Depth-Base-hf",
+        depth_backend="pytorch_cuda",
+        stereo_quality="fast_plus",
+        output_format="half_sbs",
+        temporal=True,
+    )
+    runtime = StereoRuntime(config, depth_provider=provider, collect_memory_stats=False)
+    rgb = torch.rand(1, 3, 16, 32, device="cuda", dtype=torch.float32)
+
+    monkeypatch.setenv("D2S_RUNTIME_OUTPUT_UINT8", "1")
+    monkeypatch.setenv("D2S_FAST_PLUS_FUSED", "1")
+    result = runtime.process_rgb_frame(rgb)
+    torch.cuda.synchronize()
+
+    assert result.sbs.shape == rgb.shape
+    assert result.sbs.dtype == torch.uint8
+    assert result.debug_info["runtime_output_pack_backend"] == "triton_half_sbs_uint8"
+    assert result.debug_info["fast_plus_fused_backend"] == "triton_half_sbs_uint8"
+    assert result.debug_info["fast_plus_fused_temporal_bypass"] == 1
+

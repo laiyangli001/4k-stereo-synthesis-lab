@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass, field
 from dataclasses import replace
+import os
 import time
 from typing import Any
 
@@ -347,12 +348,30 @@ class StereoRuntime:
                 )
 
         synth_start = time.perf_counter()
-        stereo = synthesize_stereo(
-            rgb_frame,
-            depth,
-            stereo_config,
-            temporal_state=self.temporal_state,
-        )
+        fused_sbs, fused_skip = self._try_fast_plus_fused_sbs(rgb_frame, depth, stereo_config)
+        if fused_sbs is not None:
+            stereo = StereoResult(
+                left_eye=rgb_frame,
+                right_eye=rgb_frame,
+                sbs=fused_sbs,
+                debug_info={
+                    "backend": stereo_config.backend,
+                    "sbs_backend": "triton_fast_plus_fused_half_sbs_uint8",
+                    "fast_plus_fused_backend": "triton_half_sbs_uint8",
+                    "fast_plus_fused_temporal_bypass": int(bool(stereo_config.temporal)),
+                    "occlusion_mask_backend": "triton_fused_radius1",
+                    "hole_fill_backend": "triton_fused_directional_4tap",
+                },
+            )
+        else:
+            stereo = synthesize_stereo(
+                rgb_frame,
+                depth,
+                stereo_config,
+                temporal_state=self.temporal_state,
+            )
+            stereo.debug_info.setdefault("fast_plus_fused_backend", "not_used")
+            stereo.debug_info.setdefault("fast_plus_fused_skip", fused_skip)
         synthesis_ms = (time.perf_counter() - synth_start) * 1000.0
         total_ms = (time.perf_counter() - total_start) * 1000.0
 
@@ -378,11 +397,28 @@ class StereoRuntime:
         if depth_safety_report is not None:
             debug["depth_safety"] = depth_safety_report
 
+        sbs = stereo.sbs
+        if _runtime_output_uint8_enabled() and sbs.is_floating_point():
+            fused_uint8 = _try_make_runtime_uint8_sbs(stereo, self.stereo_config.output_format)
+            if fused_uint8 is not None:
+                sbs = fused_uint8
+                debug["runtime_output_pack_backend"] = "triton_half_sbs_uint8"
+            else:
+                sbs = sbs.detach().clamp(0.0, 1.0).mul(255.0).to(torch.uint8)
+                debug["runtime_output_pack_backend"] = "torch_float_to_uint8"
+            debug["runtime_output_dtype"] = "uint8"
+        else:
+            if sbs.dtype == torch.uint8:
+                debug.setdefault("runtime_output_pack_backend", debug.get("fast_plus_fused_backend", "prepacked_uint8"))
+                debug["runtime_output_dtype"] = "uint8"
+            else:
+                debug["runtime_output_dtype"] = str(sbs.dtype).replace("torch.", "")
+
         return StereoRuntimeResult(
             depth=depth,
             left_eye=stereo.left_eye,
             right_eye=stereo.right_eye,
-            sbs=stereo.sbs,
+            sbs=sbs,
             debug_info=debug,
             timing=timing,
             provider_info=self.provider_report(),
@@ -468,6 +504,45 @@ class StereoRuntime:
             return bool(self.config.depth_safety)
         return self.config.mode == "image"
 
+    def _try_fast_plus_fused_sbs(self, rgb_frame: torch.Tensor, depth: torch.Tensor, stereo_config: Any) -> tuple[torch.Tensor | None, str]:
+        if not _fast_plus_fused_enabled():
+            return None, "disabled"
+        if stereo_config.backend != "fast_plus":
+            return None, f"backend={stereo_config.backend}"
+        if stereo_config.output_format != "half_sbs":
+            return None, f"format={stereo_config.output_format}"
+        if not _runtime_output_uint8_enabled():
+            return None, "runtime_uint8_off"
+        if bool(getattr(stereo_config, "cross_eyed", False)):
+            return None, "cross_eyed"
+        if bool(getattr(stereo_config, "debug_output", False)):
+            return None, "debug_output"
+        try:
+            from .fast_plus_fused_triton import can_use_fast_plus_fused_half_sbs_uint8, make_fast_plus_fused_half_sbs_uint8
+            from .output import match_depth
+        except Exception as exc:
+            return None, f"import_failed:{type(exc).__name__}"
+        depth = match_depth(depth, rgb_frame.shape[-2], rgb_frame.shape[-1])
+        if not can_use_fast_plus_fused_half_sbs_uint8(rgb_frame, depth):
+            return None, f"unsupported_tensor:rgb={tuple(rgb_frame.shape)}/{rgb_frame.dtype}/{rgb_frame.device};depth={tuple(depth.shape)}/{depth.dtype}/{depth.device}"
+        ipd_mm = getattr(stereo_config, "ipd_mm", None)
+        if ipd_mm is None:
+            effective_ipd_m = max(0.0, float(getattr(stereo_config, "ipd", 0.064)))
+        else:
+            effective_ipd_m = max(0.0, float(ipd_mm)) / 1000.0 * max(0.0, float(getattr(stereo_config, "stereo_scale", 0.5)))
+        try:
+            return make_fast_plus_fused_half_sbs_uint8(
+                rgb_frame,
+                depth,
+                depth_strength=float(getattr(stereo_config, "depth_strength", 2.0)),
+                convergence=float(getattr(stereo_config, "convergence", 0.0)),
+                effective_ipd_m=effective_ipd_m,
+                max_shift_ratio=float(getattr(stereo_config, "max_shift_ratio", 0.05)),
+                edge_threshold=0.03,
+            ), "used"
+        except Exception as exc:
+            return None, f"kernel_failed:{type(exc).__name__}"
+
     def _reset_cuda_peak_if_needed(self) -> None:
         if not self.collect_memory_stats or not torch.cuda.is_available():
             return
@@ -536,3 +611,28 @@ def _validate_runtime_rgb_frame(rgb_frame: Any) -> torch.Tensor:
     if not rgb_frame.is_floating_point():
         raise TypeError(f"rgb_frame must be float 0..1; got dtype {rgb_frame.dtype}")
     return rgb_frame
+
+
+def _runtime_output_uint8_enabled() -> bool:
+    return str(os.environ.get("D2S_RUNTIME_OUTPUT_UINT8", "0") or "0").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _fast_plus_fused_enabled() -> bool:
+    return str(os.environ.get("D2S_FAST_PLUS_FUSED", "1") or "1").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _try_make_runtime_uint8_sbs(stereo: StereoResult, output_format: str) -> torch.Tensor | None:
+    if output_format != "half_sbs":
+        return None
+    try:
+        from .output_triton import can_use_triton_half_sbs, make_half_sbs_uint8
+    except Exception:
+        return None
+    left = stereo.left_eye
+    right = stereo.right_eye
+    if not can_use_triton_half_sbs(left, right):
+        return None
+    try:
+        return make_half_sbs_uint8(left, right)
+    except Exception:
+        return None

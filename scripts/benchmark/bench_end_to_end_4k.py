@@ -31,7 +31,7 @@ def main() -> None:
     parser.add_argument("--rgb", required=True)
     parser.add_argument("--out", default="outputs/end_to_end_4k/end_to_end.json")
     parser.add_argument("--device", default="cuda")
-    parser.add_argument("--backend", choices=["fast", "quality_4k", "hq_4k"], default="quality_4k")
+    parser.add_argument("--backend", choices=["fast", "fast_plus", "quality_4k", "hq_4k"], default="quality_4k")
     parser.add_argument("--layers", type=int, default=2)
     parser.add_argument(
         "--output-format",
@@ -180,3 +180,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

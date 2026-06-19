@@ -122,6 +122,52 @@ def can_use_triton_leia(left: torch.Tensor, right: torch.Tensor) -> bool:
     return _can_use_triton_postprocess(left, right)
 
 
+@triton.jit
+def _half_sbs_uint8_kernel(
+    left,
+    right,
+    out,
+    total: tl.constexpr,
+    width: tl.constexpr,
+    half_width: tl.constexpr,
+    pixels: tl.constexpr,
+    block: tl.constexpr,
+):
+    offsets = tl.program_id(0) * block + tl.arange(0, block)
+    active = offsets < total
+    pixel = offsets % pixels
+    y = pixel // width
+    x = pixel - y * width
+    channel = offsets // pixels
+
+    use_left = x < half_width
+    src_x_out = tl.where(use_left, x, x - half_width)
+    x0 = src_x_out * 2
+    x1 = x0 + 1
+    base = channel * pixels + y * width
+
+    left_v0 = tl.load(left + base + x0, mask=active & use_left, other=0.0)
+    left_v1 = tl.load(left + base + x1, mask=active & use_left, other=0.0)
+    right_v0 = tl.load(right + base + x0, mask=active & ~use_left, other=0.0)
+    right_v1 = tl.load(right + base + x1, mask=active & ~use_left, other=0.0)
+    value = tl.where(use_left, (left_v0 + left_v1) * 0.5, (right_v0 + right_v1) * 0.5)
+    value = tl.minimum(tl.maximum(value, 0.0), 1.0) * 255.0
+    tl.store(out + offsets, value.to(tl.uint8), mask=active)
+
+
+def make_half_sbs_uint8(left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
+    left = left.contiguous()
+    right = right.contiguous()
+    _, channels, height, width = left.shape
+    out = torch.empty((1, channels, height, width), device=left.device, dtype=torch.uint8)
+    half_width = width // 2
+    pixels = height * width
+    total = out.numel()
+    block = 256
+    grid = (triton.cdiv(total, block),)
+    _half_sbs_uint8_kernel[grid](left, right, out, total, width, half_width, pixels, block)
+    return out
+
 def make_half_sbs(left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
     left = left.contiguous()
     right = right.contiguous()

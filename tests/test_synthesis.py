@@ -47,6 +47,31 @@ def test_half_sbs_shape():
     assert result.sbs.shape == rgb.shape
 
 
+
+def test_fast_plus_adds_light_occlusion_fill_debug_info():
+    rgb, depth = make_inputs()
+    rgb = rgb.clone()
+    depth = depth.clone()
+    rgb[:, :, :, 28:36] = 1.0
+    depth[:, :, :, 32:] = 1.0
+    depth[:, :, :, :32] = 0.0
+    fast = synthesize_stereo(rgb, depth, StereoConfig(backend="fast", output_format="half_sbs", temporal=False))
+    result = synthesize_stereo(
+        rgb,
+        depth,
+        StereoConfig(backend="fast_plus", output_format="half_sbs", debug_output=True, temporal=False, fused=False),
+    )
+
+    assert result.sbs.shape == rgb.shape
+    assert result.debug_info["backend"] == "fast_plus"
+    assert result.debug_info["fast_plus_edge_threshold"] == 0.03
+    assert result.debug_info["fast_plus_edge_dilation"] == 1
+    assert result.debug_info["fast_plus_hole_fill_radius"] == 1
+    assert result.debug_info["fast_plus_hole_fill_strength"] == 0.60
+    assert "occlusion_mask" in result.debug_info
+    assert result.debug_info["hole_fill_backend"] in {"torch_avg_pool", "triton_radius3"}
+    assert not torch.equal(result.sbs, fast.sbs)
+
 def test_full_sbs_shape():
     rgb, depth = make_inputs()
     result = synthesize_stereo(rgb, depth, StereoConfig(backend="fast", output_format="full_sbs"))
@@ -618,3 +643,5 @@ def test_warp_horizontal_matches_cached_grid_formula():
     expected = F.grid_sample(rgb, grid, mode="bilinear", padding_mode="border", align_corners=True)
     actual = warp_horizontal(rgb, shift_px, eye_sign=eye_sign)
     assert torch.allclose(actual, expected, atol=1e-6, rtol=1e-6)
+
+

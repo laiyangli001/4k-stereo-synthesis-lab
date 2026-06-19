@@ -26,7 +26,9 @@ def prepare_rgb_for_stereo_runtime(frame_rgb, *, device=None):
         from utils import DEVICE
         device = DEVICE
 
+    scale_from_uint8 = False
     if isinstance(frame_rgb, np.ndarray):
+        scale_from_uint8 = np.issubdtype(frame_rgb.dtype, np.integer)
         frame_rgb = torch.from_numpy(frame_rgb)
         if frame_rgb.ndim == 3 and frame_rgb.shape[-1] == 3:
             frame_rgb = frame_rgb.permute(2, 0, 1).contiguous()
@@ -41,10 +43,11 @@ def prepare_rgb_for_stereo_runtime(frame_rgb, *, device=None):
     else:
         raise ValueError(f"frame_rgb must be RGB CHW/BCHW for stereo_runtime, got shape {tuple(frame_rgb.shape)}")
 
+    scale_from_uint8 = scale_from_uint8 or not tensor.is_floating_point()
     tensor = tensor.to(device=device, dtype=torch.float32)
-    if tensor.numel() > 0 and float(tensor.detach().amax().cpu()) > 1.5:
-        tensor = tensor / 255.0
-    return tensor.clamp(0.0, 1.0)
+    if scale_from_uint8:
+        tensor = tensor.mul_(1.0 / 255.0)
+    return tensor.clamp_(0.0, 1.0)
 
 
 def _is_torch_tensor(value):
@@ -63,22 +66,34 @@ def _capture_frame_to_rgb_torch(frame_raw, target_resolution, *, device=None):
     if isinstance(frame_raw, np.ndarray):
         frame_raw = torch.from_numpy(frame_raw).to(device)
 
-    frame_rgb = frame_raw[..., [2, 1, 0]].permute(2, 0, 1).contiguous()
-    _, h0, w0 = frame_rgb.shape
-
+    h0, w0 = frame_raw.shape[:2]
     new_height, new_width = _resolve_target_size(target_resolution, h0, w0)
-    if new_height == h0 and new_width == w0:
-        return frame_rgb.to(device=device)
 
+    try:
+        from capture.preprocess_triton import bgr_to_rgb_resize_norm, can_use_triton_preprocess
+
+        if can_use_triton_preprocess(frame_raw):
+            out = bgr_to_rgb_resize_norm(frame_raw, new_height, new_width)
+            setattr(out, "_d2s_preprocess_backend", "triton_bgr_resize_norm")
+            return out
+    except Exception:
+        pass
+
+    frame_rgb = frame_raw[..., [2, 1, 0]].permute(2, 0, 1).contiguous()
     with torch.no_grad():
-        frame_float = frame_rgb.to(device=device, dtype=torch.float32)
-        return F.interpolate(
+        frame_float = frame_rgb.to(device=device, dtype=torch.float32).mul_(1.0 / 255.0)
+        if new_height == h0 and new_width == w0:
+            setattr(frame_float, "_d2s_preprocess_backend", "torch_bgr_norm")
+            return frame_float
+        out = F.interpolate(
             frame_float.unsqueeze(0),
             size=(new_height, new_width),
             mode="bilinear",
             align_corners=False,
             antialias=new_height < h0 or new_width < w0,
-        ).squeeze(0)
+        ).squeeze(0).clamp_(0.0, 1.0)
+        setattr(out, "_d2s_preprocess_backend", "torch_bgr_resize_norm")
+        return out
 
 
 def _capture_frame_to_rgb_numpy(frame_raw, target_resolution):

@@ -12,6 +12,9 @@ from collections import deque
 from utils import OS_NAME, OUTPUT_RESOLUTION, DISPLAY_MODE, CAPTURE_MODE, CAPTURE_TOOL, MONITOR_INDEX, SHOW_FPS, FPS, WINDOW_TITLE, IPD, DEPTH_STRENGTH, CONVERGENCE, RUN_MODE, STREAM_MODE, STREAM_PORT, STREAM_QUALITY, STEREOMIX_DEVICE, STREAM_KEY, AUDIO_DELAY, CRF, LOSSLESS_SCALING_SUPPORT, USE_3D_MONITOR, FILL_16_9, LOCAL_VSYNC, UPSCALER, UPSCALER_SHARPNESS, FIX_VIEWER_ASPECT, CAPTURE_MODE, STEREO_DISPLAY_SELECTION, STEREO_DISPLAY_INDEX, shutdown_event, DEVICE_ID, DEVICE_INFO, DEVICE, CONTROLLER_MODEL, ENVIRONMENT_MODEL, XR_PREVIEW_WINDOW, CACHE_PATH, settings
 from capture import CaptureConfig, capture_frame_to_rgb, create_capture_runner, prepare_rgb_for_stereo_runtime
 from stereo_runtime import AutoModeRuntime, AutoModeSignals, OpenXRRenderConfig, StereoRuntime, runtime_config_from_d2s_settings, stereo_config_for_preset
+from stereo_runtime.adapter import stereo_config_from_runtime
+from stereo_runtime.adapter import preset_for_runtime_mode
+from stereo_runtime.presets import normalize_preset
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 RTMP_DIR = os.path.join(BASE_DIR, "streaming", "rtmp")
@@ -43,9 +46,22 @@ runtime_config = runtime_config_from_d2s_settings(
     depth_only=False,
 )
 stereo_runtime = StereoRuntime(runtime_config)
-stereo_auto_runtime = AutoModeRuntime()
-stereo_auto_enabled = runtime_config.mode == "auto"
-stereo_active_preset = runtime_config.stereo_preset or ("auto" if stereo_auto_enabled else None)
+
+def _initial_stereo_preset_state(config):
+    raw_preset = config.stereo_preset
+    if raw_preset is not None:
+        preset = normalize_preset(raw_preset)
+        return preset == "auto", preset
+    if config.mode == "auto":
+        return True, "auto"
+    return False, preset_for_runtime_mode(config.mode)
+
+stereo_auto_enabled, stereo_active_preset = _initial_stereo_preset_state(runtime_config)
+if not stereo_auto_enabled:
+    stereo_runtime.configure_stereo(stereo_config_from_runtime(runtime_config), reset_temporal=True)
+stereo_auto_runtime = AutoModeRuntime(initial_preset="cinema" if stereo_active_preset == "auto" else stereo_active_preset)
+stereo_last_logged_mode_state = None
+stereo_last_logged_fused_state = None
 stereo_last_motion_frame = None
 stereo_still_duration_s = 0.0
 stereo_last_auto_ts = time.perf_counter()
@@ -107,6 +123,21 @@ SOURCE_HEALTH_LOG = str(
 FPS_BREAKDOWN_LOG = str(
     os.environ.get("D2S_FPS_BREAKDOWN", "0") or "0"
 ).strip().lower() in ("1", "true", "yes", "on")
+_BREAKDOWN_LATEST_KEYS = {
+    "rt_backend",
+    "rt_depth_backend",
+    "rt_output_format",
+    "rt_output_dtype",
+    "rt_output_pack",
+    "rt_sbs_backend",
+    "rt_occ_backend",
+    "rt_fill_backend",
+    "rt_depth_total_ms",
+    "rt_depth_model_ms",
+    "rt_synthesis_ms",
+    "rt_total_ms",
+}
+
 _breakdown_lock = threading.Lock()
 _breakdown_stats = {
     "capture": 0,
@@ -141,6 +172,35 @@ def _breakdown_add_time(name, seconds):
         _breakdown_stats[f"{name}_count"] = _breakdown_stats.get(f"{name}_count", 0) + 1
 
 
+
+def _breakdown_add_runtime_timing(runtime_result):
+    if not FPS_BREAKDOWN_LOG:
+        return
+    timing = getattr(runtime_result, "timing", None) or {}
+    debug = getattr(runtime_result, "debug_info", None) or {}
+    with _breakdown_lock:
+        for key in ("depth_total_ms", "depth_model_ms", "synthesis_ms", "total_ms"):
+            value = timing.get(key)
+            if value is not None:
+                _breakdown_stats[f"rt_{key}"] = float(value)
+        _breakdown_stats["rt_backend"] = str(debug.get("backend", "unknown"))
+        _breakdown_stats["rt_depth_backend"] = str(debug.get("runtime_depth_backend", "unknown"))
+        _breakdown_stats["rt_output_format"] = str(debug.get("runtime_output_format", "unknown"))
+        _breakdown_stats["rt_output_dtype"] = str(debug.get("runtime_output_dtype", "unknown"))
+        _breakdown_stats["rt_output_pack"] = str(debug.get("runtime_output_pack_backend", "n/a"))
+        if "sbs_backend" in debug:
+            _breakdown_stats["rt_sbs_backend"] = str(debug.get("sbs_backend"))
+        if "occlusion_mask_backend" in debug:
+            _breakdown_stats["rt_occ_backend"] = str(debug.get("occlusion_mask_backend"))
+        if "hole_fill_backend" in debug:
+            _breakdown_stats["rt_fill_backend"] = str(debug.get("hole_fill_backend"))
+        if "fast_plus_fused_backend" in debug:
+            _breakdown_stats["rt_fast_plus_fused_backend"] = str(debug.get("fast_plus_fused_backend"))
+        if "fast_plus_fused_skip" in debug:
+            _breakdown_stats["rt_fast_plus_fused_skip"] = str(debug.get("fast_plus_fused_skip"))
+        if "fast_plus_fused_temporal_bypass" in debug:
+            _breakdown_stats["rt_fast_plus_fused_temporal_bypass"] = str(debug.get("fast_plus_fused_temporal_bypass"))
+
 def _log_fps_breakdown(now=None):
     global _breakdown_last
     if not FPS_BREAKDOWN_LOG:
@@ -152,6 +212,8 @@ def _log_fps_breakdown(now=None):
     with _breakdown_lock:
         stats = dict(_breakdown_stats)
         for key in list(_breakdown_stats.keys()):
+            if key in _BREAKDOWN_LATEST_KEYS:
+                continue
             _breakdown_stats[key] = 0.0 if key.endswith("_ms") else 0
         _breakdown_last = now
 
@@ -166,13 +228,34 @@ def _log_fps_breakdown(now=None):
         "[FPSBreakdown] "
         f"target={FPS}Hz "
         f"cap={rate('capture'):.1f} raw={rate('raw_get'):.1f} "
+        f"overwrite={rate('raw_overwritten'):.1f} drain_drop={rate('raw_dropped_stale'):.1f} "
         f"runtime={rate('runtime'):.1f} viewer_get={rate('viewer_get'):.1f} "
         f"loop={rate('loops'):.1f} "
         f"update={avg_ms('update'):.2f}ms "
         f"render={avg_ms('render'):.2f}ms "
         f"post={avg_ms('post'):.2f}ms "
         f"swap={avg_ms('swap'):.2f}ms "
-        f"wait={avg_ms('wait'):.2f}ms",
+        f"wait={avg_ms('wait'):.2f}ms "
+        f"rt_loop={avg_ms('rt_loop'):.2f}ms "
+        f"rt_cap2rgb={avg_ms('rt_cap2rgb'):.2f}ms "
+        f"rt_prepare={avg_ms('rt_prepare'):.2f}ms "
+        f"pre={stats.get('rt_preprocess_backend', 'unknown')} "
+        f"rt_call={avg_ms('rt_call'):.2f}ms "
+        f"rt_put={avg_ms('rt_put'):.2f}ms "
+        f"rt_backend={stats.get('rt_backend', 'unknown')} "
+        f"rt_depth={stats.get('rt_depth_total_ms', 0.0):.2f}ms "
+        f"rt_model={stats.get('rt_depth_model_ms', 0.0):.2f}ms "
+        f"rt_synth={stats.get('rt_synthesis_ms', 0.0):.2f}ms "
+        f"rt_total={stats.get('rt_total_ms', 0.0):.2f}ms "
+        f"rt_depth_backend={stats.get('rt_depth_backend', 'unknown')} "
+        f"rt_out={stats.get('rt_output_dtype', 'unknown')} "
+        f"rt_pack={stats.get('rt_output_pack', 'n/a')} "
+        f"rt_sbs={stats.get('rt_sbs_backend', 'unknown')} "
+        f"rt_occ={stats.get('rt_occ_backend', 'n/a')} "
+        f"rt_fill={stats.get('rt_fill_backend', 'n/a')} "
+        f"rt_fused={stats.get('rt_fast_plus_fused_backend', 'n/a')} "
+        f"rt_fused_skip={stats.get('rt_fast_plus_fused_skip', 'n/a')} "
+        f"rt_fused_temporal_bypass={stats.get('rt_fast_plus_fused_temporal_bypass', 'n/a')}",
         flush=True,
     )
 
@@ -303,6 +386,18 @@ def _queue_clear_nonblocking(q):
             return
 
 
+def _queue_drain_latest(q, first_item):
+    """Drop stale queued items and return the newest available frame."""
+    latest = first_item
+    while True:
+        try:
+            latest = q.get_nowait()
+            _source_stat_inc("raw_dropped_stale")
+            _breakdown_inc("raw_dropped_stale")
+        except queue.Empty:
+            return latest
+
+
 def _update_openxr_runtime_config(*, ipd=None, depth_ratio=None, convergence=None, screen_roll=None):
     with openxr_runtime_config_lock:
         if ipd is not None:
@@ -332,6 +427,7 @@ def _current_openxr_render_config():
 def _runtime_stereo_overrides():
     config = stereo_runtime.config
     return {
+        "backend": config.stereo_quality,
         "depth_strength": config.depth_strength,
         "convergence": config.convergence,
         "ipd": config.ipd,
@@ -527,6 +623,87 @@ def _ensure_auto_signal_sampler():
     threading.Thread(target=_auto_signal_sampler_loop, daemon=True, name="StereoAutoSignalSampler").start()
 
 
+def _log_stereo_runtime_mode(reason, decision=None, samples=None, motion=None):
+    config = stereo_runtime.stereo_config
+    runtime_cfg = stereo_runtime.config
+    preset = stereo_active_preset or runtime_cfg.stereo_preset or runtime_cfg.mode
+    fused_candidate = (
+        config.backend == "fast_plus"
+        and config.output_format == "half_sbs"
+        and str(os.environ.get("D2S_RUNTIME_OUTPUT_UINT8", "0") or "0").strip().lower() in {"1", "true", "yes", "on"}
+        and str(os.environ.get("D2S_FAST_PLUS_FUSED", "1") or "1").strip().lower() in {"1", "true", "yes", "on"}
+    )
+    parts = [
+        f"[Main] Stereo mode {reason}:",
+        f"auto={'on' if stereo_auto_enabled else 'off'}",
+        f"preset={preset}",
+        f"synthetic_view={config.backend}",
+        f"quality_setting={runtime_cfg.stereo_quality}",
+        f"output={config.output_format}",
+        f"hole_fill={config.hole_fill}",
+        f"temporal={config.temporal}",
+        f"fast_plus_fused_candidate={int(fused_candidate)}",
+        f"runtime_uint8={os.environ.get('D2S_RUNTIME_OUTPUT_UINT8', '0')}",
+    ]
+    if decision is not None:
+        parts.append(f"decision={decision.preset}")
+        parts.append(f"reason={decision.reason}")
+    if motion is not None:
+        parts.append(f"motion={float(motion):.3f}")
+    if samples:
+        parts.append(f"gpu3d={float(samples.get('gpu_3d_util', 0.0)):.2f}")
+        parts.append(f"video={float(samples.get('gpu_video_decode_util', 0.0)):.2f}")
+        parts.append(f"input={float(samples.get('input_activity', 0.0)):.2f}")
+        parts.append(f"idle={float(samples.get('idle_seconds', 0.0)):.1f}s")
+    print(" ".join(parts), flush=True)
+
+
+def _log_stereo_runtime_mode_once(reason="active"):
+    global stereo_last_logged_mode_state
+    config = stereo_runtime.stereo_config
+    runtime_cfg = stereo_runtime.config
+    state = (
+        stereo_active_preset,
+        config.backend,
+        runtime_cfg.stereo_quality,
+        config.output_format,
+        config.hole_fill,
+        config.temporal,
+    )
+    if state == stereo_last_logged_mode_state:
+        return
+    stereo_last_logged_mode_state = state
+    _log_stereo_runtime_mode(reason)
+
+
+def _log_fast_plus_fused_runtime_state(runtime_result):
+    global stereo_last_logged_fused_state
+    debug = getattr(runtime_result, "debug_info", None) or {}
+    state = (
+        str(debug.get("backend", "unknown")),
+        str(debug.get("runtime_output_format", "unknown")),
+        str(debug.get("runtime_output_dtype", "unknown")),
+        str(debug.get("runtime_output_pack_backend", "n/a")),
+        str(debug.get("fast_plus_fused_backend", "n/a")),
+        str(debug.get("fast_plus_fused_skip", "n/a")),
+        str(debug.get("fast_plus_fused_temporal_bypass", "n/a")),
+    )
+    if state == stereo_last_logged_fused_state:
+        return
+    stereo_last_logged_fused_state = state
+    print(
+        "[Main] Stereo runtime output:"
+        f" backend={state[0]}"
+        f" output={state[1]}"
+        f" dtype={state[2]}"
+        f" pack={state[3]}"
+        f" fast_plus_fused={state[4]}"
+        f" fast_plus_fused_skip={state[5]}"
+        f" fast_plus_fused_temporal_bypass={state[6]}",
+        flush=True,
+    )
+
+
 def _update_auto_stereo_mode(rgb_frame):
     global stereo_active_preset, stereo_still_duration_s, stereo_last_auto_ts
     if not stereo_auto_enabled:
@@ -567,8 +744,7 @@ def _update_auto_stereo_mode(rgb_frame):
         ),
         reset_temporal=True,
     )
-    if SOURCE_HEALTH_LOG:
-        print(f"[Main] Auto stereo preset -> {decision.preset}: {decision.reason}", flush=True)
+    _log_stereo_runtime_mode("auto-switch", decision=decision, samples=samples, motion=motion)
 
 
 def _runtime_output_to_numpy(frame):
@@ -640,6 +816,9 @@ def _capture_frame_arrived(frame_raw, size, capture_start_time):
     _breakdown_inc("capture")
     if shutdown_event.is_set():
         return
+    if raw_q.full():
+        _source_stat_inc("raw_overwritten")
+        _breakdown_inc("raw_overwritten")
     _queue_put_latest(raw_q, (frame_raw, size, capture_start_time))
     _source_stat_inc("raw_put")
 
@@ -673,10 +852,8 @@ def capture_loop():
 
 # Combined capture-to-runtime processing thread (replaces process_loop and runtime_loop)
 def process_runtime_loop():
-    target_time = time.perf_counter()
     while not shutdown_event.is_set():
         _log_source_health()
-        target_time += TIME_SLEEP
         try:
             if shutdown_event.is_set():
                 break
@@ -689,23 +866,26 @@ def process_runtime_loop():
                 _queue_clear_nonblocking(raw_q)
                 _queue_clear_nonblocking(runtime_q)
                 _source_stat_inc("runtime_dropped_paused")
-                sleep = target_time - time.perf_counter()
-                if sleep > 0:
-                    time.sleep(min(sleep, 0.05))
+                time.sleep(0.01)
                 continue
-            
-            # Get raw frame with capture timestamp
-            frame_raw, size, capture_start_time = raw_q.get(timeout=TIME_SLEEP)
+
+            # Wait briefly for a frame, then drain stale frames so inference always works on latest input.
+            frame_raw, size, capture_start_time = _queue_drain_latest(
+                raw_q,
+                raw_q.get(timeout=min(TIME_SLEEP, 0.01)),
+            )
             _source_stat_inc("raw_get", last_raw_get_ts=time.perf_counter())
             _breakdown_inc("raw_get")
 
             if _openxr_source_paused():
+                _queue_clear_nonblocking(raw_q)
+                _queue_clear_nonblocking(runtime_q)
                 _source_stat_inc("runtime_dropped_paused")
-                sleep = target_time - time.perf_counter()
-                if sleep > 0:
-                    time.sleep(min(sleep, 0.05))
+                time.sleep(0.01)
                 continue
-            
+
+            loop_start_time = time.perf_counter()
+
             # Process: resize / color conversion
             process_start_time = time.perf_counter()
             frame_rgb = capture_frame_to_rgb(
@@ -715,6 +895,10 @@ def process_runtime_loop():
                 use_torch=USE_CUDART,
                 output="tensor",
             )
+            _breakdown_add_time("rt_cap2rgb", time.perf_counter() - process_start_time)
+            if FPS_BREAKDOWN_LOG:
+                with _breakdown_lock:
+                    _breakdown_stats["rt_preprocess_backend"] = str(getattr(frame_rgb, "_d2s_preprocess_backend", "unknown"))
             process_latency = process_start_time - capture_start_time
             thread_latencies['capture'] = process_latency  # capture latency
 
@@ -722,16 +906,18 @@ def process_runtime_loop():
                 _queue_clear_nonblocking(raw_q)
                 _queue_clear_nonblocking(runtime_q)
                 _source_stat_inc("runtime_dropped_paused")
-                sleep = target_time - time.perf_counter()
-                if sleep > 0:
-                    time.sleep(min(sleep, 0.05))
+                time.sleep(0.01)
                 continue
-            
+
             # Runtime inference + stereo synthesis
             runtime_start_time = time.perf_counter()
+            prepare_start_time = time.perf_counter()
             runtime_rgb = prepare_rgb_for_stereo_runtime(frame_rgb, device=DEVICE)
+            _breakdown_add_time("rt_prepare", time.perf_counter() - prepare_start_time)
             _ensure_auto_signal_sampler()
+            _log_stereo_runtime_mode_once()
             _update_auto_stereo_mode(runtime_rgb)
+            runtime_call_start_time = time.perf_counter()
             if RUN_MODE == "OpenXR" and OPENXR_RUNTIME_DIRECT:
                 runtime_result = stereo_runtime.process_openxr_frame(
                     runtime_rgb,
@@ -739,18 +925,19 @@ def process_runtime_loop():
                 )
             else:
                 runtime_result = stereo_runtime.process_rgb_frame(runtime_rgb)
+            _breakdown_add_time("rt_call", time.perf_counter() - runtime_call_start_time)
+            _breakdown_add_runtime_timing(runtime_result)
+            _log_fast_plus_fused_runtime_state(runtime_result)
             if runtime_result.depth is None:
                 _queue_clear_nonblocking(runtime_q)
                 _source_stat_inc("runtime_none")
-                sleep = target_time - time.perf_counter()
-                if sleep > 0:
-                    time.sleep(min(sleep, 0.05))
                 continue
             runtime_latency = time.perf_counter() - runtime_start_time
             thread_latencies['resize'] = process_latency   # resize latency
             thread_latencies['runtime'] = runtime_latency    # runtime latency
-            
+
             # Send to render queue
+            queue_put_start_time = time.perf_counter()
             if RUN_MODE == "OpenXR" and not OPENXR_RUNTIME_DIRECT:
                 fallback_depth = runtime_result.depth
                 if hasattr(fallback_depth, "detach") and fallback_depth.ndim == 4:
@@ -758,6 +945,8 @@ def process_runtime_loop():
                 _queue_put_latest(runtime_q, ((frame_rgb, fallback_depth), capture_start_time))
             else:
                 _queue_put_latest(runtime_q, (runtime_result, capture_start_time))
+            _breakdown_add_time("rt_put", time.perf_counter() - queue_put_start_time)
+            _breakdown_add_time("rt_loop", time.perf_counter() - loop_start_time)
             _source_stat_inc(
                 "runtime_frames",
                 last_runtime_ts=time.perf_counter(),
@@ -765,10 +954,6 @@ def process_runtime_loop():
                 last_runtime_latency=runtime_latency,
             )
             _breakdown_inc("runtime")
-
-            sleep = target_time - time.perf_counter()
-            if sleep > 0:
-                time.sleep(sleep)
 
         except queue.Empty:
             _source_stat_inc("raw_queue_empty")
@@ -781,7 +966,6 @@ def process_runtime_loop():
             print(f"[process_runtime_loop] Error: {type(e).__name__}: {e}", flush=True)
             time.sleep(0.05)
             continue
-
 def cleanup_all_resources():
     """Global cleanup function"""
     print("[Cleanup] Shutting down all resources...")

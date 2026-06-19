@@ -1503,6 +1503,7 @@ class StereoWindow:
         self._runtime_direct_output = False
         self._runtime_output_format = None
         self._runtime_output_size_logged = False
+        self._gl_upload_mode = str(os.environ.get("D2S_GL_UPLOAD_MODE", "pbo") or "pbo").strip().lower()
         self._texture_size = None
         self.fill_16_9 = fill_16_9
         self.frame_size = frame_size
@@ -1897,7 +1898,7 @@ class StereoWindow:
             self._cuda_resource_color_image = None
             self._cuda_rgba_upload = None
             self._cuda_rgba_upload_size = None
-            if self._color_tex_components == 4 and not self._cuda_image_upload_failed and all(
+            if self._gl_upload_mode in {"texture", "image"} and self._color_tex_components == 4 and not self._cuda_image_upload_failed and all(
                 hasattr(self._cudart, name)
                 for name in ("register_image", "mapped_array", "memcpy_2d_to_array")
             ):
@@ -2894,7 +2895,9 @@ class StereoWindow:
             frame_gpu = frame_gpu.contiguous()
             if frame_gpu.is_floating_point():
                 frame_gpu.clamp_(0.0, 1.0).mul_(255.0)
-            frame_gpu = frame_gpu.to(torch.uint8)
+                frame_gpu = frame_gpu.to(torch.uint8)
+            elif frame_gpu.dtype is not torch.uint8:
+                frame_gpu = frame_gpu.to(torch.uint8)
             h, w = int(frame_gpu.shape[0]), int(frame_gpu.shape[1])
             rgb_np = None
         else:
@@ -2924,7 +2927,7 @@ class StereoWindow:
                 self.color_tex.release()
             if self.depth_tex:
                 self.depth_tex.release()
-            color_components = 4 if (self.stream_mode is None and self.use_cuda and frame_gpu is not None and getattr(frame_gpu, "is_cuda", False)) else 3
+            color_components = 4 if (self._gl_upload_mode in {"texture", "image"} and self.stream_mode is None and self.use_cuda and frame_gpu is not None and getattr(frame_gpu, "is_cuda", False)) else 3
             self._color_tex_components = color_components
             self.color_tex = self.ctx.texture((w, h), color_components, dtype='f1')
             self.depth_tex = self.ctx.texture((w, h), 1, dtype='f4')
@@ -2952,7 +2955,6 @@ class StereoWindow:
             try:
                 if self._cuda_resource_color is None or self._pbo_color is None:
                     raise RuntimeError("Colour PBO not available")
-                torch.cuda.current_stream(self.cuda_device_id).synchronize()
                 if self._cuda_resource_color_image is not None:
                     try:
                         self._upload_color_cuda_image(frame_gpu)
@@ -2970,6 +2972,9 @@ class StereoWindow:
                         self._upload_color_cuda(frame_gpu)
                 else:
                     self._upload_color_cuda(frame_gpu)
+                    if not self._cuda_image_upload_logged:
+                        print("[Main] CUDA-GL PBO interop upload active")
+                        self._cuda_image_upload_logged = True
                 cuda_success = True
             except Exception as e:
                 print(f"[update_runtime_frame] CUDA-GL upload disabled: {e}")
