@@ -37,6 +37,9 @@ def test_stereo_presets_map_to_expected_modes():
     assert cinema.backend == "quality_4k"
     assert cinema.temporal is True
     assert cinema.auto_reset_temporal is True
+    assert cinema.ipd_mm == 64.0
+    assert cinema.stereo_scale < 1.0
+    assert cinema.convergence == 0.45
 
     assert game.backend == "quality_4k"
     assert game.hole_fill == "fast"
@@ -56,6 +59,9 @@ def test_preset_output_format_and_overrides():
     config = stereo_config_for_preset("cinema", output_format="full_sbs", overrides={"depth_strength": 2.25})
     assert config.output_format == "full_sbs"
     assert config.depth_strength == 2.25
+    physical = stereo_config_for_preset("cinema", overrides={"ipd_mm": 63.0, "stereo_scale": 0.6})
+    assert physical.ipd_mm == 63.0
+    assert physical.stereo_scale == 0.6
 
     with pytest.raises(ValueError, match="unknown config override"):
         stereo_config_for_preset("cinema", overrides={"not_a_field": 1})

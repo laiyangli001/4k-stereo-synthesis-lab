@@ -19,6 +19,8 @@ class OpenXRRenderConfig:
     convergence: float = 0.0
     ipd: float = 0.064
     max_shift_ratio: float = 0.05
+    ipd_mm: float | None = 64.0
+    stereo_scale: float = 0.5
     screen_roll: float = 0.0
     padding_mode: PaddingMode = "border"
 
@@ -269,6 +271,8 @@ def _shift_params(config: OpenXRRenderConfig) -> ShiftParams:
         convergence=config.convergence,
         ipd=config.ipd,
         max_shift_ratio=config.max_shift_ratio,
+        ipd_mm=config.ipd_mm,
+        stereo_scale=config.stereo_scale,
     )
 
 

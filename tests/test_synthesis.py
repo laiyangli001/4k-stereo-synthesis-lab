@@ -27,6 +27,18 @@ def make_inputs(width=64, height=32):
     return rgb, depth
 
 
+def test_shift_params_use_physical_ipd_with_stereo_scale():
+    depth = torch.ones(1, 1, 1, 1)
+    physical = compute_shift_px(depth, 1000, ShiftParams(depth_strength=1.0, convergence=0.0, ipd_mm=64.0, stereo_scale=0.5, max_shift_ratio=0.05))
+    legacy_equivalent = compute_shift_px(depth, 1000, ShiftParams(depth_strength=1.0, convergence=0.0, ipd=0.032, ipd_mm=None, max_shift_ratio=0.05))
+    assert torch.allclose(physical, legacy_equivalent)
+
+
+def test_convergence_zeroes_shift_at_screen_plane():
+    depth = torch.full((1, 1, 2, 2), 0.45)
+    shift = compute_shift_px(depth, 3840, ShiftParams(convergence=0.45, ipd_mm=64.0, stereo_scale=0.5))
+    assert torch.count_nonzero(shift) == 0
+
 def test_half_sbs_shape():
     rgb, depth = make_inputs()
     result = synthesize_stereo(rgb, depth, StereoConfig(backend="fast", output_format="half_sbs"))

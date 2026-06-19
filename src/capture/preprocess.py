@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 
 
-def capture_frame_to_rgb(frame_raw, target_height, *, device=None, use_torch=None, output="auto"):
+def capture_frame_to_rgb(frame_raw, target_resolution, *, device=None, use_torch=None, output="auto"):
     """
     Convert a raw capture frame to the RGB frame consumed by stereo_runtime.
 
@@ -14,8 +14,8 @@ def capture_frame_to_rgb(frame_raw, target_height, *, device=None, use_torch=Non
     if use_torch is None:
         use_torch = _is_torch_tensor(frame_raw)
     if use_torch or output == "tensor":
-        return _capture_frame_to_rgb_torch(frame_raw, target_height, device=device)
-    return _capture_frame_to_rgb_numpy(frame_raw, target_height)
+        return _capture_frame_to_rgb_torch(frame_raw, target_resolution, device=device)
+    return _capture_frame_to_rgb_numpy(frame_raw, target_resolution)
 
 
 def prepare_rgb_for_stereo_runtime(frame_rgb, *, device=None):
@@ -52,7 +52,7 @@ def _is_torch_tensor(value):
     return torch_type.startswith("torch") and hasattr(value, "permute")
 
 
-def _capture_frame_to_rgb_torch(frame_raw, target_height, *, device=None):
+def _capture_frame_to_rgb_torch(frame_raw, target_resolution, *, device=None):
     import torch
     import torch.nn.functional as F
 
@@ -66,12 +66,9 @@ def _capture_frame_to_rgb_torch(frame_raw, target_height, *, device=None):
     frame_rgb = frame_raw[..., [2, 1, 0]].permute(2, 0, 1).contiguous()
     _, h0, w0 = frame_rgb.shape
 
-    new_height = max(2, (int(target_height) // 2) * 2)
-    if new_height == h0:
+    new_height, new_width = _resolve_target_size(target_resolution, h0, w0)
+    if new_height == h0 and new_width == w0:
         return frame_rgb.to(device=device)
-
-    new_width = int(w0 * new_height / h0)
-    new_width = max(2, (new_width // 2) * 2)
 
     with torch.no_grad():
         frame_float = frame_rgb.to(device=device, dtype=torch.float32)
@@ -80,20 +77,18 @@ def _capture_frame_to_rgb_torch(frame_raw, target_height, *, device=None):
             size=(new_height, new_width),
             mode="bilinear",
             align_corners=False,
-            antialias=new_height < h0,
+            antialias=new_height < h0 or new_width < w0,
         ).squeeze(0)
 
 
-def _capture_frame_to_rgb_numpy(frame_raw, target_height):
+def _capture_frame_to_rgb_numpy(frame_raw, target_resolution):
     import cv2
 
     is_umat = isinstance(frame_raw, cv2.UMat)
     shape = frame_raw.get().shape if is_umat else frame_raw.shape
     h0, w0 = shape[:2]
 
-    new_height = max(2, (int(target_height) // 2) * 2)
-    new_width = int(w0 * new_height / h0)
-    new_width = max(2, (new_width // 2) * 2)
+    new_height, new_width = _resolve_target_size(target_resolution, h0, w0)
 
     if shape[2] == 4:
         frame_rgb = cv2.cvtColor(frame_raw, cv2.COLOR_BGRA2RGB)
@@ -102,11 +97,28 @@ def _capture_frame_to_rgb_numpy(frame_raw, target_height):
     else:
         raise ValueError(f"Unsupported capture frame channel count: {shape[2]}")
 
-    if new_height == h0:
+    if new_height == h0 and new_width == w0:
         return frame_rgb
 
-    interpolation = cv2.INTER_AREA if new_height < h0 else cv2.INTER_CUBIC
+    interpolation = cv2.INTER_AREA if new_height < h0 or new_width < w0 else cv2.INTER_CUBIC
     return cv2.resize(frame_rgb, (new_width, new_height), interpolation=interpolation)
+
+
+def _resolve_target_size(target_resolution, source_height, source_width):
+    if isinstance(target_resolution, (tuple, list)) and len(target_resolution) == 2:
+        target_width = _even_size(target_resolution[0])
+        target_height = _even_size(target_resolution[1])
+        return target_height, target_width
+
+    target_height = _even_size(target_resolution)
+    target_width = int(source_width * target_height / source_height)
+    target_width = _even_size(target_width)
+    return target_height, target_width
+
+
+def _even_size(value):
+    return max(2, (int(value) // 2) * 2)
+
 
 def prepare_rgb_for_depth_runtime(frame_rgb, *, device=None):
     """Compatibility alias for older host code."""

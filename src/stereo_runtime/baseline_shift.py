@@ -14,6 +14,8 @@ class ShiftParams:
     convergence: float = 0.0
     ipd: float = 0.064
     max_shift_ratio: float = 0.05
+    ipd_mm: float | None = 64.0
+    stereo_scale: float = 0.5
 
 
 _GRID_CACHE: dict[tuple[int, int, int, str, torch.dtype], torch.Tensor] = {}
@@ -46,10 +48,16 @@ def make_base_grid_components(height: int, width: int, device: torch.device, dty
     return xx, yy
 
 
+def _effective_ipd_m(params: ShiftParams) -> float:
+    if params.ipd_mm is None:
+        return max(0.0, float(params.ipd))
+    return max(0.0, float(params.ipd_mm)) / 1000.0 * max(0.0, float(params.stereo_scale))
+
+
 def compute_shift_px(depth: torch.Tensor, width: int, params: ShiftParams) -> torch.Tensor:
     depth = depth.clamp(0, 1)
     centered = depth - params.convergence
-    max_px = width * params.ipd * params.max_shift_ratio
+    max_px = width * _effective_ipd_m(params) * params.max_shift_ratio
     return -centered * params.depth_strength * max_px
 
 

@@ -296,13 +296,30 @@ Model List:
     - 1536
 Depth Model: Distill-Any-Depth-Base
 Depth Strength: 2.0
+Depth Quick: Standard
 Depth Resolution: 518
 Anti-aliasing: 2
+Depth Antialias Strength: 2.0
 Foreground Scale: 0.5
 IPD: 0.064
-Convergence: 0.0
+Convergence: 0.25
+Stereo Preset: auto
+Stereo Quality: quality_4k
+Max Shift Ratio: 0.05
+Temporal: true
+Temporal Strength: 0.75
+Auto Scene Reset: true
+Scene Reset Threshold: 0.22
+Reset Cooldown Frames: 3
+Edge Dilation: 2
+Edge Threshold: 0.04
+Cross Eyed: false
+Anaglyph Method: red_cyan
+Depth Safety: Auto
+Advanced Stereo: true
+Advanced Device Options: false
 Display Mode: Half-SBS
-FP16: true
+FP16: false
 torch.compile: true
 TensorRT: true
 Recompile TensorRT: false
@@ -310,13 +327,13 @@ CoreML: false
 Recompile CoreML: false
 Recompile OpenVINO: false
 Computing Device: 0
-Language: CN
+Language: EN
 Run Mode: Local Viewer
 XR Preview Window: false
 Local VSync: true
-Target FPS: 90
+Target FPS: 0
 Processing Resolution: Auto
-Upscaler: 'Off'
+Upscaler: Auto
 Upscaler Sharpness: 0.0
 Stream Protocol: HLS
 Streamer Port: 1122
@@ -331,5 +348,6 @@ Lossless Scaling Support: false
 Capture Tool: WindowsCaptureCUDA
 Fill 16:9: true
 Fix Viewer Aspect: false
-Stereo Output: 3
+Stereo Output: 2
 OpenVINO: false
+Synthetic View: quality_4k

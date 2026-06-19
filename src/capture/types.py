@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Protocol, TypeAlias
+
+
+OutputResolution: TypeAlias = int | tuple[int, int]
 
 
 @dataclass(frozen=True)
 class CaptureConfig:
-    output_resolution: int = 1080
+    output_resolution: OutputResolution = 1080
     fps: int = 60
     window_title: str | None = None
     capture_mode: str = "Monitor"
@@ -18,7 +21,7 @@ class CaptureConfig:
 @dataclass(frozen=True)
 class CapturedFrame:
     frame: Any
-    target_height: int
+    target_height: OutputResolution
     timestamp: float
 
 
@@ -27,7 +30,7 @@ class CaptureSource(Protocol):
     def stop(self) -> None: ...
 
 
-FrameCallback = Callable[[Any, int, float], None]
+FrameCallback = Callable[[Any, OutputResolution, float], None]
 ErrorCallback = Callable[[BaseException], None]
 StateCallback = Callable[[Any | None, Any | None], None]
 Predicate = Callable[[], bool]

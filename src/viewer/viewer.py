@@ -145,6 +145,12 @@ if "NVIDIA" in DEVICE_INFO:
                 raise RuntimeError(f"cudaGraphicsResourceGetMappedPointer failed: {res}")
             return ptr.value
 
+        def map_graphics_resource(self, resource, stream=None):
+            stream_ptr = ctypes.c_void_p(stream) if stream else None
+            res = self.lib.cudaGraphicsMapResources(1, ctypes.byref(resource), stream_ptr)
+            if res != 0:
+                raise RuntimeError(f"cudaGraphicsMapResources failed: {res}")
+
         def mapped_array(self, resource, array_index=0, mip_level=0):
             array = ctypes.c_void_p()
             res = self.lib.cudaGraphicsSubResourceGetMappedArray(
@@ -633,6 +639,17 @@ FRAGMENT_SHADER = """
         // Glow outside the screen edge only (sdf > 0 = outside the rounded rect) — MOVED to dedicated glow quad in XR view
 
         frag_color = color;
+    }
+"""
+
+RUNTIME_COPY_FRAGMENT = """
+    #version 330
+    in vec2 uv;
+    out vec4 frag_color;
+    uniform sampler2D tex_runtime;
+
+    void main() {
+        frag_color = texture(tex_runtime, vec2(uv.x, 1.0 - uv.y));
     }
 """
 
@@ -1484,6 +1501,8 @@ class StereoWindow:
         self.feather_width = 0.02       # 2% of view width
         self.display_mode = display_mode
         self._runtime_direct_output = False
+        self._runtime_output_format = None
+        self._runtime_output_size_logged = False
         self._texture_size = None
         self.fill_16_9 = fill_16_9
         self.frame_size = frame_size
@@ -1631,6 +1650,14 @@ class StereoWindow:
         self.quad_vao = self.ctx.vertex_array(
             self.prog, [(self.vbo, '2f 2f', 'in_position', 'in_uv')]
         )
+        self.runtime_copy_prog = self.ctx.program(
+            vertex_shader=VERTEX_SHADER,
+            fragment_shader=RUNTIME_COPY_FRAGMENT
+        )
+        self.runtime_copy_prog['tex_runtime'].value = 0
+        self.runtime_copy_vao = self.ctx.vertex_array(
+            self.runtime_copy_prog, [(self.vbo, '2f 2f', 'in_position', 'in_uv')]
+        )
         self.depth_prog = self.ctx.program(
             vertex_shader=VERTEX_SHADER,
             fragment_shader=DEPTH_FRAGMENT
@@ -1694,7 +1721,13 @@ class StereoWindow:
         self._pbo_color = None        # PBO ID for colour texture
         self._pbo_depth = None        # PBO ID for depth texture
         self._cuda_resource_color = None
+        self._cuda_resource_color_image = None
         self._cuda_resource_depth = None
+        self._cuda_image_upload_failed = False
+        self._cuda_image_upload_logged = False
+        self._cuda_rgba_upload = None
+        self._cuda_rgba_upload_size = None
+        self._color_tex_components = 3
         # Persistent page-locked (pinned) staging buffer for the colour upload.
         # Reused every frame to avoid per-frame device allocations and to make the
         # host->PBO copy fast (pinned memory has much higher H2D bandwidth).
@@ -1858,6 +1891,24 @@ class StereoWindow:
             glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0)
             self._cuda_resource_depth = self._cudart.register_buffer(self._pbo_depth)
 
+            # Direct CUDA -> OpenGL texture interop for already-composited runtime
+            # frames. This avoids the PBO + glTexSubImage2D hop on the local viewer
+            # fast path. PBO upload remains available as a compatibility fallback.
+            self._cuda_resource_color_image = None
+            self._cuda_rgba_upload = None
+            self._cuda_rgba_upload_size = None
+            if self._color_tex_components == 4 and not self._cuda_image_upload_failed and all(
+                hasattr(self._cudart, name)
+                for name in ("register_image", "mapped_array", "memcpy_2d_to_array")
+            ):
+                try:
+                    self._cuda_resource_color_image = self._cudart.register_image(
+                        self.color_tex.glo, GL_TEXTURE_2D
+                    )
+                except Exception as e:
+                    self._cuda_image_upload_failed = True
+                    print(f"[Main] CUDA-GL texture interop unavailable, using PBO fallback: {e}")
+
             # Persistent pinned staging buffer for the (overlay-composited) colour
             # frame — only on discrete GPUs, where pinned H2D bandwidth pays off.
             if not self._cuda_integrated:
@@ -1937,6 +1988,37 @@ class StereoWindow:
                         GL_RGB, GL_UNSIGNED_BYTE, None)
         glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0)
 
+    def _upload_color_cuda_image(self, rgb_gpu):
+        """Upload a GPU tensor into a CUDA-registered RGBA GL texture."""
+        h, w, channels = rgb_gpu.shape
+        resource = self._cuda_resource_color_image
+        if resource is None:
+            raise RuntimeError("CUDA-GL texture resource not available")
+        if self._color_tex_components != 4:
+            raise RuntimeError("CUDA texture image upload requires an RGBA GL texture")
+
+        if channels >= 4:
+            upload_gpu = rgb_gpu[..., :4].contiguous()
+        else:
+            size = (int(h), int(w))
+            if self._cuda_rgba_upload is None or self._cuda_rgba_upload_size != size:
+                self._cuda_rgba_upload = torch.empty((int(h), int(w), 4), device=rgb_gpu.device, dtype=torch.uint8)
+                self._cuda_rgba_upload_size = size
+            upload_gpu = self._cuda_rgba_upload
+            upload_gpu[..., :3].copy_(rgb_gpu[..., :3])
+            upload_gpu[..., 3].fill_(255)
+
+        self._cudart.map_graphics_resource(resource)
+        try:
+            dst_array = self._cudart.mapped_array(resource)
+            row_bytes = int(w) * 4
+            self._cudart.memcpy_2d_to_array(
+                dst_array, upload_gpu.data_ptr(), row_bytes, row_bytes, int(h)
+            )
+        finally:
+            self._cudart.unmap_resource(resource)
+
+
     def _upload_depth_cuda(self, depth_gpu):
         """Upload a GPU tensor (H,W) float32 to depth texture using PBO."""
         h, w = depth_gpu.shape
@@ -1963,6 +2045,11 @@ class StereoWindow:
             except Exception:
                 pass
             try:
+                if self._cuda_resource_color_image:
+                    self._cudart.unregister_resource(self._cuda_resource_color_image)
+            except Exception:
+                pass
+            try:
                 if self._cuda_resource_depth:
                     self._cudart.unregister_resource(self._cuda_resource_depth)
             except Exception:
@@ -1984,6 +2071,9 @@ class StereoWindow:
             self._pbo_color = None
             self._pbo_depth = None
             self._cuda_resource_color = None
+            self._cuda_resource_color_image = None
+            self._cuda_rgba_upload = None
+            self._cuda_rgba_upload_size = None
             self._cuda_resource_depth = None
     
     def _calculate_depth_map_viewport(self, win_w, win_h, tex_w, tex_h):
@@ -2659,6 +2749,7 @@ class StereoWindow:
                 self.color_tex.release()
             if self.depth_tex:
                 self.depth_tex.release()
+            self._color_tex_components = 3
             self.color_tex = self.ctx.texture((w, h), 3, dtype='f1')
             self.depth_tex = self.ctx.texture((w, h), 1, dtype='f4')
             self.prog['tex_color'].value = 0
@@ -2760,14 +2851,36 @@ class StereoWindow:
                 if not self.stream_mode == "RTMP" or self.lossless_scaling:
                     self.toggle_fullscreen()
 
+        if not self._runtime_output_size_logged:
+            fmt = self._runtime_output_format or "unknown"
+            try:
+                fb_w, fb_h = glfw.get_framebuffer_size(self.window)
+            except Exception:
+                fb_w, fb_h = 0, 0
+            print(
+                f"[StereoWindow] Runtime output {fmt} texture {w}x{h}; framebuffer {fb_w}x{fb_h}",
+                flush=True,
+            )
+            if fmt == "full_sbs" and fb_w and w > fb_w:
+                print(
+                    f"[StereoWindow] Full-SBS texture is wider than the local framebuffer "
+                    f"({w}x{h} -> {fb_w}x{fb_h}); local fullscreen display will downscale it.",
+                    flush=True,
+                )
+            self._runtime_output_size_logged = True
+
     def update_runtime_frame(self, runtime_result, current_fps=None, current_latency=None):
         """Display a stereo_runtime result that already contains the final output frame."""
+        self._runtime_output_format = (
+            getattr(runtime_result, "debug_info", {}) or {}
+        ).get("runtime_output_format")
         if current_fps is not None:
             self.actual_fps = current_fps
         if current_latency is not None:
             self.total_latency = current_latency * 1000
 
         frame = runtime_result.sbs
+        frame_gpu = None
         if hasattr(frame, "detach"):
             frame_gpu = frame.detach()
             if frame_gpu.ndim == 4:
@@ -2778,9 +2891,12 @@ class StereoWindow:
                 frame_gpu = frame_gpu[..., :3]
             else:
                 raise RuntimeError(f"Unsupported runtime output shape: {tuple(frame_gpu.shape)}")
+            frame_gpu = frame_gpu.contiguous()
             if frame_gpu.is_floating_point():
-                frame_gpu = frame_gpu.clamp(0.0, 1.0).mul(255.0)
-            rgb_np = frame_gpu.contiguous().to(torch.uint8).cpu().numpy()
+                frame_gpu.clamp_(0.0, 1.0).mul_(255.0)
+            frame_gpu = frame_gpu.to(torch.uint8)
+            h, w = int(frame_gpu.shape[0]), int(frame_gpu.shape[1])
+            rgb_np = None
         else:
             rgb_np = np.asarray(frame)
             if rgb_np.ndim == 4:
@@ -2794,11 +2910,13 @@ class StereoWindow:
             if np.issubdtype(rgb_np.dtype, np.floating):
                 rgb_np = np.clip(rgb_np, 0.0, 1.0) * 255.0
             rgb_np = rgb_np.astype("uint8", copy=False)
+            h, w = rgb_np.shape[:2]
 
-        h, w = rgb_np.shape[:2]
         if self.stream_mode is None:
             self._update_overlay_texture()
         elif self.display_mode != "Depth Map":
+            if rgb_np is None:
+                rgb_np = frame_gpu.cpu().numpy()
             rgb_np = self._add_overlay(rgb_np)
 
         if self._texture_size != (w, h):
@@ -2806,14 +2924,65 @@ class StereoWindow:
                 self.color_tex.release()
             if self.depth_tex:
                 self.depth_tex.release()
-            self.color_tex = self.ctx.texture((w, h), 3, dtype='f1')
+            color_components = 4 if (self.stream_mode is None and self.use_cuda and frame_gpu is not None and getattr(frame_gpu, "is_cuda", False)) else 3
+            self._color_tex_components = color_components
+            self.color_tex = self.ctx.texture((w, h), color_components, dtype='f1')
             self.depth_tex = self.ctx.texture((w, h), 1, dtype='f4')
             self.prog['tex_color'].value = 0
             self.prog['tex_depth'].value = 1
             self._texture_size = (w, h)
 
-        self.color_tex.write(rgb_np.tobytes())
-        self.depth_tex.write(np.zeros((h, w), dtype=np.float32).tobytes())
+            if self.use_cuda:
+                try:
+                    self.cleanup_cuda()
+                    self._init_cuda_pbos(w, h)
+                except Exception as e:
+                    print(f"[update_runtime_frame] Error initializing CUDA PBOs: {e}")
+                    self.use_cuda = False
+            self.depth_tex.write(np.zeros((h, w), dtype=np.float32).tobytes())
+
+        cuda_success = False
+        if (
+            self.stream_mode is None
+            and self.use_cuda
+            and self._cudart is not None
+            and frame_gpu is not None
+            and getattr(frame_gpu, "is_cuda", False)
+        ):
+            try:
+                if self._cuda_resource_color is None or self._pbo_color is None:
+                    raise RuntimeError("Colour PBO not available")
+                torch.cuda.current_stream(self.cuda_device_id).synchronize()
+                if self._cuda_resource_color_image is not None:
+                    try:
+                        self._upload_color_cuda_image(frame_gpu)
+                        if not self._cuda_image_upload_logged:
+                            print("[Main] CUDA-GL texture interop upload active")
+                            self._cuda_image_upload_logged = True
+                    except Exception as image_exc:
+                        print(f"[update_runtime_frame] CUDA-GL texture upload unavailable, using PBO fallback: {image_exc}")
+                        self._cuda_image_upload_failed = True
+                        try:
+                            self._cudart.unregister_resource(self._cuda_resource_color_image)
+                        except Exception:
+                            pass
+                        self._cuda_resource_color_image = None
+                        self._upload_color_cuda(frame_gpu)
+                else:
+                    self._upload_color_cuda(frame_gpu)
+                cuda_success = True
+            except Exception as e:
+                print(f"[update_runtime_frame] CUDA-GL upload disabled: {e}")
+                self.use_cuda = False
+                self.cleanup_cuda()
+
+        if not cuda_success:
+            if rgb_np is None:
+                rgb_np = frame_gpu.cpu().numpy()
+            if self._color_tex_components == 4 and rgb_np.shape[-1] == 3:
+                alpha = np.full((h, w, 1), 255, dtype=np.uint8)
+                rgb_np = np.concatenate((rgb_np, alpha), axis=-1)
+            self.color_tex.write(rgb_np.tobytes())
         self._runtime_direct_output = True
         if not self._has_real_frame:
             self._has_real_frame = True
@@ -2839,6 +3008,24 @@ class StereoWindow:
             if self.specify_display:
                 if not self.stream_mode == "RTMP" or self.lossless_scaling:
                     self.toggle_fullscreen()
+
+        if not self._runtime_output_size_logged:
+            fmt = self._runtime_output_format or "unknown"
+            try:
+                fb_w, fb_h = glfw.get_framebuffer_size(self.window)
+            except Exception:
+                fb_w, fb_h = 0, 0
+            print(
+                f"[StereoWindow] Runtime output {fmt} texture {w}x{h}; framebuffer {fb_w}x{fb_h}",
+                flush=True,
+            )
+            if fmt == "full_sbs" and fb_w and w > fb_w:
+                print(
+                    f"[StereoWindow] Full-SBS texture is wider than the local framebuffer "
+                    f"({w}x{h} -> {fb_w}x{fb_h}); local fullscreen display will downscale it.",
+                    flush=True,
+                )
+            self._runtime_output_size_logged = True
 
     def _compute_render_size(self, max_w, max_h, src_w, src_h):
         """Calculate render size maintaining aspect ratio"""
@@ -2914,7 +3101,10 @@ class StereoWindow:
             else:
                 glfw.set_window_aspect_ratio(self.window, glfw.DONT_CARE, glfw.DONT_CARE)
             self.ctx.clear(0.0, 0.0, 0.0)
-            if self.fill_16_9:
+            packed_output = self._runtime_output_format in (
+                "half_sbs", "full_sbs", "half_tab", "full_tab"
+            )
+            if self.fill_16_9 and not packed_output:
                 render_w, render_h = self._compute_render_size(win_w, win_h, tex_w, tex_h)
                 center_x, center_y = win_w / 2.0, win_h / 2.0
                 viewport = (int(center_x - render_w / 2), int(center_y - render_h / 2), render_w, render_h)
@@ -2922,13 +3112,7 @@ class StereoWindow:
                 viewport = (0, 0, win_w, win_h)
             self.ctx.viewport = viewport
             self.color_tex.use(location=0)
-            self.depth_tex.use(location=1)
-            self.prog['u_eye_offset'].value = 0.0
-            self.prog['u_depth_strength'].value = 0.0
-            self.prog['u_feather_enabled'].value = False
-            self.prog['u_feather_width'].value = self.feather_width
-            self.prog['u_viewport'].value = viewport
-            self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+            self.runtime_copy_vao.render(moderngl.TRIANGLE_STRIP)
             if not defer_overlay:
                 self._render_overlay()
             if self.stream_mode is None:

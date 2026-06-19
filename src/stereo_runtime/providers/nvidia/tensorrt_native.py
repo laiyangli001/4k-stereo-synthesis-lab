@@ -90,6 +90,18 @@ class NativeTensorRtEngine:
         if not self.output_names:
             raise RuntimeError("TensorRT engine has no output tensors")
 
+    @property
+    def input_shape(self) -> tuple[int, ...]:
+        input_name = self.input_names[0]
+        return tuple(int(dim) for dim in self.engine.get_tensor_shape(input_name))
+
+    @property
+    def input_image_size(self) -> tuple[int, int] | None:
+        shape = self.input_shape
+        if len(shape) != 4 or any(dim < 1 for dim in shape):
+            return None
+        return int(shape[-2]), int(shape[-1])
+
     @staticmethod
     def _torch_dtype_from_trt(dtype) -> torch.dtype:
         import tensorrt as trt
@@ -287,11 +299,13 @@ class DistillAnyDepthBaseNativeTensorRt:
 
     def load(self) -> NativeTensorRtEngine:
         if self._engine is not None:
+            self._preprocessor.fixed_input_size = self._engine.input_image_size
             return self._engine
         if self.build_engine or self.force_rebuild or not self.engine_path.exists():
             build_native_tensorrt_engine(self.onnx_path, self.engine_path, force=self.force_rebuild)
         trt_lib_dirs = ensure_tensorrt_dll_path()
         self._engine = NativeTensorRtEngine(self.engine_path, device=self.device, dtype=self.dtype)
+        self._preprocessor.fixed_input_size = self._engine.input_image_size
         self.info = replace(
             self.info,
             execution_provider="TensorRT native",
@@ -307,6 +321,7 @@ class DistillAnyDepthBaseNativeTensorRt:
             if torch.cuda.is_available():
                 torch.cuda.synchronize()
 
+        engine = self.load()
         sync()
         start = time.perf_counter()
         rgb = ensure_bchw(rgb, name="rgb")
@@ -315,7 +330,6 @@ class DistillAnyDepthBaseNativeTensorRt:
         sync()
         preprocess_ms = (time.perf_counter() - start) * 1000.0
 
-        engine = self.load()
         sync()
         start = time.perf_counter()
         predicted = engine.run_graph(tensor) if self.use_cuda_graph else engine(tensor)

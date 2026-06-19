@@ -1,4 +1,5 @@
 import platform
+import re
 
 
 OS_NAME = platform.system()
@@ -34,26 +35,78 @@ def get_monitor_size(monitor_index=None):
 
 
 def compute_output_resolution(setting_value, display_mode, input_monitor_index, stereo_monitor_index):
-    """Compute the source processing height used before depth inference."""
+    """Compute the source processing size used before depth inference.
+
+    Integer values keep the legacy meaning of source eye height. WxH values and
+    Auto are treated as the final packed display canvas, so Full-SBS uses half
+    of the target width per eye and Full-TAB uses half of the target height.
+    """
+    explicit_size = _parse_resolution_size(setting_value)
+    if explicit_size is not None:
+        out_w, out_h = explicit_size
+        return _packed_source_size(out_w, out_h, display_mode)
+
     try:
         if isinstance(setting_value, str):
             value = setting_value.strip()
             if value and value.lower() != "auto":
                 parsed = int(value)
                 if parsed > 0:
-                    return parsed
+                    return _even_height(parsed)
         elif setting_value:
             parsed = int(setting_value)
             if parsed > 0:
-                return parsed
+                return _even_height(parsed)
     except (TypeError, ValueError):
         pass
 
     monitor_index = stereo_monitor_index or input_monitor_index
-    _, out_h = get_monitor_size(monitor_index)
-    if display_mode == "Full-TAB":
-        out_h = max(1, out_h // 2)
-    return max(2, (int(out_h) // 2) * 2)
+    out_w, out_h = get_monitor_size(monitor_index)
+    return _packed_source_size(out_w, out_h, display_mode)
+
+
+def _parse_resolution_size(setting_value):
+    if isinstance(setting_value, (tuple, list)) and len(setting_value) == 2:
+        try:
+            width = int(setting_value[0])
+            height = int(setting_value[1])
+            if width > 0 and height > 0:
+                return width, height
+        except (TypeError, ValueError):
+            return None
+
+    if not isinstance(setting_value, str):
+        return None
+
+    value = setting_value.strip().lower()
+    match = re.fullmatch(r"(\d+)\s*[x*×]\s*(\d+)", value)
+    if not match:
+        return None
+
+    width = int(match.group(1))
+    height = int(match.group(2))
+    if width <= 0 or height <= 0:
+        return None
+    return width, height
+
+
+def _packed_source_size(output_width, output_height, display_mode):
+    mode = str(display_mode or "").strip().lower().replace("-", "_").replace(" ", "_")
+    width = int(output_width)
+    height = int(output_height)
+    if mode == "full_sbs":
+        width = max(1, width // 2)
+    elif mode == "full_tab":
+        height = max(1, height // 2)
+    return _even_width(width), _even_height(height)
+
+
+def _even_width(value):
+    return max(2, (int(value) // 2) * 2)
+
+
+def _even_height(value):
+    return max(2, (int(value) // 2) * 2)
 
 
 def _get_device_name_from_mss_monitor(monitor_index):

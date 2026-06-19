@@ -32,7 +32,7 @@ class RuntimeExports:
     display_mode: str
     stereo_display_index: int | None
     stereo_display_selection: bool
-    output_resolution: tuple[int, int]
+    output_resolution: int | tuple[int, int]
     show_fps: bool
     depth_strength: float
     ipd: float

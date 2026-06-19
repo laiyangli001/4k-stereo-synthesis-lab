@@ -253,3 +253,50 @@ def test_distill_preprocessor_matches_reference():
     actual = DistillPreprocessor(device=device, dtype=dtype)(rgb)
 
     assert torch.equal(actual, expected)
+
+def test_distill_preprocessor_can_use_fixed_tensorrt_input_size():
+    rgb = torch.zeros(1, 3, 2160, 1920)
+    preprocessor = DistillPreprocessor(
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+        fixed_input_size=(294, 518),
+    )
+
+    tensor = preprocessor(rgb)
+
+    assert tensor.shape == (1, 3, 294, 518)
+    assert preprocessor.input_size(2160, 1920) == (294, 518)
+
+
+def test_native_tensorrt_provider_uses_engine_static_input_size(monkeypatch, tmp_path):
+    import stereo_runtime.providers.nvidia.tensorrt_native as native_module
+
+    captured = {}
+
+    class FakeEngine:
+        input_image_size = (294, 518)
+
+        def __call__(self, tensor):
+            captured["tensor_shape"] = tuple(tensor.shape)
+            return torch.zeros(1, 1, 294, 518, dtype=torch.float32)
+
+    class FakePreprocessor:
+        fixed_input_size = None
+
+        def __call__(self, rgb):
+            assert self.fixed_input_size == (294, 518)
+            return torch.zeros(1, 3, *self.fixed_input_size, dtype=torch.float32)
+
+    provider = native_module.NativeTensorRtDepthProvider(
+        device="cuda",
+        cache_dir=tmp_path,
+        engine_path=tmp_path / "model.trt",
+    )
+    provider._engine = FakeEngine()
+    provider._preprocessor = FakePreprocessor()
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+
+    result = provider.predict_profile(torch.zeros(1, 3, 2160, 1920))
+
+    assert captured["tensor_shape"] == (1, 3, 294, 518)
+    assert result.depth.shape == (1, 1, 2160, 1920)

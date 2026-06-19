@@ -33,6 +33,8 @@ class StereoConfig:
     convergence: float = 0.0
     ipd: float = 0.064
     max_shift_ratio: float = 0.05
+    ipd_mm: float | None = 64.0
+    stereo_scale: float = 0.5
     temporal_strength: float = 0.85
     auto_reset_temporal: bool = False
     scene_reset_threshold: float = 0.22
@@ -187,6 +189,8 @@ def synthesize_stereo(
             convergence=config.convergence,
             ipd=config.ipd,
             max_shift_ratio=config.max_shift_ratio,
+            ipd_mm=config.ipd_mm,
+            stereo_scale=config.stereo_scale,
         )
         depth = postprocess_depth(
             depth,

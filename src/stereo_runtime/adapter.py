@@ -51,6 +51,8 @@ class StereoRuntimeConfig:
     convergence: float = 0.0
     ipd: float = 0.064
     max_shift_ratio: float = 0.05
+    ipd_mm: float | None = 64.0
+    stereo_scale: float = 0.5
     layers: int = 2
     occlusion: bool = True
     symmetric: bool = True
@@ -173,6 +175,7 @@ def runtime_config_from_d2s_settings(
     mode = _normalize_runtime_mode(mode_source)
     output_format = _normalize_output_format(settings.get("Display Mode", "half_sbs"))
     stereo_quality = _normalize_stereo_quality(settings.get("Stereo Quality", settings.get("Synthetic View", "fast" if depth_only else "quality_4k")))
+    ipd_mm = _normalize_ipd_mm(settings)
 
     return StereoRuntimeConfig(
         model_id=str(model_name),
@@ -187,9 +190,11 @@ def runtime_config_from_d2s_settings(
         build_trt_engine=bool(settings.get("TensorRT", False)),
         force_rebuild_trt=bool(settings.get("Recompile TensorRT", False)),
         depth_strength=float(settings.get("Depth Strength", 2.0)),
-        convergence=float(settings.get("Convergence", 0.0)),
-        ipd=float(settings.get("IPD", 0.064)),
+        convergence=float(settings.get("Convergence", 0.45)),
+        ipd=ipd_mm / 1000.0,
         max_shift_ratio=float(settings.get("Max Shift Ratio", 0.05)),
+        ipd_mm=ipd_mm,
+        stereo_scale=float(settings.get("Stereo Scale", settings.get("Stereo Strength Scale", 0.5))),
         temporal=_to_bool(settings.get("Temporal", True)),
         temporal_strength=float(settings.get("Temporal Strength", 0.75)),
         auto_reset_temporal=_to_bool(settings.get("Auto Scene Reset", settings.get("Auto Reset Temporal", True))),
@@ -206,6 +211,14 @@ def runtime_config_from_d2s_settings(
         depth_safety=_normalize_optional_bool(settings.get("Depth Safety")),
     )
 
+
+def _normalize_ipd_mm(settings: dict[str, Any]) -> float:
+    raw = settings.get("IPD mm", settings.get("IPD (mm)", settings.get("IPD", 0.064)))
+    value = float(raw)
+    # Legacy Desktop2Stereo settings stored IPD in meters, e.g. 0.064.
+    if value <= 1.0:
+        value *= 1000.0
+    return max(1.0, value)
 
 def _normalize_depth_backend(value: Any) -> DepthBackend:
     key = str(value).strip().lower().replace("-", "_")
@@ -252,14 +265,29 @@ def _normalize_stereo_quality(value: Any) -> StereoQuality:
 
 
 def _normalize_output_format(value: Any) -> OutputFormat:
-    key = str(value).strip().lower().replace("-", "_")
+    key = "_".join(
+        part
+        for part in str(value).strip().lower()
+        .replace("-", "_")
+        .replace("/", "_")
+        .replace("+", "_")
+        .split("_")
+        if part
+    )
+    key = "_".join(part for part in key.replace(" ", "_").split("_") if part)
     mapping: dict[str, OutputFormat] = {
         "half_sbs": "half_sbs",
+        "half_side_by_side": "half_sbs",
         "sbs": "half_sbs",
+        "side_by_side": "half_sbs",
         "full_sbs": "full_sbs",
+        "full_side_by_side": "full_sbs",
         "half_tab": "half_tab",
+        "half_top_bottom": "half_tab",
         "tab": "half_tab",
+        "top_bottom": "half_tab",
         "full_tab": "full_tab",
+        "full_top_bottom": "full_tab",
         "mono": "mono",
         "anaglyph": "anaglyph",
         "interleaved": "interleaved",
@@ -346,6 +374,8 @@ def stereo_config_from_runtime(config: StereoRuntimeConfig) -> "StereoConfig":
             "convergence": config.convergence,
             "ipd": config.ipd,
             "max_shift_ratio": config.max_shift_ratio,
+            "ipd_mm": config.ipd_mm,
+            "stereo_scale": config.stereo_scale,
             "temporal_strength": config.temporal_strength,
             "auto_reset_temporal": config.auto_reset_temporal,
             "scene_reset_threshold": config.scene_reset_threshold,

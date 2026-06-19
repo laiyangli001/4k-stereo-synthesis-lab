@@ -53,14 +53,23 @@ def _preprocess_distill_rgb(rgb: torch.Tensor, *, device: torch.device, dtype: t
 
 
 class DistillPreprocessor:
-    def __init__(self, *, device: torch.device, dtype: torch.dtype) -> None:
+    def __init__(
+        self,
+        *,
+        device: torch.device,
+        dtype: torch.dtype,
+        fixed_input_size: tuple[int, int] | None = None,
+    ) -> None:
         self.device = device
         self.dtype = dtype
+        self.fixed_input_size = fixed_input_size
         self._shape_cache: dict[tuple[int, int], tuple[int, int]] = {}
         self._mean = torch.tensor([0.485, 0.456, 0.406], device=device, dtype=dtype).view(1, 3, 1, 1)
         self._std = torch.tensor([0.229, 0.224, 0.225], device=device, dtype=dtype).view(1, 3, 1, 1)
 
     def input_size(self, height: int, width: int) -> tuple[int, int]:
+        if self.fixed_input_size is not None:
+            return self.fixed_input_size
         key = (height, width)
         cached = self._shape_cache.get(key)
         if cached is not None:

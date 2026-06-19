@@ -320,6 +320,8 @@ def _current_openxr_render_config():
         state = dict(openxr_runtime_config_state)
     return OpenXRRenderConfig(
         ipd=state["ipd"],
+        ipd_mm=stereo_runtime.stereo_config.ipd_mm,
+        stereo_scale=stereo_runtime.stereo_config.stereo_scale,
         depth_strength=0.1 * state["depth_ratio"],
         convergence=state["convergence"],
         max_shift_ratio=stereo_runtime.stereo_config.max_shift_ratio,
@@ -333,6 +335,8 @@ def _runtime_stereo_overrides():
         "depth_strength": config.depth_strength,
         "convergence": config.convergence,
         "ipd": config.ipd,
+        "ipd_mm": config.ipd_mm,
+        "stereo_scale": config.stereo_scale,
         "max_shift_ratio": config.max_shift_ratio,
         "foreground_scale": config.foreground_scale,
         "depth_antialias_strength": config.depth_antialias_strength,

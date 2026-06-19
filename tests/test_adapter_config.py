@@ -128,6 +128,8 @@ def test_runtime_config_from_d2s_settings_maps_legacy_model_and_trt_flags():
     assert config.depth_strength == 1.8
     assert config.convergence == 0.1
     assert config.ipd == 0.07
+    assert config.ipd_mm == 70.0
+    assert config.stereo_scale == 0.5
 
 
 def test_runtime_config_from_d2s_settings_uses_dtype_auto_for_gui_fp16_flag():
@@ -154,6 +156,8 @@ def test_runtime_config_from_d2s_settings_maps_realtime_stereo_options():
             "Stereo Quality": "hq_4k",
             "Display Mode": "Anaglyph",
             "Max Shift Ratio": 0.08,
+            "IPD mm": 63,
+            "Stereo Scale": 0.6,
             "Temporal": False,
             "Temporal Strength": 0.4,
             "Auto Scene Reset": False,
@@ -176,6 +180,10 @@ def test_runtime_config_from_d2s_settings_maps_realtime_stereo_options():
     assert stereo.backend == "hq_4k"
     assert stereo.output_format == "anaglyph"
     assert stereo.max_shift_ratio == 0.08
+    assert stereo.ipd == 0.063
+    assert stereo.ipd_mm == 63.0
+    assert stereo.stereo_scale == 0.6
+    assert stereo.convergence == 0.45
     assert stereo.temporal is False
     assert stereo.temporal_strength == 0.4
     assert stereo.auto_reset_temporal is False
@@ -188,3 +196,11 @@ def test_runtime_config_from_d2s_settings_maps_realtime_stereo_options():
     assert stereo.cross_eyed is True
     assert stereo.anaglyph_method == "green_magenta"
     assert config.depth_safety is True
+
+
+def test_runtime_config_accepts_full_sbs_display_name_variants():
+    base = {"Depth Model": "Distill-Any-Depth-Base"}
+    for value in ("Full-SBS", "Full SBS", "full side by side", "Full/Side-by-Side"):
+        config = runtime_config_from_d2s_settings({**base, "Display Mode": value})
+        assert config.output_format == "full_sbs"
+        assert stereo_config_from_runtime(config).output_format == "full_sbs"
