@@ -40,33 +40,47 @@ import subprocess
 import time
 import asyncio
 import ctypes
-import re
-import json
 import flet as ft
-import yaml
 from utils import (
     VERSION, OS_NAME, ALL_MODELS, DEFAULT_PORT, STEREO_MIX_NAMES,
     DISABLE_TRT_KEYWORDS, DISABLE_COREML_KEYWORDS, DISABLE_OPENVINO_KEYWORDS,
     get_local_ip, shutdown_event, read_yaml
 )
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DIAG_LOG = os.path.join(BASE_DIR, "logs", "diag.log")
-
-STEREO_QUALITY_DISPLAY = {
-    "en": {
-        "fast": "Lowest",
-        "fast_plus": "Medium",
-        "quality_4k": "High",
-        "hq_4k": "Highest",
-    },
-    "zh": {
-        "fast": "最低",
-        "fast_plus": "中等",
-        "quality_4k": "较高",
-        "hq_4k": "最高",
-    },
-}
-
+from . import devices as devices_module
+from .capture_sources import (
+    PRIMARY_MONITOR_SUFFIX,
+    get_capture_tool_options,
+    get_default_windows_capture_tool,
+    get_monitor_index_for_point,
+    get_primary_monitor_index,
+    list_windows,
+)
+from .config import (
+    DEFAULTS,
+    DEFAULT_FAMILIES,
+    DEFAULT_MODEL_LIST,
+    FAMILY_SIZE_TO_MODEL,
+    FAMILY_TO_SIZES,
+    get_environment_model_options,
+    parse_model_name,
+    save_yaml,
+)
+from .controls import (
+    FONT_SIZE,
+    SCALE,
+    CompactDropdown,
+    CompactTextField,
+    S,
+    set_label_align_width,
+)
+from .paths import BASE_DIR, DIAG_LOG
+from .localization import (
+    UI_MESSAGES,
+    display_to_stereo_quality,
+    is_supported_locale,
+    stereo_quality_options,
+    stereo_quality_to_display,
+)
 _NOISY_CONSOLE_PREFIXES = (
     "[NativeUtil] sogou_native_util_pc loaded successfully",
     "[warmup] same version",
@@ -115,48 +129,6 @@ def _setup_console_logging():
     sys.stdout = _TeeStream(sys.stdout, "out")
     sys.stderr = _TeeStream(sys.stderr, "err")
 
-# Known model size suffixes, longest-first for matching priority
-_MODEL_SIZES = ["Small", "SmallPlus", "Base", "Large", "Giant"]
-_SIZE_ORDER = {s: i for i, s in enumerate(_MODEL_SIZES)}
-
-def parse_model_name(name):
-    """Split model name into (family, size). DepthPro treated as Large."""
-    parts = name.split("-")
-    size_parts = []
-    i = len(parts) - 1
-    while i >= 0:
-        matched = None
-        for sz in _MODEL_SIZES:
-            if parts[i].upper() == sz.upper():
-                matched = sz
-                break
-        if matched:
-            size_parts.insert(0, matched)
-            i -= 1
-        else:
-            break
-    if size_parts:
-        family = "-".join(parts[:i + 1])
-        size = "-".join(size_parts)
-        return (family, size)
-    return (name, "")
-
-def build_family_size_map(model_list):
-    """Returns (families_ordered, family_to_sizes) from list of full model names."""
-    families = []
-    family_to_sizes = {}
-    for name in model_list:
-        family, size = parse_model_name(name)
-        if family not in family_to_sizes:
-            family_to_sizes[family] = []
-            families.append(family)
-        if size and size not in family_to_sizes[family]:
-            family_to_sizes[family].append(size)
-    for family in family_to_sizes:
-        family_to_sizes[family].sort(key=lambda s: _SIZE_ORDER.get(s, 99))
-    return families, family_to_sizes
-
-
 def _set_console_quick_edit(enabled: bool):
     """Toggle Windows console Quick Edit mode when a real console is attached."""
     try:
@@ -185,902 +157,10 @@ _set_console_quick_edit(False)
 # ─────────────────────────────────────────────
 # UI Text Dictionary (EN / CN)
 # ─────────────────────────────────────────────
-UI_TEXTS = {
-    "EN": {
-        "Monitor": "Input Monitor",
-        "Window": "Input Window",
-        "Refresh": "Refresh",
-        "Show FPS": "Show FPS",
-        "IPD (m):": "IPD (mm):",
-        "Stereo Scale:": "Stereo Scale:",
-        "Convergence:": "Convergence:",
-        "Display Mode:": "Display Mode:",
-        "Depth Model:": "Depth Model:",
-        "Depth Strength:": "Depth Strength:",
-        "Depth Quick:": "Depth Quick:",
-        "Soft": "Soft",
-        "Standard": "Standard",
-        "Enhanced": "Enhanced",
-        "Stereo Mode:": "Stereo Mode:",
-        "Cinema": "Cinema",
-        "Game / Low Latency": "Game / Low Latency",
-        "Still Image / HQ": "Still Image / HQ",
-        "Debug / Export": "Debug / Export",
-        "Synthetic View:": "Synthetic View:",
-        "Max Shift Ratio:": "Shift Ratio:",
-        "Temporal Strength:": "Temporal Strength:",
-        "Temporal": "Temporal",
-        "Scene Threshold:": "Scene Threshold:",
-        "Reset Cooldown:": "Reset Cooldown:",
-        "Auto Scene Reset": "Auto Scene Reset",
-        "Edge Dilation:": "Edge Dilation:",
-        "Edge Threshold:": "Edge Threshold:",
-        "On": "On",
-        "Anaglyph:": "Anaglyph:",
-        "Cross Eyed": "Cross Eyed",
-        "Advanced Stereo": "Advanced Stereo",
-        "Advanced Device Options": "Advanced Options",
-        "Depth Resolution:": "Depth Resolution:",
-        "Anti-aliasing:": "Anti-aliasing:",
-        "Foreground Scale:": "Foreground Scale:",
-        "FP16": "FP16",
-        "Inference Acceleration:": "Acceleration:",
-        "Recompile TensorRT": "Recompile TensorRT",
-        "Recompile CoreML": "Recompile CoreML",
-        "Recompile OpenVINO": "Recompile OpenVINO",
-        "Stop": "Stop",
-        "Computing Device:": "Computing Device:",
-        "Reset": "Reset",
-        "Run": "Run",
-        "Set Language:": "Set Language:",
-        "Error": "Error",
-        "Warning": "Warning",
-        "Saved": "Run Desktop2Stereo",
-        "PyYAML not installed, cannot save YAML file.": "PyYAML not installed, cannot save YAML file.",
-        "Settings saved to settings.yaml": "Settings saved to settings.yaml",
-        "Failed to save settings.yaml:": "Failed to save settings.yaml:",
-        "Could not retrieve monitor list.\nFalling back to indexes 1 and 2.": "Could not retrieve monitor list.\nFalling back to indexes 1 and 2.",
-        "Loaded settings.yaml at startup": "Loaded settings.yaml at startup",
-        "Running": "Running... (Hold ESC 3s to Stop)",
-        "Stopped": "Stopped.",
-        "Countdown": "Settings saved to settings.yaml, starting...",
-        "A thread already running!": "A thread already running!",
-        "No windows found": "No windows found",
-        "Selected input window:": "Selected input window:",
-        "Selected input monitor:": "Selected input monitor:",
-        "Run Mode:": "Run Mode:",
-        "Local Viewer": "Local Viewer",
-        "Legacy Streamer": "Legacy Streamer",
-        "MJPEG Streamer": "MJPEG Streamer",
-        "RTMP Streamer": "RTMP Streamer",
-        "Stream Protocol:": "Stream Protocol:",
-        "Stream Key": "Stream Key:",
-        "Stereo Mix": "Stereo Mix:",
-        "CRF": "CRF:",
-        "Audio Delay": "Audio Delay (s):",
-        "Lossless Scaling Support": "LSFG",
-        "3D Monitor": "3D Monitor",
-        "OpenXR Link": "OpenXR Link",
-        "XR Preview Window": "XR Preview Window",
-        "Local VSync": "Local VSync",
-        "Capture FPS:": "Capture FPS:",
-        "Upscaler:": "Upscaler:",
-        "Upscaler Sharpness:": "Sharpness:",
-        "Auto": "Auto",
-        "Off": "Off",
-        "Streamer Port:": "Streamer Port:",
-        "Streamer URL": "Streamer URL:",
-       "Preview":"Preview",
-        "Stream Quality:": "Stream Quality:",
-        "Host": "Host:",
-        "Invalid port number (1-65535)": "Invalid port number (must be between 1-65535)",
-        "Invalid port number": "Port must be a number",
-        "Please select a window before running in Window capture mode": "Please select a window before running in Window capture mode",
-        "The selected window no longer exists. Please refresh and select a valid window.": "The selected window no longer exists. Please refresh and select a valid window.",
-        "Failed to stop process on exit:": "Failed to stop process on exit:",
-        "Failed to stop process:": "Failed to stop process:",
-        "Failed to run process:": "Failed to run process:",
-        "Failed to load settings.yaml:": "Failed to load settings.yaml:",
-        "Opening URL in browser": "Opening URL in browser",
-        "Controller:": "Controller:",
-        "Environment:": "Room:",
-        "Capture Tool:": "Capture Tool:",
-        "Fill 16:9": "16:9",
-        "Fix Viewer Aspect": "Fix Aspect",
-        "Stereo Output:": "Stereo Output:",
-        "Theme:": "Theme:",
-        "DesktopDuplication selected: Window capture mode disabled.": "DesktopDuplication selected: Window capture mode disabled.",
-        "torch.compile": "torch.compile",
-        "TensorRT": "TensorRT",
-        "CoreML": "CoreML",
-        "OpenVINO": "OpenVINO",
-        "tooltip_window": "Select a window to capture",
-        "tooltip_depth_model": "Depth estimation model",
-        "tooltip_depth_res": "Depth map resolution",
-        "tooltip_convergence": "Stereo convergence",
-        "tooltip_depth_strength": "Depth effect intensity",
-        "tooltip_depth_quick": "Quick fixed depth presets for everyday use: Soft, Standard, or Enhanced",
-        "tooltip_stereo_preset": "Auto switches scenes by weighted signals; manual presets force Cinema, Game, Still Image, or Debug behavior",
-        "tooltip_stereo_quality": "Stereo synthesis backend: fast is lowest latency, quality_4k is balanced, hq_4k favors still-image quality",
-        "tooltip_max_shift": "Maximum horizontal shift as a ratio of image width; higher values increase stereo separation",
-        "tooltip_temporal_strength": "Temporal smoothing strength for stereo output; higher values reduce flicker but can add lag",
-        "tooltip_temporal": "Enable temporal stabilization between frames",
-        "tooltip_scene_reset": "Scene-change threshold for resetting temporal history; lower values reset more often",
-        "tooltip_reset_cooldown": "Minimum frame cooldown between automatic temporal resets",
-        "tooltip_auto_scene_reset": "Automatically reset temporal state when a scene cut is detected",
-        "tooltip_edge_dilation": "Expands detected depth edges for occlusion handling",
-        "tooltip_edge_threshold": "Depth edge sensitivity; lower values detect more edges",
-        "tooltip_anaglyph": "Color pair used when Display Mode is Anaglyph",
-        "tooltip_cross_eyed": "Swap left and right eyes for cross-eyed viewing",
-        "tooltip_advanced_stereo": "Show expert stereo/runtime parameters. Leave off for the simplified everyday UI.",
-        "tooltip_advanced_device_options": "Show capture frame pacing and image enhancement controls.",
-        "tooltip_foreground_scale": "Foreground object scale",
-        "tooltip_antialiasing": "Anti-aliasing level",
-        "tooltip_ipd": "Interpupillary distance (mm)",
-        "tooltip_stereo_scale": "Stereo strength multiplier applied to the physical IPD; lower values reduce parallax, higher values increase depth",
-        "tooltip_device": "Inference device",
-        "tooltip_capture_tool": "Capture backend",
-        "tooltip_run_mode": "Output mode",
-        "tooltip_display_mode": "Stereo display format",
-        "tooltip_local_vsync": "Synchronize the local viewer to the display refresh rate",
-        "tooltip_target_fps": "Override internal frame pacing. Auto uses the detected display refresh rate.",
-        "tooltip_ctrl_model": "Controller model",
-        "tooltip_env_model": "Room environment model",
-        "tooltip_capture_mode": "Source: monitor or window",
-        "tooltip_monitor": "Input monitor",
-        "tooltip_stereo_monitor": "Stereo output monitor",
-        "tooltip_lang": "Interface language",
-        "tooltip_theme": "Color theme",
-        "tooltip_stream_quality": "Encode quality",
-        "tooltip_stream_proto": "Streaming protocol",
-        "tooltip_audio": "Stereo mix device",
-        "tooltip_stream_port": "Server port",
-        "tooltip_stream_key": "Stream key",
-        "tooltip_crf": "Quality factor (0-51)",
-        "tooltip_audio_delay": "Audio offset (s)",
-        "err_crf": "CRF must be between 0-51",
-        "err_audio_delay": "Audio Delay must be between -10 and 10",
-        "err_stream_key": "Stream Key can only contain letters, digits, underscore, hyphen, max 64 chars",
-        "err_start_failed": "Start failed: {}",
-        "esc_stop": "Hold ESC 3s — stopping!",
-        "exited_with_code": "Exited with code {}",
-        "failed_save_yaml": "Failed to save YAML: {}",
-        "stereo_parameters_saved": "Stereo parameters saved",
-        "invalid_url_scheme": "Invalid URL scheme: {}",
-        "error_preview": "Failed to preview: {}",
-        "url_copied": "URL copied to clipboard",
-    },
-    "CN": {
-        "Monitor": "输入屏幕",
-        "Window": "输入窗口",
-        "Refresh": "刷新",
-        "Show FPS": "显示帧率",
-        "IPD (m):": "瞳距 (mm):",
-        "Stereo Scale:": "立体缩放:",
-        "Convergence:": "会聚点:",
-        "Display Mode:": "显示模式:",
-        "Depth Model:": "深度模型:",
-        "Depth Strength:": "深度强度:",
-        "Depth Quick:": "深度选项:",
-        "Soft": "柔和",
-        "Standard": "标准",
-        "Enhanced": "增强",
-        "Stereo Mode:": "立体模式:",
-        "Cinema": "电影 / 偏均衡",
-        "Game / Low Latency": "游戏 / 低延迟",
-        "Still Image / HQ": "图片 / 高质量",
-        "Debug / Export": "调试 / 导出",
-        "Synthetic View:": "立体质量:",
-        "Max Shift Ratio:": "位移比例:",
-        "Temporal Strength:": "时域强度:",
-        "Temporal": "时域稳定",
-        "Scene Threshold:": "场景阈值:",
-        "Reset Cooldown:": "重置冷却:",
-        "Auto Scene Reset": "自动场景重置",
-        "Edge Dilation:": "边缘扩张:",
-        "Edge Threshold:": "边缘阈值:",
-        "On": "开启",
-        "Anaglyph:": "红蓝模式:",
-        "Cross Eyed": "交叉眼",
-        "Advanced Stereo": "显示高级立体参数",
-        "Advanced Device Options": "高级选项",
-        "Depth Resolution:": "深度分辨率:",
-        "Anti-aliasing:": "抗锯齿:",
-        "Foreground Scale:": "前景缩放:",
-        "FP16": "FP16",
-        "Inference Acceleration:": "推理加速:",
-        "Recompile TensorRT": "重译TensorRT",
-        "Recompile CoreML": "重译CoreML",
-        "Recompile OpenVINO": "重译OpenVINO",
-        "Stop": "停止",
-        "Computing Device:": "计算设备:",
-        "Reset": "重置",
-        "Run": "运行",
-        "Set Language:": "设置语言:",
-        "Error": "错误",
-        "Warning": "警告",
-        "Saved": "运行Desktop2Stereo",
-        "PyYAML not installed, cannot save YAML file.": "未安装PyYAML，无法保存YAML文件。",
-        "Settings saved to settings.yaml": "设置已保存到 settings.yaml",
-        "Failed to save settings.yaml:": "保存 settings.yaml 失败：",
-        "Could not retrieve monitor list.\nFalling back to indexes 1 and 2.": "无法获取显示器列表。\n回退到索引1和2。",
-        "Loaded settings.yaml at startup": "启动时已加载 settings.yaml",
-        "Running": "运行中...（长按ESC 3秒停止）",
-        "Stopped": "已停止。",
-        "Countdown": "设置已保存到 settings.yaml，启动中...",
-        "A thread already running!": "一个进程已经运行！",
-        "No windows found": "未找到窗口",
-        "Selected input window:": "已选择输入窗口:",
-        "Selected input monitor:": "已选择输入显示器 :",
-        "Run Mode:": "运行模式:",
-        "Local Viewer": "本地查看",
-        "Legacy Streamer": "旧网络推流",
-        "MJPEG Streamer": "MJPEG推流",
-        "RTMP Streamer": "RTMP推流",
-        "Stream Protocol:": "流协议:",
-        "Stream Key": "推流密钥:",
-        "Stereo Mix": "混音设备:",
-        "CRF": "恒定质量:",
-        "Audio Delay": "音频延迟 (秒):",
-        "system": "系统",
-        "blue": "蓝色",
-        "green": "绿色",
-        "red": "红色",
-        "purple": "紫色",
-        "orange": "橙色",
-        "teal": "青色",
-        "pink": "粉色",
-        "grey": "灰色",
-        "Lossless Scaling Support": "小黄鸭",
-        "3D Monitor": "3D显示器",
-        "OpenXR Link": "OpenXR串流",
-        "Local VSync": "本地垂直同步",
-        "Capture FPS:": "捕获帧率:",
-        "Upscaler:": "画面增强:",
-        "Upscaler Sharpness:": "增强锐度:",
-        "Auto": "自动",
-        "Off": "关闭",
-        "Streamer Port:": "推流端口:",
-        "Streamer URL": "推流网址:",
-        "Preview": "预览",
-        "Stream Quality:": "推流质量:",
-        "Host": "主机:",
-        "Invalid port number (1-65535)": "端口号无效 (必须介于1-65535之间)",
-        "Invalid port number": "端口必须是数字",
-        "Please select a window before running in Window capture mode": "请在窗口捕获模式下选择一个窗口再运行",
-        "The selected window no longer exists. Please refresh and select a valid window.": "所选窗口已不存在。请刷新并选择一个有效的窗口。",
-        "Failed to stop process on exit:": "退出时停止进程失败：",
-        "Failed to stop process:": "停止进程失败：",
-        "Failed to run process:": "运行进程失败：",
-        "Failed to load settings.yaml:": "加载 settings.yaml 失败：",
-        "Opening URL in browser": "正在浏览器中打开网址",
-        "Controller:": "手柄模型：",
-        "Environment:": "房间模型：",
-        "Capture Tool:": "捕获工具:",
-        "Fill 16:9": "16:9",
-        "Fix Viewer Aspect": "锁定比例",
-        "Stereo Output:": "立体输出:",
-        "Theme:": "主题颜色:",
-        "DesktopDuplication selected: Window capture mode disabled.": "已选择DesktopDuplication：窗口捕获模式已禁用。",
-        "torch.compile": "torch.compile",
-        "TensorRT": "TensorRT",
-        "CoreML": "CoreML",
-        "OpenVINO": "OpenVINO",
-        "tooltip_window": "选择要捕获的窗口",
-        "tooltip_depth_model": "选择深度估计模型",
-        "tooltip_depth_res": "深度图分辨率",
-        "tooltip_convergence": "立体会聚点",
-        "tooltip_depth_strength": "深度效果强度",
-        "tooltip_depth_quick": "给普通用户使用的固定深度档位：柔和、标准、增强",
-        "tooltip_stereo_preset": "自动模式会按场景信号加权切换；手动模式固定为电影、游戏、图片或调试行为",
-        "tooltip_stereo_quality": "立体合成后端：fast 低延迟，quality_4k 均衡，hq_4k 偏图片高质量",
-        "tooltip_max_shift": "水平位移占画面宽度的比例；越高立体分离越强",
-        "tooltip_temporal_strength": "时域平滑强度；越高越稳定，但可能增加拖影或延迟",
-        "tooltip_temporal": "启用帧间时域稳定",
-        "tooltip_scene_reset": "场景变化重置阈值；越低越容易触发重置",
-        "tooltip_reset_cooldown": "两次自动时域重置之间的最小帧数间隔",
-        "tooltip_auto_scene_reset": "检测到场景切换时自动重置时域历史",
-        "tooltip_edge_dilation": "扩张深度边缘区域，用于遮挡和补洞处理",
-        "tooltip_edge_threshold": "深度边缘检测敏感度；越低检测到的边缘越多",
-        "tooltip_anaglyph": "显示模式为红蓝/补色时使用的颜色组合",
-        "tooltip_cross_eyed": "交换左右眼，用于交叉眼观看",
-        "tooltip_advanced_stereo": "显示专家级立体和运行时参数；普通使用建议保持关闭。",
-        "tooltip_advanced_device_options": "显示捕获帧率、本地垂直同步、画面增强和增强锐度。",
-        "tooltip_foreground_scale": "前景缩放比例",
-        "tooltip_antialiasing": "抗锯齿级别",
-        "tooltip_ipd": "瞳距（毫米）",
-        "tooltip_stereo_scale": "作用在物理 IPD 上的立体强度倍率；数值越低视差越小，数值越高深度越强",
-        "tooltip_device": "计算设备",
-        "tooltip_capture_tool": "捕获后端",
-        "tooltip_run_mode": "输出模式",
-        "tooltip_display_mode": "立体显示格式",
-        "tooltip_local_vsync": "将本地查看窗口同步到显示器刷新率，关闭可用于帧率对比测试",
-        "tooltip_target_fps": "覆盖内部帧率节流；自动使用检测到的显示器刷新率",
-        "tooltip_ctrl_model": "手柄型号",
-        "tooltip_env_model": "房间环境模型",
-        "tooltip_capture_mode": "捕获源：屏幕或窗口",
-        "tooltip_monitor": "输入显示器",
-        "tooltip_stereo_monitor": "立体输出显示器",
-        "tooltip_lang": "界面语言",
-        "tooltip_theme": "主题颜色",
-        "tooltip_stream_quality": "编码质量",
-        "tooltip_stream_proto": "推流协议",
-        "tooltip_audio": "混音设备",
-        "tooltip_stream_port": "推流端口",
-        "tooltip_stream_key": "推流密钥",
-        "tooltip_crf": "质量因子 (0-51)",
-        "tooltip_audio_delay": "音频偏移（秒）",
-        "err_crf": "CRF 必须是 0-51 之间的整数",
-        "err_audio_delay": "Audio Delay 必须是 -10 到 10 之间的数值",
-        "err_stream_key": "Stream Key 只能包含字母、数字、下划线和连字符，最长 64 字符",
-        "err_start_failed": "启动失败: {}",
-        "esc_stop": "长按ESC 3秒停止",
-        "exited_with_code": "退出码 {}",
-        "failed_save_yaml": "保存 YAML 失败: {}",
-        "stereo_parameters_saved": "立体参数已保存",
-        "invalid_url_scheme": "无效 URL 协议: {}",
-        "error_preview": "打开浏览器失败: {}",
-        "url_copied": "已复制网址到剪贴板",
-    }
-}
-# ─────────────────────────────────────────────
-# Default Configuration
-# ─────────────────────────────────────────────
-DEFAULT_MODEL_LIST = list(ALL_MODELS.keys())
-DEFAULT_FAMILIES, FAMILY_TO_SIZES = build_family_size_map(DEFAULT_MODEL_LIST)
-FAMILY_SIZE_TO_MODEL = {}
-for name in DEFAULT_MODEL_LIST:
-    f, s = parse_model_name(name)
-    FAMILY_SIZE_TO_MODEL[(f, s)] = name
-DEFAULTS = {
-    "Capture Mode": "Monitor",
-    "Monitor Index": 1,
-    "Window Title": "",
-    "Show FPS": False,
-    "Model List": DEFAULT_MODEL_LIST,
-    "Depth Model": DEFAULT_MODEL_LIST[0] if DEFAULT_MODEL_LIST else "",
-    "Depth Strength": 2.0,
-    "Depth Quick": "Standard",
-    "Depth Resolution": 322,
-    "Anti-aliasing": 2,
-    "Depth Antialias Strength": 0.4,
-    "Foreground Scale": 0.5,
-    "IPD": 0.064,
-    "Convergence": 0.0,
-    "Stereo Scale": 0.5,
-    "Stereo Preset": "cinema",
-    "Stereo Quality": "quality_4k",
-    "Max Shift Ratio": 0.05,
-    "Temporal": True,
-    "Temporal Strength": 0.75,
-    "Auto Scene Reset": True,
-    "Scene Reset Threshold": 0.22,
-    "Reset Cooldown Frames": 3,
-    "Edge Dilation": 2,
-    "Edge Threshold": 0.04,
-    "Cross Eyed": False,
-    "Anaglyph Method": "red_cyan",
-    "Display Mode": "Half-SBS",
-    "FP16": False,
-    "torch.compile": False,
-    "TensorRT": False,
-    "Recompile TensorRT": False,
-    "CoreML": False,
-    "Recompile CoreML": False,
-    "Recompile OpenVINO": False,
-    "Computing Device": 0,
-    "Language": "EN",
-    "Run Mode": "OpenXR Link",
-    "XR Preview Window": True,
-    "Local VSync": True,
-    "Target FPS": 0,
-    "Processing Resolution": "Auto",
-    "Upscaler": "Off",
-    "Upscaler Sharpness": 0.35,
-    "Stream Protocol": "HLS",
-    "Streamer Port": DEFAULT_PORT,
-    "Stream Quality": 100,
-    "Stream Key": "live",
-    "Stereo Mix": None,
-    "CRF": 20,
-    "Audio Delay": -0.15,
-    "Controller Model": "PICO",
-    "Environment Model": "None",
-    "Lossless Scaling Support": False,
-    "Capture Tool": "none",
-    "Fill 16:9": True,
-    "Fix Viewer Aspect": False,
-    "Stereo Output": None,
-}
+DEVICES = devices_module.DEVICES
 
-
-# ─────────────────────────────────────────────
-# Global Font Size
-# ─────────────────────────────────────────────
-SCALE = 0.9  # Global UI scale factor (fonts, spacing, widget + window sizes)
-
-
-def get_environment_model_options():
-    """Return selectable room environment names."""
-    env_base = os.path.join(BASE_DIR, "xr_viewer", "environments")
-    options = ["None"]
-    if not os.path.isdir(env_base):
-        return options
-    if os.path.exists(os.path.join(env_base, "environment.glb")):
-        options.append("Default")
-    room_dirs = []
-    for name in os.listdir(env_base):
-        room_dir = os.path.join(env_base, name)
-        if not os.path.isdir(room_dir) or name.startswith("."):
-            continue
-        profile_path = os.path.join(room_dir, "profile.json")
-        if not os.path.isfile(profile_path):
-            raise FileNotFoundError(f"[GUI] Missing room profile.json: {profile_path}")
-        try:
-            with open(profile_path, "r", encoding="utf-8-sig") as f:
-                profile = json.load(f)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"[GUI] Invalid room profile.json: {profile_path}: {exc}") from exc
-        if not isinstance(profile, dict):
-            raise ValueError(f"[GUI] Room profile.json root must be an object: {profile_path}")
-        room_dirs.append(name)
-    options.extend(sorted(room_dirs, key=str.lower))
-    return options
-
-
-def S(v):
-    """Scale a dimension literal by the global UI SCALE factor."""
-    return round(v * SCALE)
-
-
-FONT_SIZE = S(14)
-LABEL_ALIGN_WIDTH = 0  # Set by _auto_align_labels after UI is built
-# ─────────────────────────────────────────────
-# Device & Window Helpers (from gui.py)
-# ─────────────────────────────────────────────
-PRIMARY_MONITOR_SUFFIX = " [Main]"
-def get_devices():
-    """
-    Returns (devices_dict, is_rocm).
-    devices_dict: {0: {"name": str, "Computing Device": torch.device}, ...}
-    """
-    is_rocm = False
-    devices = {}
-    count = 0
-    try:
-        import torch_directml
-        if torch_directml.is_available():
-            for i in range(torch_directml.device_count()):
-                dev_name = torch_directml.device_name(i).strip().rstrip('\x00')
-                devices[count] = {
-                    "name": f"DirectML{i}: {dev_name}",
-                    "Computing Device": torch_directml.device(i),
-                }
-                count += 1
-    except ImportError:
-        pass
-    try:
-        import torch
-        if torch.cuda.is_available():
-            for i in range(torch.cuda.device_count()):
-                name = torch.cuda.get_device_name(i)
-                if torch.version.hip is not None:
-                    is_rocm = True
-                devices[count] = {"name": f"CUDA {i}: {name}", "Computing Device": torch.device(f"cuda:{i}")}
-                count += 1
-        if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
-            devices[count] = {"name": "MPS: Apple Silicon", "Computing Device": torch.device("mps")}
-            count += 1
-        if hasattr(torch, "xpu") and torch.xpu.is_available():
-            for i in range(torch.xpu.device_count()):
-                name = torch.xpu.get_device_name(i)
-                devices[count] = {"name": f"XPU {i}: {name}", "Computing Device": torch.device(f"xpu:{i}")}
-                count += 1
-        devices[count] = {"name": "CPU", "Computing Device": torch.device("cpu")}
-    except ImportError:
-        raise ImportError("PyTorch Not Found! Make sure you have deployed the Python environment in '.env'.")
-    return devices, is_rocm
-class _LazyDevices(dict):
-    """Lazy hardware detection — only runs get_devices() on first dict API access."""
-    def __init__(self):
-        self._loaded = False
-    def _ensure(self):
-        if not self._loaded:
-            self._loaded = True
-            try:
-                d, r = get_devices()
-                self.update(d)
-                global IS_ROCM; IS_ROCM = r
-            except Exception as e:
-                print(f"[Warning] Hardware detection failed, fallback to CPU: {e}")
-                self.update({0: {"name": "CPU", "Computing Device": None}})
-    def __getitem__(self, k): self._ensure(); return super().__getitem__(k)
-    def __iter__(self): self._ensure(); return super().__iter__()
-    def __len__(self): self._ensure(); return super().__len__()
-    def values(self): self._ensure(); return super().values()
-    def keys(self): self._ensure(); return super().keys()
-    def items(self): self._ensure(); return super().items()
-    def get(self, k, d=None): self._ensure(); return super().get(k, d)
-    def __contains__(self, k): self._ensure(); return super().__contains__(k)
-DEVICES = _LazyDevices()
-IS_ROCM = False
-def get_default_windows_capture_tool():
-    if "CUDA" in DEVICES.get(0, {}).get("name", "") and not IS_ROCM:
-        return "WindowsCaptureCUDA"
-    elif "CUDA" in DEVICES.get(0, {}).get("name", "") and IS_ROCM:
-        return "WindowsCaptureROCm"
-    else:
-        return "DXCamera"
-def get_primary_monitor_index():
-    if OS_NAME != "Windows":
-        return _get_primary_monitor_index_unix()
-    try:
-        import win32api, win32con
-        primary_monitor_handle = win32api.MonitorFromPoint((0, 0), win32con.MONITOR_DEFAULTTOPRIMARY)
-        primary_monitor_info = win32api.GetMonitorInfo(primary_monitor_handle)
-        primary_rect = primary_monitor_info["Monitor"]
-        primary_left, primary_top, _, _ = primary_rect
-        import mss
-        with mss.mss() as sct:
-            for idx, monitor in enumerate(sct.monitors[1:], start=1):
-                if monitor["left"] == primary_left and monitor["top"] == primary_top:
-                    return idx
-        return 1
-    except Exception:
-        return 1
-def _get_primary_monitor_index_unix():
-    try:
-        import mss
-        with mss.mss() as sct:
-            for idx, monitor in enumerate(sct.monitors[1:], start=1):
-                if monitor["left"] == 0 and monitor["top"] == 0:
-                    return idx
-    except Exception:
-        pass
-    return 1
-def list_windows():
-    """Return list of {title, handle, rect} for visible windows."""
-    if OS_NAME == "Windows":
-        return _list_windows_win()
-    elif OS_NAME == "Darwin":
-        return _list_windows_mac()
-    else:
-        return _list_windows_linux()
-def _list_windows_win():
-    import win32gui
-    windows = []
-    def callback(hwnd, _):
-        if win32gui.IsWindowVisible(hwnd):
-            title = win32gui.GetWindowText(hwnd)
-            if title:
-                client_rect = win32gui.GetClientRect(hwnd)
-                left, top = win32gui.ClientToScreen(hwnd, (client_rect[0], client_rect[1]))
-                windows.append({
-                    "title": title,
-                    "handle": hwnd,
-                    "rect": (left, top, client_rect[2], client_rect[3]),
-                })
-        return True
-    win32gui.EnumWindows(callback, None)
-    return windows
-def _list_windows_mac():
-    from Quartz import (
-        CGWindowListCopyWindowInfo,
-        kCGWindowListOptionOnScreenOnly,
-        kCGWindowListExcludeDesktopElements,
-        kCGNullWindowID,
-    )
-    windows = []
-    options = kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements
-    window_info = CGWindowListCopyWindowInfo(options, kCGNullWindowID)
-    blacklist = [
-        "Window Server", "ControlCenter", "NotificationCenter", "Spotlight",
-        "Dock", "FocusModes", "WiFi", "Sound", "UserSwitcher", "Clock",
-        "BentoBox", "Bluetooth", "popdown", "AudioVideoModule",
-        "ScreenMirroring", "SystemUIServer", "CoreServicesUIAgent",
-        "TextInputMenuAgent", "com.apple.controlcenter", "loginwindow",
-    ]
-    for win in window_info:
-        title = win.get("kCGWindowName", "") or ""
-        owner = win.get("kCGWindowOwnerName", "")
-        layer = win.get("kCGWindowLayer", 0)
-        bounds = win.get("kCGWindowBounds", {})
-        if not title.strip():
-            continue
-        if owner in blacklist or title in blacklist:
-            continue
-        if layer >= 1000:
-            continue
-        if win.get("kCGWindowAlpha", 1.0) == 0.0:
-            continue
-        if title.strip().lower().startswith(("item-", "window-")):
-            continue
-        if "X" in bounds and "Y" in bounds and "Width" in bounds and "Height" in bounds:
-            w, h = bounds["Width"], bounds["Height"]
-            if w < 10 or h < 10:
-                continue
-            windows.append({
-                "title": title.strip(),
-                "handle": win["kCGWindowNumber"],
-                "rect": (bounds["X"], bounds["Y"], w, h),
-            })
-    return windows
-def _list_windows_linux():
-    windows = []
-    try:
-        result = subprocess.check_output(["wmctrl", "-lG"], timeout=2).decode("utf-8").splitlines()
-        for line in result:
-            parts = line.split(None, 7)
-            if len(parts) >= 8:
-                _, _, x_str, y_str, w_str, h_str, _, title = parts
-                try:
-                    x, y, w, h = int(x_str), int(y_str), int(w_str), int(h_str)
-                    if title.strip():
-                        windows.append({"title": title.strip(), "handle": None, "rect": (x, y, w, h)})
-                except ValueError:
-                    continue
-    except Exception as e:
-        print(f"[Warning] Linux window enumeration failed (install wmctrl): {e}")
-    return windows
-def get_monitor_index_for_point(x, y):
-    try:
-        import mss
-        with mss.mss() as sct:
-            for idx, mon in enumerate(sct.monitors[1:], start=1):
-                left, top = mon["left"], mon["top"]
-                right, bottom = left + mon["width"], top + mon["height"]
-                if left <= x < right and top <= y < bottom:
-                    return idx
-    except Exception:
-        pass
-    return get_primary_monitor_index()
 def _get_capture_tool_options(device_label):
-    if OS_NAME == "Darwin":
-        return ["ScreenCaptureKit", "Quartz"]
-    if OS_NAME != "Windows":
-        return ["DXCamera"]
-    is_nvidia = "CUDA" in device_label.upper() and not IS_ROCM
-    if is_nvidia:
-        return ["WindowsCaptureCUDA", "WindowsCapture", "DXCamera", "DesktopDuplication"]
-    elif "CUDA" in device_label.upper() and IS_ROCM:
-        return ["WindowsCaptureROCm", "WindowsCapture", "DXCamera", "DesktopDuplication"]
-    else:
-        return ["DXCamera", "WindowsCapture", "DesktopDuplication"]
-# ─────────────────────────────────────────────
-# Save YAML (with encoding fallback)
-# ─────────────────────────────────────────────
-HAVE_YAML = True
-def save_yaml(path, cfg):
-    if not HAVE_YAML:
-        return False, "PyYAML not installed"
-    try:
-        tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            yaml.safe_dump(cfg, f, allow_unicode=True, sort_keys=False)
-        os.replace(tmp, path)
-        return True, ""
-    except Exception as e:
-        return False, str(e)
-# CompactDropdown — compact custom dropdown control
-
-class CompactTextField(ft.Container):
-    """Compact text input — 32px height, visually consistent with CompactDropdown."""
-
-    def __init__(self, value="", width=S(100), read_only=False, on_change=None, tooltip=None, filter=None, max_length=None):
-        super().__init__()
-        self.height = S(32)
-        self.width = width if width else None
-        self.padding = 0
-        self.bgcolor = None
-        self.border = None
-        self.border_radius = 0
-        self._read_only = read_only
-        self._on_change = on_change
-        self._value = value
-        self._label = ft.Text(value or "", size=FONT_SIZE)
-        self._committed = False
-        self._tooltip = tooltip or ""
-        self._filter = filter
-        self._max_length = max_length
-        self._build_display()
-
-    def _build_display(self):
-        self.content = ft.Container(
-            height=S(32), padding=ft.Padding(S(8), 0, S(8), 0),
-            border=ft.Border(ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE)),
-            border_radius=4,
-            tooltip=self._tooltip,
-            on_click=None if self._read_only else self._on_click,
-            content=ft.Row([self._label], spacing=2, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-        )
-
-    def _on_click(self, e):
-        self._committed = False
-        tf = ft.TextField(
-            value=self._value, text_size=FONT_SIZE, dense=True,
-            filled=False, border=ft.InputBorder.NONE,
-            content_padding=ft.Padding(0, 0, 0, 0), height=S(28),
-            autofocus=True, on_submit=self._on_submit, on_blur=self._on_submit,
-            max_length=self._max_length,
-            input_filter=ft.InputFilter(regex_string=self._filter, allow=True) if self._filter else None,
-        )
-        self.content = ft.Container(
-            height=S(32), padding=ft.Padding(S(4), 0, S(4), 0),
-            border=ft.Border(ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE)),
-            border_radius=4, content=tf,
-        )
-        self.update()
-
-    def set_tooltip(self, text):
-        self._tooltip = text
-
-    @property
-    def value(self):
-        return self._value
-
-    @value.setter
-    def value(self, val):
-        self._value = val
-        self._label.value = val
-        try:
-            self._label.update()
-        except RuntimeError:
-            pass
-
-    def _on_submit(self, e):
-        if self._committed:
-            return
-        self._committed = True
-        raw = e.control.value
-        if self._filter:
-            raw = ''.join(c for c in raw if re.match(self._filter, c))
-        self._value = raw
-        if self._on_change:
-            from types import SimpleNamespace
-            self._on_change(SimpleNamespace(control=SimpleNamespace(value=self._value)))
-        self._label.value = self._value
-        self._build_display()
-        self.update()
-
-
-class CompactDropdown(ft.Container):
-    """Compact dropdown — PopupMenuButton with controllable width."""
-    _instances = None  # Managed by GUI instance; replaced with instance list in build_ui
-
-    def __init__(self, options=None, value="", on_select=None, expand=False,
-                 dyna_width=None, width=None, min_width=None, max_width=None,
-                 tooltip=None, _instances_list=None):
-        super().__init__()
-        self._options = options or []
-        self._on_select_cb = on_select
-        self._dyna = dyna_width
-        self._fixed = width
-        self._min = min_width or 0
-        self._max = max_width or 0
-        self._tooltip = tooltip
-        self.height = S(32)
-        self.padding = 0
-        self.bgcolor = None
-        self.border = None
-        self.border_radius = 0
-        self.expand_loose = expand
-
-        self._label = ft.Text(value or "", size=FONT_SIZE)
-        self._build_menu()
-        self._apply_width()
-        if _instances_list is not None:
-            _instances_list.append(self)
-        elif CompactDropdown._instances is not None:
-            CompactDropdown._instances.append(self)
-
-    def reapply_width(self):
-        self._apply_width()
-
-    def _calc_auto_width(self):
-        txt = self._label.value or ""
-        if not txt:
-            return S(100)
-        w = sum(FONT_SIZE * (1.2 if ord(c) > 127 else 0.6) for c in txt)
-        return int(w) + S(34)
-
-    def _apply_width(self):
-        if self._dyna:
-            self.width = LABEL_ALIGN_WIDTH or self._calc_auto_width()
-        elif self._fixed is not None:
-            self.width = self._fixed
-        else:
-            auto = self._calc_auto_width()
-            if self._min and auto < self._min:
-                self.width = self._min
-            elif self._max and auto > self._max:
-                self.width = self._max
-            else:
-                self.width = None
-
-    def _build_menu(self):
-        def on_item_click(e):
-            val = e.control.data
-            self._value = val
-            self._label.value = val
-            self._apply_width()
-            try:
-                self._label.update()
-                self.update()
-            except RuntimeError:
-                pass
-            if self._on_select_cb:
-                from types import SimpleNamespace
-                ev = SimpleNamespace(control=SimpleNamespace(value=val))
-                self._on_select_cb(ev)
-
-        items = [
-            ft.PopupMenuItem(content=ft.Container(ft.Text(o, size=FONT_SIZE), padding=ft.Padding(8,0,8,0)), data=o, height=S(32), padding=0, on_click=on_item_click)
-            for o in self._options
-        ]
-
-        has_limit = self._min or self._max
-        align = ft.MainAxisAlignment.SPACE_BETWEEN if (self._fixed is not None or self._dyna or has_limit) else ft.MainAxisAlignment.START
-
-        self.content = ft.PopupMenuButton(
-            items=items,
-            menu_position=ft.PopupMenuPosition.UNDER,
-            enable_feedback=False,
-            padding=0, menu_padding=0,
-            tooltip=self._tooltip or "",
-            content=ft.Container(
-                height=S(32),
-                padding=ft.Padding(S(8), 0, S(8), 0),
-                tooltip=self._tooltip or "",
-                border=ft.Border(
-                    ft.BorderSide(1, ft.Colors.OUTLINE),
-                    ft.BorderSide(1, ft.Colors.OUTLINE),
-                    ft.BorderSide(1, ft.Colors.OUTLINE),
-                    ft.BorderSide(1, ft.Colors.OUTLINE),
-                ),
-                border_radius=4,
-                content=ft.Row([
-                    self._label,
-                    ft.Icon(ft.Icons.ARROW_DROP_DOWN, size=S(16)),
-                ], spacing=2, alignment=align,
-                   vertical_alignment=ft.CrossAxisAlignment.CENTER),
-            ),
-        )
-    def set_tooltip(self, text):
-        self._tooltip = text
-        try:
-            self._build_menu()
-            self.update()
-        except RuntimeError:
-            pass
-
-    @property
-    def value(self):
-        return self._label.value
-
-    @value.setter
-    def value(self, val):
-        self._label.value = val
-        self._apply_width()
-        try:
-            self._build_menu()
-            self._label.update()
-            self.update()
-        except RuntimeError:
-            pass
-
-    @property
-    def options(self):
-        return self._options
-
-    @options.setter
-    def options(self, opts):
-        self._options = opts
-        try:
-            self._build_menu()
-            self.update()
-        except RuntimeError:
-            pass
-
+    return get_capture_tool_options(device_label)
 
 # Main GUI Class
 class Desktop2StereoGUI:
@@ -1089,7 +169,7 @@ class Desktop2StereoGUI:
         self.page = page
         self._loop = None  # Assigned in setup()
         # ── state ──
-        self.language = "EN"
+        self.locale = "EN"
         self._config = {}
         self.run_mode_key = DEFAULTS.get("Run Mode", "Local Viewer")
         self.capture_mode_key = DEFAULTS.get("Capture Mode", "Monitor")
@@ -1109,7 +189,7 @@ class Desktop2StereoGUI:
         self._cancel_starting = False  # Cancel pending start
         self._stopping = False       # Prevent _async_stop reentry
         self._labels_aligned = False  # One-shot label alignment guard
-        self._status_key = ""          # Track status for language change re-translation
+        self._status_key = ""          # Track status for locale change re-translation
 
     # ── setup ──
     async def setup(self):
@@ -1120,7 +200,7 @@ class Desktop2StereoGUI:
         self._hot_save_task = None
 
         self.page.title = f"Desktop2Stereo v{VERSION}"
-        self.page.window.icon = os.path.join(os.path.dirname(__file__), "icon.ico")
+        self.page.window.icon = os.path.join(BASE_DIR, "icon.ico")
         self.page.padding = S(24)
         self.page.horizontal_alignment = ft.CrossAxisAlignment.STRETCH
         if OS_NAME == "Windows":
@@ -1152,12 +232,12 @@ class Desktop2StereoGUI:
                 if cfg:
                     self._config.update(cfg)
                     self._yaml_loaded = True
-                    self.language = self._config.get("Language", "EN")
+                    self.locale = self._config.get("Language", "EN")
                     self.apply_config(self._config)
-                    self.set_status(UI_TEXTS[self.language]["Loaded settings.yaml at startup"], key="Loaded settings.yaml at startup")
+                    self.set_status(UI_MESSAGES[self.locale]["Loaded settings.yaml at startup"], key="Loaded settings.yaml at startup")
             except Exception as e:
                 self.apply_config(self._config)
-                self.set_status(f"{UI_TEXTS[self.language]['Failed to load settings.yaml:']} {e}")
+                self.set_status(f"{UI_MESSAGES[self.locale]['Failed to load settings.yaml:']} {e}")
         else:
             self.apply_config(self._config)
 
@@ -1340,20 +420,20 @@ class Desktop2StereoGUI:
         if self._labels_aligned and not force:
             return
         left_labels = [
-            self.r0_label, self.r1a_label, self.depth_quick_label, self.r1b_label, self.r2a_label, self.r2b_label, self.r3a_label,
+            self.depth_model_label, self.depth_resolution_label, self.depth_quick_label, self.convergence_label, self.depth_strength_label, self.foreground_scale_label, self.antialiasing_label,
             self.stereo_preset_label, self.max_shift_label, self.scene_reset_label,
             self.edge_dilation_label, self.stereo_scale_label,
-            self.r4_label, self.r5_label, self.r6_label, self.target_fps_label,
-            self.upscaler_label, self.r7a_label, self.r9_label, self.r10_label,
+            self.acceleration_label, self.computing_device_label, self.capture_tool_label, self.target_fps_label,
+            self.upscaler_label, self.run_mode_label, self.stereo_output_label, self.controller_label,
             self.lang_label,
             self.stream_url_label, self.stream_port_label,
             self.stream_proto_label, self.audio_label, self.crf_label,
         ]
         right_labels = [
-            self.r3b_label,
+            self.ipd_label,
             self.stereo_quality_label, self.temporal_strength_label, self.reset_cooldown_label,
             self.edge_threshold_label, self.anaglyph_label,
-            self.upscaler_sharpness_label, self.r7b_label, self.r10b_label, self.theme_label,
+            self.upscaler_sharpness_label, self.display_mode_label, self.environment_label, self.theme_label,
             self.stream_quality_label, self.stream_key_label, self.audio_delay_label,
         ]
 
@@ -1368,8 +448,7 @@ class Desktop2StereoGUI:
             lbl.width = final_w
 
         self._label_max_width = final_w
-        global LABEL_ALIGN_WIDTH
-        LABEL_ALIGN_WIDTH = final_w
+        set_label_align_width(final_w)
         for inst in getattr(self, '_dropdowns', []):
             inst.reapply_width()
         if hasattr(self, '_row8_spacer'):
@@ -1394,7 +473,7 @@ class Desktop2StereoGUI:
         CompactDropdown._instances = self._dropdowns
 
         # Row 1: Depth model
-        self.r0_label = ft.Text("Depth Model:", size=FONT_SIZE, width=S(130))
+        self.depth_model_label = ft.Text("Depth Model:", size=FONT_SIZE, width=S(130))
         default_family, default_size = parse_model_name(DEFAULT_MODEL_LIST[0]) if DEFAULT_MODEL_LIST else ("", "")
         self.depth_model_dd = CompactDropdown(
             options=[f for f in DEFAULT_FAMILIES],
@@ -1408,16 +487,16 @@ class Desktop2StereoGUI:
             width=S(110))
         self.fp16_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="FP16")
         row0 = ft.Row([
-            self.r0_label,
+            self.depth_model_label,
             self.depth_model_dd,
             ft.Container(width=S(8)),
             self.model_size_dd,
         ], spacing=1)
 
         # Row 2: Depth resolution + Convergence
-        self.r1a_label = ft.Text("Depth Resolution:", size=FONT_SIZE, width=S(130))
+        self.depth_resolution_label = ft.Text("Depth Resolution:", size=FONT_SIZE, width=S(130))
         self.depth_res_dd = CompactDropdown(options=[], width=S(130))
-        self.r1b_label = ft.Text("Convergence:", size=FONT_SIZE, width=S(130))
+        self.convergence_label = ft.Text("Convergence:", size=FONT_SIZE, width=S(130))
         conv_options = [str(i / 4) for i in range(-2, 5)]
         self.convergence_dd = CompactDropdown(width=S(130),
             options=[v for v in conv_options],
@@ -1430,7 +509,7 @@ class Desktop2StereoGUI:
             on_select=self.on_depth_quick_change,
             width=S(130))
         row1 = ft.Row([
-            self.r1a_label,
+            self.depth_resolution_label,
             self.depth_res_dd,
             ft.Container(width=S(40)),
             self.depth_quick_label,
@@ -1439,48 +518,48 @@ class Desktop2StereoGUI:
 
         # Row 3: Quick depth preset + advanced depth strength
 
-        self.r2a_label = ft.Text("Depth Strength:", size=FONT_SIZE, width=S(130))
+        self.depth_strength_label = ft.Text("Depth Strength:", size=FONT_SIZE, width=S(130))
         ds_options = [f"{i / 2:.1f}" for i in range(21)]
         self.depth_strength_dd = CompactDropdown(width=S(130),
             options=[v for v in ds_options],
             value="2.0",
             on_select=self.on_stereo_hot_param_change)
         convergence_depth_row = ft.Row([
-            self.r1b_label,
+            self.convergence_label,
             self.convergence_dd,
             ft.Container(width=S(40)),
-            self.r2a_label,
+            self.depth_strength_label,
             self.depth_strength_dd,
         ], spacing=1)
 
         # Row 3b: Foreground scale + anti-aliasing
-        self.r2b_label = ft.Text("Foreground Scale:", size=FONT_SIZE, width=S(130))
+        self.foreground_scale_label = ft.Text("Foreground Scale:", size=FONT_SIZE, width=S(130))
         fg_options = [f"{i / 10:.1f}" for i in range(-9, 0)] + [f"{i / 2:.1f}" for i in range(0, 11)]
         self.foreground_scale_dd = CompactDropdown(width=S(130),
             options=[v for v in fg_options],
             value="0.5",
             on_select=self.on_stereo_hot_param_change)
-        self.r3a_label = ft.Text("Anti-aliasing:", size=FONT_SIZE, width=S(130))
+        self.antialiasing_label = ft.Text("Anti-aliasing:", size=FONT_SIZE, width=S(130))
         aa_options = [str(i) for i in range(11)]
         self.antialiasing_dd = CompactDropdown(width=S(130), 
             options=[v for v in aa_options],
             value="2",
             on_select=self.on_stereo_hot_param_change)
         row2b = ft.Row([
-            self.r2b_label,
+            self.foreground_scale_label,
             self.foreground_scale_dd,
             ft.Container(width=S(40)),
-            self.r3a_label,
+            self.antialiasing_label,
             self.antialiasing_dd,
         ], spacing=1)
 
         # Row 4: IPD + stereo scale
-        self.r3b_label = ft.Text("IPD (mm):", size=FONT_SIZE, width=S(130))
+        self.ipd_label = ft.Text("IPD (mm):", size=FONT_SIZE, width=S(130))
         self.ipd_dd = CompactDropdown(options=[str(i) for i in range(58, 71)], value="64", width=S(130), on_select=self.on_stereo_hot_param_change)
         self.stereo_scale_label = ft.Text("Stereo Scale:", size=FONT_SIZE, width=S(130))
         self.stereo_scale_dd = CompactDropdown(options=[f"{i / 10:.1f}" for i in range(1, 11)], value="0.5", width=S(130), on_select=self.on_stereo_hot_param_change)
         row3 = ft.Row([
-            self.r3b_label,
+            self.ipd_label,
             self.ipd_dd,
             ft.Container(width=S(40)),
             self.stereo_scale_label,
@@ -1501,7 +580,7 @@ class Desktop2StereoGUI:
         self.max_shift_label = ft.Text("Max Shift Ratio:", size=FONT_SIZE, width=S(130))
         self.max_shift_dd = CompactDropdown(options=[f"{i / 100:.2f}" for i in range(0, 11)], value="0.05", width=S(130), on_select=self.on_stereo_hot_param_change)
         self.temporal_strength_label = ft.Text("Temporal Strength:", size=FONT_SIZE, width=S(130))
-        self.temporal_strength_dd = CompactDropdown(options=["0.00", "0.25", "0.40", "0.60", "0.75", "0.85", "0.95"], value="0.75", width=S(130), on_select=self.on_stereo_hot_param_change)
+        self.temporal_strength_dd = CompactDropdown(options=[f"{i / 10:.1f}" for i in range(0, 11)], value="0.7", width=S(130), on_select=self.on_stereo_hot_param_change)
         stereo_row1 = ft.Row([self.max_shift_label, self.max_shift_dd, ft.Container(width=S(40)), self.temporal_strength_label, self.temporal_strength_dd], spacing=1)
 
         self.scene_reset_label = ft.Text("Scene Threshold:", size=FONT_SIZE, width=S(130))
@@ -1530,7 +609,7 @@ class Desktop2StereoGUI:
         advanced_stereo_row = ft.Row([self.advanced_stereo_cb], spacing=1)
         self._advanced_stereo_rows = [convergence_depth_row, row2b, row3, stereo_row1, stereo_row2, stereo_row3, stereo_row4]
         # Row 10: Acceleration group (two rows, 4 columns each)
-        self.r4_label = ft.Text("Acceleration:", size=FONT_SIZE, width=S(130))
+        self.acceleration_label = ft.Text("Acceleration:", size=FONT_SIZE, width=S(130))
         self.torch_compile_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="torch.compile")
         self.tensorrt_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="TensorRT", on_change=self._on_trt_toggle)
         self.coreml_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="CoreML", on_change=self._on_coreml_toggle)
@@ -1542,7 +621,7 @@ class Desktop2StereoGUI:
         accel_row2 = ft.Row([self.coreml_cb, self.recompile_coreml_cb, self.openvino_cb, self.recompile_openvino_cb], spacing=S(20))
         self._accel_spacer = ft.Container(width=0)
         self.row4a = ft.Row([
-            self.r4_label,
+            self.acceleration_label,
             accel_row1,
         ], spacing=1)
         self.row4b = ft.Row([
@@ -1554,7 +633,7 @@ class Desktop2StereoGUI:
             row.visible = self.advanced_stereo_cb.value
 
         # Row 6: Computing device
-        self.r5_label = ft.Text("Computing Device:", size=FONT_SIZE, width=S(130))
+        self.computing_device_label = ft.Text("Computing Device:", size=FONT_SIZE, width=S(130))
         device_names = [v["name"] for v in DEVICES.values()]
         self.device_dd = CompactDropdown(
             options=[n for n in device_names],
@@ -1581,21 +660,21 @@ class Desktop2StereoGUI:
             on_change=self.on_advanced_device_change,
         )
         row5 = ft.Row([
-            self.r5_label,
+            self.computing_device_label,
             self.device_dd,
             ft.Container(width=S(15)),
             self.advanced_device_cb,
         ], spacing=1)
 
         # Row 7: Capture tool
-        self.r6_label = ft.Text("Capture Tool:", size=FONT_SIZE, width=S(130))
+        self.capture_tool_label = ft.Text("Capture Tool:", size=FONT_SIZE, width=S(130))
         ct_options = _get_capture_tool_options(DEVICES.get(0, {}).get("name", ""))
         self.capture_tool_dd = CompactDropdown(
             options=[o for o in ct_options],
             on_select=self.on_capture_tool_change,
             min_width=S(160))
         row6 = ft.Row([
-            self.r6_label,
+            self.capture_tool_label,
             self.capture_tool_dd,
             ft.Container(width=S(15)),
             self.showfps_cb,
@@ -1626,13 +705,13 @@ class Desktop2StereoGUI:
             self.upscaler_sharpness_dd,
         ], spacing=1)
         if OS_NAME == "Linux":
-            self.r6_label.visible = False
+            self.capture_tool_label.visible = False
             self.capture_tool_dd.visible = False
 
         # Row 8: Run mode + Display mode / Controller
-        self.r7a_label = ft.Text("Run Mode:", size=FONT_SIZE, width=S(130))
+        self.run_mode_label = ft.Text("Run Mode:", size=FONT_SIZE, width=S(130))
         self.run_mode_dd = CompactDropdown(on_select=self.on_run_mode_change, width=S(130))
-        self.r7b_label = ft.Text("Display Mode:", size=FONT_SIZE, width=S(130))
+        self.display_mode_label = ft.Text("Display Mode:", size=FONT_SIZE, width=S(130))
         self.display_mode_dd = CompactDropdown(
             options=[m for m in ["Half-SBS", "Full-SBS", "Half-TAB", "Full-TAB", "Depth Map", "Anaglyph", "Interleaved", "Mono", "Leia"]],
             value="Half-SBS", width=S(130))
@@ -1640,9 +719,9 @@ class Desktop2StereoGUI:
             label="XR Preview Window",
             value=DEFAULTS.get("XR Preview Window", True),
         )
-        self.r10_label = ft.Text("Controller:", size=FONT_SIZE, width=S(130))
+        self.controller_label = ft.Text("Controller:", size=FONT_SIZE, width=S(130))
         try:
-            ctrl_base = os.path.join(os.path.dirname(__file__), "controllers")
+            ctrl_base = os.path.join(BASE_DIR, "controllers")
             ctrl_dirs = [d for d in os.listdir(ctrl_base) if os.path.isdir(os.path.join(ctrl_base, d))]
         except (FileNotFoundError, OSError):
             ctrl_dirs = []
@@ -1651,25 +730,25 @@ class Desktop2StereoGUI:
         self.ctrl_model_dd = CompactDropdown(
             options=[c for c in ctrl_dirs],
             value="PICO", width=S(130))
-        self.r10b_label = ft.Text("Environment:", size=FONT_SIZE, width=S(130))
+        self.environment_label = ft.Text("Environment:", size=FONT_SIZE, width=S(130))
         env_dirs = get_environment_model_options()
         self.env_model_dd = CompactDropdown(
             options=[e for e in env_dirs],
             value="None" if "None" in env_dirs else env_dirs[0],
             width=S(130))
         self.row7a = ft.Row([
-            self.r7a_label,
+            self.run_mode_label,
             self.run_mode_dd,
             ft.Container(width=S(40)),
-            self.r7b_label,
+            self.display_mode_label,
             self.display_mode_dd,
             self.xr_preview_cb
         ], spacing=1)
         self.row7b = ft.Row([
-            self.r10_label,
+            self.controller_label,
             self.ctrl_model_dd,
             ft.Container(width=S(40)),
-            self.r10b_label,
+            self.environment_label,
             self.env_model_dd
         ], spacing=1)
 
@@ -1694,14 +773,14 @@ class Desktop2StereoGUI:
         ], spacing=1)
 
         # Row 10: Stereo output + checkboxes
-        self.r9_label = ft.Text("Stereo Output:", size=FONT_SIZE, width=S(130))
+        self.stereo_output_label = ft.Text("Stereo Output:", size=FONT_SIZE, width=S(130))
         self.stereo_monitor_dd = CompactDropdown(options=[], on_select=lambda e: self._fit_window_to_content())
         self.fill_16_9_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="Fill 16:9")
         self.fix_aspect_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="Fix Viewer Aspect")
         self.lossless_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="LSFG")
         self._stereo_spacer = ft.Container(width=S(10))
         self.row9 = ft.Row([
-            self.r9_label,
+            self.stereo_output_label,
             self.stereo_monitor_dd,
             self._stereo_spacer,
             ft.Row([self.fill_16_9_cb, self.fix_aspect_cb, self.lossless_cb], spacing=S(20)),
@@ -1916,7 +995,7 @@ class Desktop2StereoGUI:
         return self.device_label_to_index
 
     def _upscaler_display_options(self):
-        t = UI_TEXTS[self.language]
+        t = UI_MESSAGES[self.locale]
         return [t.get("Auto", "Auto"), t.get("Off", "Off"), "FSR1"]
 
     def _upscaler_to_display(self, value):
@@ -1924,8 +1003,8 @@ class Desktop2StereoGUI:
         if value_l == "fsr1":
             return "FSR1"
         if value_l in ("auto", "自动"):
-            return UI_TEXTS[self.language].get("Auto", "Auto")
-        return UI_TEXTS[self.language].get("Off", "Off")
+            return UI_MESSAGES[self.locale].get("Auto", "Auto")
+        return UI_MESSAGES[self.locale].get("Off", "Off")
 
     def _upscaler_from_display(self, value):
         value_l = str(value or "").strip().lower()
@@ -1938,7 +1017,7 @@ class Desktop2StereoGUI:
     def _target_fps_to_display(self, value):
         fps = self._parse_int(value, DEFAULTS["Target FPS"])
         if fps <= 0:
-            return UI_TEXTS[self.language].get("Auto", "Auto")
+            return UI_MESSAGES[self.locale].get("Auto", "Auto")
         return str(fps)
 
     @staticmethod
@@ -2022,8 +1101,8 @@ class Desktop2StereoGUI:
         self.fix_aspect_cb.value = cfg.get("Fix Viewer Aspect", DEFAULTS["Fix Viewer Aspect"])
         self.lossless_cb.value = cfg.get("Lossless Scaling Support", DEFAULTS["Lossless Scaling Support"])
         if keep_optional:
-            self.language = cfg.get("Language", DEFAULTS["Language"])
-            self.lang_dd.value = "English" if self.language == "EN" else "简体中文"
+            self.locale = cfg.get("Language", DEFAULTS["Language"])
+            self.lang_dd.value = "English" if self.locale == "EN" else "简体中文"
         
         saved_ctrl = cfg.get("Controller Model", DEFAULTS.get("Controller Model", "PICO"))
         self.ctrl_model_dd.value = saved_ctrl if saved_ctrl in self.ctrl_model_dd.options else "PICO"
@@ -2059,7 +1138,7 @@ class Desktop2StereoGUI:
         self.crf_tf.value = str(cfg.get("CRF", DEFAULTS["CRF"]))
         self.audio_delay_tf.value = str(cfg.get("Audio Delay", DEFAULTS["Audio Delay"]))
         self.capture_mode_key = cfg.get("Capture Mode", DEFAULTS["Capture Mode"])
-        cm_t = UI_TEXTS[self.language]
+        cm_t = UI_MESSAGES[self.locale]
         self.capture_mode_dd.value = cm_t["Monitor"] if self.capture_mode_key == "Monitor" else cm_t["Window"]
         self._sync_capture_mode_visibility()
         self._apply_stereo_output(cfg)
@@ -2153,7 +1232,7 @@ class Desktop2StereoGUI:
         self._config["Depth Model"] = model
         self.update_depth_resolution_options(model)
         self.auto_enable_optimizers_based_on_device()
-        if not IS_ROCM and "CUDA" in self.device_dd.value:
+        if not devices_module.IS_ROCM and "CUDA" in self.device_dd.value:
             self.update_tensorrt_visibility_based_on_model(model)
         elif "MPS" in self.device_dd.value:
             self.update_coreml_visibility_based_on_model(model)
@@ -2180,7 +1259,7 @@ class Desktop2StereoGUI:
         xpu = "XPU" in device_label
         other = not (cuda or dml or mps or xpu)
         self.torch_compile_cb.visible = cuda
-        self.tensorrt_cb.visible = cuda and not IS_ROCM
+        self.tensorrt_cb.visible = cuda and not devices_module.IS_ROCM
         self.tensorrt_cb.disabled = False
         self.recompile_trt_cb.visible = self.tensorrt_cb.value if self.tensorrt_cb.visible else False
         self.coreml_cb.visible = mps
@@ -2190,9 +1269,9 @@ class Desktop2StereoGUI:
         self.openvino_cb.disabled = False
         self.recompile_openvino_cb.visible = self.openvino_cb.value if self.openvino_cb.visible else False
         self.fp16_cb.visible = not (dml or mps)
-        self.r4_label.visible = not (dml or other)
+        self.acceleration_label.visible = not (dml or other)
         is_windows_or_mac = OS_NAME in ("Windows", "Darwin")
-        self.r6_label.visible = is_windows_or_mac
+        self.capture_tool_label.visible = is_windows_or_mac
         self.capture_tool_dd.visible = is_windows_or_mac
         if dml or other:
             self.torch_compile_cb.visible = False
@@ -2203,7 +1282,7 @@ class Desktop2StereoGUI:
             self.openvino_cb.visible = False
             self.recompile_openvino_cb.visible = False
         current_model = self.current_model_name
-        if cuda and not IS_ROCM:
+        if cuda and not devices_module.IS_ROCM:
             self.update_tensorrt_visibility_based_on_model(current_model)
         if mps:
             self.update_coreml_visibility_based_on_model(current_model)
@@ -2228,7 +1307,7 @@ class Desktop2StereoGUI:
         self.tensorrt_cb.value = False
         self.coreml_cb.value = False
         self.openvino_cb.value = False
-        if "CUDA" in device_label and not IS_ROCM:
+        if "CUDA" in device_label and not devices_module.IS_ROCM:
             should = not any(kw in model_lower for kw in DISABLE_TRT_KEYWORDS)
             self.tensorrt_cb.value = should
             self.torch_compile_cb.value = True
@@ -2245,7 +1324,7 @@ class Desktop2StereoGUI:
     def update_tensorrt_visibility_based_on_model(self, model_name):
         if not model_name:
             return
-        if not IS_ROCM and "CUDA" in self.device_dd.value:
+        if not devices_module.IS_ROCM and "CUDA" in self.device_dd.value:
             model_lower = model_name.lower()
             should_disable = any(kw in model_lower for kw in DISABLE_TRT_KEYWORDS)
             if should_disable:
@@ -2285,9 +1364,9 @@ class Desktop2StereoGUI:
         tool = e.control.value if e else self.capture_tool_dd.value
         if tool == "DesktopDuplication":
             self.capture_mode_key = "Monitor"
-            self.capture_mode_dd.value = UI_TEXTS[self.language]["Monitor"]
+            self.capture_mode_dd.value = UI_MESSAGES[self.locale]["Monitor"]
             self.capture_mode_dd.disabled = True
-            self.set_status(UI_TEXTS[self.language]["DesktopDuplication selected: Window capture mode disabled."])
+            self.set_status(UI_MESSAGES[self.locale]["DesktopDuplication selected: Window capture mode disabled."])
         else:
             self.capture_mode_dd.disabled = False
             self.set_status("", key="")
@@ -2307,7 +1386,7 @@ class Desktop2StereoGUI:
 
     def on_capture_mode_change(self, e):
         mode = e.control.value
-        texts = UI_TEXTS[self.language]
+        texts = UI_MESSAGES[self.locale]
         reverse_map = {texts["Monitor"]: "Monitor", texts["Window"]: "Window"}
         self.capture_mode_key = reverse_map.get(mode, "Monitor")
         self._sync_capture_mode_visibility()
@@ -2339,11 +1418,11 @@ class Desktop2StereoGUI:
     def _on_monitor_change(self, e):
         self.update_stereo_monitor_menu()
         self._fit_window_to_content()
-        self.set_status(f"{UI_TEXTS[self.language]['Selected input monitor:']} {e.control.value}")
+        self.set_status(f"{UI_MESSAGES[self.locale]['Selected input monitor:']} {e.control.value}")
 
     def on_run_mode_change(self, e):
         label = e.control.value
-        texts = UI_TEXTS[self.language]
+        texts = UI_MESSAGES[self.locale]
         mode_map = {
             texts.get("Local Viewer", "Local Viewer"): "Local Viewer",
             texts.get("OpenXR Link", "OpenXR Link"): "OpenXR Link",
@@ -2380,7 +1459,7 @@ class Desktop2StereoGUI:
 
     def _sync_visibility(self):
         mode = self.run_mode_key
-        texts = UI_TEXTS[self.language]
+        texts = UI_MESSAGES[self.locale]
         mode_reverse = {
             "Local Viewer": texts["Local Viewer"],
             "OpenXR Link": texts["OpenXR Link"],
@@ -2391,7 +1470,7 @@ class Desktop2StereoGUI:
         }
         self.run_mode_dd.value = mode_reverse.get(mode, texts["Local Viewer"])
         is_openxr = mode == "OpenXR Link"
-        self.r7b_label.visible = not is_openxr
+        self.display_mode_label.visible = not is_openxr
         self.display_mode_dd.visible = not is_openxr
         self.xr_preview_cb.visible = is_openxr
         self._sync_device_advanced_visibility(mode)
@@ -2410,7 +1489,7 @@ class Desktop2StereoGUI:
             self.display_mode_dd.options = [m for m in ["Half-SBS", "Full-SBS", "Half-TAB", "Full-TAB", "Depth Map", "Anaglyph", "Interleaved", "Mono", "Leia"]]
         mon_count = self._get_monitor_count()
         stereo_full = mode in ["Local Viewer", "3D Monitor", "RTMP Streamer"] and mon_count > 1
-        self.r9_label.visible = not is_openxr
+        self.stereo_output_label.visible = not is_openxr
         self.stereo_monitor_dd.visible = stereo_full
         if hasattr(self, '_stereo_spacer'):
             self._stereo_spacer.visible = stereo_full
@@ -2469,36 +1548,36 @@ class Desktop2StereoGUI:
         lang_display = e.control.value
         _LANG_MAP = {"English": "EN", "简体中文": "CN"}
         lang = _LANG_MAP.get(lang_display, "EN")
-        if lang in UI_TEXTS:
-            self.language = lang
+        if is_supported_locale(lang):
+            self.locale = lang
             self._config["Language"] = lang
             self.update_ui_texts()
             self._sync_visibility()
             if self._status_key:
-                self.set_status(UI_TEXTS[self.language].get(self._status_key, self.status_text.value), key=self._status_key)
+                self.set_status(UI_MESSAGES[self.locale].get(self._status_key, self.status_text.value), key=self._status_key)
             # Theme: update_ui_texts already set options, here we only set the value
-            t = UI_TEXTS[self.language]
+            t = UI_MESSAGES[self.locale]
             cur = self.theme_dd.value
             cn_map = {"系统":"system","蓝色":"blue","绿色":"green","红色":"red","紫色":"purple","橙色":"orange","青色":"teal","粉色":"pink","灰色":"grey"}
             key = cn_map.get(cur, cur.lower() if cur else "system")
-            self.theme_dd.value = t.get(key, key) if self.language == "CN" else key.capitalize()
+            self.theme_dd.value = t.get(key, key) if self.locale == "CN" else key.capitalize()
             self._fit_window_to_content()
             self.page.update()
 
     def update_ui_texts(self):
-        t = UI_TEXTS[self.language]
-        self.r0_label.value = t["Depth Model:"]
+        t = UI_MESSAGES[self.locale]
+        self.depth_model_label.value = t["Depth Model:"]
         self.fp16_cb.label = t["FP16"]
-        self.r1a_label.value = t["Depth Resolution:"]
-        self.r1b_label.value = t["Convergence:"]
-        self.r2a_label.value = t["Depth Strength:"]
+        self.depth_resolution_label.value = t["Depth Resolution:"]
+        self.convergence_label.value = t["Convergence:"]
+        self.depth_strength_label.value = t["Depth Strength:"]
         self.depth_quick_label.value = t["Depth Quick:"]
         depth_quick_key = self._display_to_depth_quick(self.depth_quick_dd.value)
         self.depth_quick_dd.options = [t["Soft"], t["Standard"], t["Enhanced"]]
         self.depth_quick_dd.value = self._depth_quick_to_display(depth_quick_key)
-        self.r2b_label.value = t["Foreground Scale:"]
-        self.r3a_label.value = t["Anti-aliasing:"]
-        self.r3b_label.value = t["IPD (m):"]
+        self.foreground_scale_label.value = t["Foreground Scale:"]
+        self.antialiasing_label.value = t["Anti-aliasing:"]
+        self.ipd_label.value = t["IPD (m):"]
         self.stereo_scale_label.value = t["Stereo Scale:"]
         self.stereo_preset_label.value = t["Stereo Mode:"]
         preset_key = self._display_to_preset(self.stereo_preset_dd.value)
@@ -2517,7 +1596,7 @@ class Desktop2StereoGUI:
         self.anaglyph_label.value = t["Anaglyph:"]
         self.cross_eyed_cb.label = t["Cross Eyed"]
         self.advanced_stereo_cb.label = t["Advanced Stereo"]
-        self.r4_label.value = t["Inference Acceleration:"]
+        self.acceleration_label.value = t["Inference Acceleration:"]
         self.torch_compile_cb.label = t["torch.compile"]
         self.tensorrt_cb.label = t["TensorRT"]
         self.coreml_cb.label = t["CoreML"]
@@ -2525,13 +1604,13 @@ class Desktop2StereoGUI:
         self.recompile_trt_cb.label = t["Recompile TensorRT"]
         self.recompile_coreml_cb.label = t["Recompile CoreML"]
         self.recompile_openvino_cb.label = t["Recompile OpenVINO"]
-        self.r5_label.value = t["Computing Device:"]
+        self.computing_device_label.value = t["Computing Device:"]
         self.advanced_device_cb.label = t["Advanced Device Options"]
         self.showfps_cb.label = t["Show FPS"]
-        self.r6_label.value = t["Capture Tool:"]
-        self.r7a_label.value = t["Run Mode:"]
-        self.r7b_label.value = t["Display Mode:"]
-        self.xr_preview_cb.label = t.get("XR Preview Window", "XR画面预览窗口" if self.language == "CN" else "XR Preview Window")
+        self.capture_tool_label.value = t["Capture Tool:"]
+        self.run_mode_label.value = t["Run Mode:"]
+        self.display_mode_label.value = t["Display Mode:"]
+        self.xr_preview_cb.label = t.get("XR Preview Window", "XR画面预览窗口" if self.locale == "CN" else "XR Preview Window")
         self.local_vsync_cb.label = t.get("Local VSync", "Local VSync")
         self.target_fps_label.value = t.get("Capture FPS:", "Capture FPS:")
         target_fps_value = self._target_fps_from_display(self.target_fps_dd.value)
@@ -2542,19 +1621,19 @@ class Desktop2StereoGUI:
         upscaler_value = self._upscaler_from_display(self.upscaler_dd.value)
         self.upscaler_dd.options = self._upscaler_display_options()
         self.upscaler_dd.value = self._upscaler_to_display(upscaler_value)
-        self.r9_label.value = t["Stereo Output:"]
+        self.stereo_output_label.value = t["Stereo Output:"]
         self.theme_label.value = t["Theme:"]
         theme_display = ["System","Blue","Green","Red","Purple","Orange","Teal","Pink","Grey"]
         self.theme_dd.options = [t.get(k.lower(), k) for k in theme_display]
         cur = self.theme_dd.value
         cn_map = {"系统":"system","蓝色":"blue","绿色":"green","红色":"red","紫色":"purple","橙色":"orange","青色":"teal","粉色":"pink","灰色":"grey"}
         key = cn_map.get(cur, cur.lower() if cur else "system")
-        self.theme_dd.value = t.get(key, key) if self.language == "CN" else key.capitalize()
+        self.theme_dd.value = t.get(key, key) if self.locale == "CN" else key.capitalize()
         self.fill_16_9_cb.label = t["Fill 16:9"]
         self.fix_aspect_cb.label = t["Fix Viewer Aspect"]
         self.lossless_cb.label = t["Lossless Scaling Support"]
-        self.r10_label.value = t["Controller:"]
-        self.r10b_label.value = t["Environment:"]
+        self.controller_label.value = t["Controller:"]
+        self.environment_label.value = t["Environment:"]
         self.lang_label.value = t["Set Language:"]
         run_mode_texts = {}
         if OS_NAME == "Darwin":
@@ -2649,7 +1728,7 @@ class Desktop2StereoGUI:
             (self.crf_tf, "tooltip_crf"),
             (self.audio_delay_tf, "tooltip_audio_delay"),
         ]:
-            _set_tooltip(ctrl, t.get(key, UI_TEXTS["EN"].get(key, key)))
+            _set_tooltip(ctrl, t.get(key, UI_MESSAGES["EN"].get(key, key)))
         self._auto_align_labels(force=True)
 
     def _safe_update(self, *controls):
@@ -2692,7 +1771,7 @@ class Desktop2StereoGUI:
     def _on_stream_key_change(self, e):
         val = e.control.value or ""
         if not re.match(r'^[A-Za-z0-9_-]*$', val) or len(val) > 64:
-            self.set_status(UI_TEXTS[self.language]["err_stream_key"])
+            self.set_status(UI_MESSAGES[self.locale]["err_stream_key"])
         self._config["Stream Key"] = val
         self.update_stream_url()
 
@@ -2784,9 +1863,9 @@ class Desktop2StereoGUI:
         self._sync_visibility()
         self._fit_window_to_content()
         if self.capture_mode_key == "Monitor" and self.monitor_dd.value:
-            self.set_status(f"{UI_TEXTS[self.language]['Selected input monitor:']} {self.monitor_dd.value}")
+            self.set_status(f"{UI_MESSAGES[self.locale]['Selected input monitor:']} {self.monitor_dd.value}")
         elif self.capture_mode_key == "Window" and self.selected_window_name:
-            self.set_status(f"{UI_TEXTS[self.language]['Selected input window:']} {self.selected_window_name}")
+            self.set_status(f"{UI_MESSAGES[self.locale]['Selected input window:']} {self.selected_window_name}")
 
     def refresh_window_list(self):
         try:
@@ -2816,7 +1895,7 @@ class Desktop2StereoGUI:
                 self.on_window_selected(None)
             self.window_dd.update()
         except Exception as e:
-            self.set_status(UI_TEXTS[self.language]["err_refresh_window"].format(e))
+            self.set_status(UI_MESSAGES[self.locale]["err_refresh_window"].format(e))
 
 
     # URL actions
@@ -2826,12 +1905,12 @@ class Desktop2StereoGUI:
             import webbrowser
             url = self.stream_url_tf.content.controls[0].value
             if not url.startswith(("http://", "https://")):
-                self.set_status(UI_TEXTS[self.language]["invalid_url_scheme"].format(url))
+                self.set_status(UI_MESSAGES[self.locale]["invalid_url_scheme"].format(url))
                 return
             webbrowser.open(url)
-            self.set_status(f"{UI_TEXTS[self.language]['Opening URL in browser']}: {url}")
+            self.set_status(f"{UI_MESSAGES[self.locale]['Opening URL in browser']}: {url}")
         except Exception as ex:
-            self.set_status(UI_TEXTS[self.language]["error_preview"].format(ex))
+            self.set_status(UI_MESSAGES[self.locale]["error_preview"].format(ex))
 
     def copy_url_to_clipboard(self, e):
         url = self.stream_url_tf.content.controls[0].value
@@ -2845,7 +1924,7 @@ class Desktop2StereoGUI:
                     subprocess.run("clip", input=url, text=True, shell=True)
                 elif OS_NAME == "Darwin":
                     subprocess.run("pbcopy", input=url, text=True)
-            self.set_status(UI_TEXTS[self.language]["url_copied"], key="url_copied")
+            self.set_status(UI_MESSAGES[self.locale]["url_copied"], key="url_copied")
             asyncio.create_task(self._fade_status(2.0))
 
     async def _fade_status(self, delay):
@@ -3012,9 +2091,9 @@ class Desktop2StereoGUI:
         ok, err = save_yaml(path, cfg)
         if ok:
             self._config.update(cfg)
-            self.set_status(UI_TEXTS[self.language]["stereo_parameters_saved"], key="stereo_parameters_saved")
+            self.set_status(UI_MESSAGES[self.locale]["stereo_parameters_saved"], key="stereo_parameters_saved")
         else:
-            self.set_status(UI_TEXTS[self.language]["failed_save_yaml"].format(err))
+            self.set_status(UI_MESSAGES[self.locale]["failed_save_yaml"].format(err))
 
     def set_status(self, msg, key=None):
         self.status_text.value = msg
@@ -3036,27 +2115,27 @@ class Desktop2StereoGUI:
         try:
             port_val = int(self.stream_port_tf.value) if self.stream_port_tf.value else DEFAULT_PORT
             if not (1 <= port_val <= 65535):
-                return False, UI_TEXTS[self.language]["Invalid port number (1-65535)"]
+                return False, UI_MESSAGES[self.locale]["Invalid port number (1-65535)"]
         except ValueError:
-            return False, UI_TEXTS[self.language]["Invalid port number (1-65535)"]
+            return False, UI_MESSAGES[self.locale]["Invalid port number (1-65535)"]
         try:
             crf_val = int(self.crf_tf.value) if self.crf_tf.value else DEFAULTS["CRF"]
             if not (0 <= crf_val <= 51):
-                return False, UI_TEXTS[self.language]["err_crf"]
+                return False, UI_MESSAGES[self.locale]["err_crf"]
         except ValueError:
-            return False, UI_TEXTS[self.language]["err_crf"]
+            return False, UI_MESSAGES[self.locale]["err_crf"]
         try:
             delay_val = float(self.audio_delay_tf.value) if self.audio_delay_tf.value else DEFAULTS["Audio Delay"]
             if not (-10 <= delay_val <= 10):
-                return False, UI_TEXTS[self.language]["err_audio_delay"]
+                return False, UI_MESSAGES[self.locale]["err_audio_delay"]
         except ValueError:
-            return False, UI_TEXTS[self.language]["err_audio_delay"]
+            return False, UI_MESSAGES[self.locale]["err_audio_delay"]
         sk = self.stream_key_tf.value or "live"
         if not re.match(r'^[A-Za-z0-9_-]+$', sk) or len(sk) > 64:
-            return False, UI_TEXTS[self.language]["err_stream_key"]
+            return False, UI_MESSAGES[self.locale]["err_stream_key"]
         if self.capture_mode_key == "Window":
             if not self.selected_window_name:
-                return False, UI_TEXTS[self.language]["Please select a window before running in Window capture mode"]
+                return False, UI_MESSAGES[self.locale]["Please select a window before running in Window capture mode"]
             windows = list_windows()
             exists = any(
                 (w.get("handle") is not None and w["handle"] == self.selected_window_handle)
@@ -3064,14 +2143,14 @@ class Desktop2StereoGUI:
                 for w in windows
             )
             if not exists:
-                return False, UI_TEXTS[self.language]["The selected window no longer exists. Please refresh and select a valid window."]
+                return False, UI_MESSAGES[self.locale]["The selected window no longer exists. Please refresh and select a valid window."]
         return True, ""
 
     def save_and_run(self, e):
         """Collect config, save YAML, start subprocess."""
         # Re-entry guard: prevent multiple clicks from launching duplicate processes
         if self._starting or (self.process and self.process.returncode is None):
-            self.set_status(UI_TEXTS[self.language]["A thread already running!"])
+            self.set_status(UI_MESSAGES[self.locale]["A thread already running!"])
             self.page.update()
             return
         ok, err = self._validate_config_before_run()
@@ -3091,12 +2170,12 @@ class Desktop2StereoGUI:
         # Save YAML
         ok, err = save_yaml(os.path.join(BASE_DIR, "settings.yaml"), self._config)
         if not ok:
-            self.set_status(UI_TEXTS[self.language]["failed_save_yaml"].format(err))
+            self.set_status(UI_MESSAGES[self.locale]["failed_save_yaml"].format(err))
             self._starting = False
             self._set_running_ui(False)
             return
 
-        self.set_status(UI_TEXTS[self.language]["Countdown"], key="Countdown")
+        self.set_status(UI_MESSAGES[self.locale]["Countdown"], key="Countdown")
         self.page.update()
 
         # Start process with countdown
@@ -3134,25 +2213,16 @@ class Desktop2StereoGUI:
         }
         return mapping.get(value, 2.0)
 
-    def _stereo_quality_language_key(self):
-        return "zh" if str(getattr(self, "language", "EN")).upper().startswith("ZH") else "en"
-
     def _stereo_quality_options(self):
-        return list(STEREO_QUALITY_DISPLAY[self._stereo_quality_language_key()].values())
+        return stereo_quality_options(self.locale)
 
     def _stereo_quality_to_display(self, value):
-        mapping = STEREO_QUALITY_DISPLAY[self._stereo_quality_language_key()]
-        return mapping.get(str(value or "quality_4k"), mapping["quality_4k"])
+        return stereo_quality_to_display(value, self.locale)
 
     def _display_to_stereo_quality(self, value):
-        text = str(value or "")
-        for mapping in STEREO_QUALITY_DISPLAY.values():
-            for key, label in mapping.items():
-                if text == label or text == key:
-                    return key
-        return "quality_4k"
+        return display_to_stereo_quality(value)
     def _depth_quick_to_display(self, value):
-        return UI_TEXTS[self.language].get(value, value)
+        return UI_MESSAGES[self.locale].get(value, value)
 
     @staticmethod
     def _display_to_depth_quick(value):
@@ -3202,7 +2272,7 @@ class Desktop2StereoGUI:
             "debug_export": "Debug / Export",
         }
         key = mapping.get(str(value or "cinema").strip().lower(), "Cinema")
-        return UI_TEXTS[self.language].get(key, key) if hasattr(self, "language") else key
+        return UI_MESSAGES[self.locale].get(key, key) if hasattr(self, "locale") else key
 
     @staticmethod
     def _clamp_foreground_scale(value):
@@ -3282,7 +2352,7 @@ class Desktop2StereoGUI:
             "Depth Resolution": self._parse_int(self.depth_res_dd.value, DEFAULTS["Depth Resolution"]),
             "FP16": self.fp16_cb.value,
             "Computing Device": self.device_label_to_index.get(self.device_dd.value, DEFAULTS["Computing Device"]),
-            "Language": self.language,
+            "Language": self.locale,
             "Run Mode": self.run_mode_key,
             "XR Preview Window": self.xr_preview_cb.value,
             "Local VSync": self.local_vsync_cb.value,
@@ -3320,7 +2390,7 @@ class Desktop2StereoGUI:
         self._diag("_countdown_and_run scheduled")
         try:
             if self.process and self.process.returncode is None:
-                self.set_status(UI_TEXTS[self.language]["A thread already running!"])
+                self.set_status(UI_MESSAGES[self.locale]["A thread already running!"])
                 self._diag("already running, return")
                 return
             if seconds > 0:
@@ -3342,7 +2412,7 @@ class Desktop2StereoGUI:
                     start_new_session=True,
                 )
             self._diag(f"process started, pid={self.process.pid}")
-            self.set_status(UI_TEXTS[self.language]["Running"], key="Running")
+            self.set_status(UI_MESSAGES[self.locale]["Running"], key="Running")
             self.page.update()
             asyncio.create_task(self._monitor_process_task())
             self._diag("monitor_task created")
@@ -3359,7 +2429,7 @@ class Desktop2StereoGUI:
             self._config["Stereo Preset"] = "cinema"
             save_yaml(os.path.join(BASE_DIR, "settings.yaml"), self._config)
         except Exception as e:
-            self.set_status(UI_TEXTS[self.language]["err_start_failed"].format(e))
+            self.set_status(UI_MESSAGES[self.locale]["err_start_failed"].format(e))
             self.page.update()
         finally:
             self._starting = False
@@ -3391,9 +2461,9 @@ class Desktop2StereoGUI:
             self._starting = False
             code = proc.returncode if proc else None
             if code and code != 0:
-                self.set_status(UI_TEXTS[self.language]["exited_with_code"].format(code))
+                self.set_status(UI_MESSAGES[self.locale]["exited_with_code"].format(code))
             else:
-                self.set_status(UI_TEXTS[self.language]["Stopped"], key="Stopped")
+                self.set_status(UI_MESSAGES[self.locale]["Stopped"], key="Stopped")
             _set_console_quick_edit(True)
             self._set_running_ui(False)
             self._diag("monitor_task done, status updated")
@@ -3462,14 +2532,14 @@ class Desktop2StereoGUI:
                         pass
         print("[Main] Stopped")
         self._starting = False
-        self.set_status(UI_TEXTS[self.language]["Stopped"], key="Stopped")
+        self.set_status(UI_MESSAGES[self.locale]["Stopped"], key="Stopped")
         _set_console_quick_edit(True)
         if not self._closed:
             self._set_running_ui(False)
 
     def reset_defaults(self, e):
-        """Reset to defaults, preserve language & device."""
-        current_lang = self.language
+        """Reset to defaults, preserve locale & device."""
+        current_locale = self.locale
         current_device_label = self.device_dd.value
         current_device_idx = self.device_label_to_index.get(current_device_label, DEFAULTS["Computing Device"])
         current_primary = get_primary_monitor_index()
@@ -3477,11 +2547,11 @@ class Desktop2StereoGUI:
         dynamic_defaults["Monitor Index"] = current_primary
         self.apply_config(dynamic_defaults, keep_optional=False)
 
-        # Restore language & device
-        self.language = current_lang
-        self.lang_dd.value = "English" if current_lang == "EN" else "简体中文"
+        # Restore locale & device
+        self.locale = current_locale
+        self.lang_dd.value = "English" if current_locale == "EN" else "简体中文"
         self.device_dd.value = current_device_label
-        self._config["Language"] = current_lang
+        self._config["Language"] = current_locale
         self._config["Computing Device"] = current_device_idx
 
         self.update_ui_texts()
@@ -3521,7 +2591,7 @@ class Desktop2StereoGUI:
                     elif not self._esc_stopped and (time.time() - self._esc_down >= 3.0):
                         self._esc_stopped = True
                         self._esc_down = None
-                        self.set_status(UI_TEXTS[self.language]["esc_stop"])
+                        self.set_status(UI_MESSAGES[self.locale]["esc_stop"])
                         asyncio.ensure_future(self._async_stop())
                 else:
                     # Reset on release so it can re-trigger next time
@@ -3544,7 +2614,7 @@ class Desktop2StereoGUI:
         elif now - self._esc_down >= 3.0:
             self._esc_stopped = True
             self._esc_down = None
-            self.set_status(UI_TEXTS[self.language]["esc_stop"])
+            self.set_status(UI_MESSAGES[self.locale]["esc_stop"])
             asyncio.ensure_future(self._async_stop())
 
     async def _esc_watch_task(self):
@@ -3557,7 +2627,7 @@ class Desktop2StereoGUI:
                 if time.time() - self._esc_down >= 3.0:
                     self._esc_stopped = True
                     self._esc_down = None
-                    self.set_status(UI_TEXTS[self.language]["esc_stop"])
+                    self.set_status(UI_MESSAGES[self.locale]["esc_stop"])
                     asyncio.ensure_future(self._async_stop())
                     return
         except asyncio.CancelledError:

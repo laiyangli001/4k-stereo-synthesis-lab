@@ -17,7 +17,7 @@ https://github.com/laiyangli001/4k-stereo-synthesis-lab
 Latest pushed commit:
 
 ```text
-Use `git log -1 --oneline` after pulling; this file is updated frequently.
+8ca5b07 feat: refine stereo runtime controls
 ```
 
 Important docs:
@@ -101,6 +101,66 @@ Capture/runtime host integration: runtime-direct GPU paths integrated, real-devi
 
 ## Current Status
 
+### 2026-06-20 Realtime Stereo GUI Defaults + Hot Parameters
+
+Latest pushed commit before the current uncommitted GUI/doc refresh:
+
+```text
+8ca5b07 feat: refine stereo runtime controls
+```
+
+Committed in `8ca5b07`:
+
+- Removed the `Depth Safety` feature and its tests. It was a local heuristic path and is no longer part of the runtime/GUI contract.
+- Removed the stereo scene `Auto` choice from the GUI. The persisted/default stereo preset is now `cinema`; legacy `auto` preset input is still normalized to `cinema` for compatibility.
+- Added `Stereo Scale` next to IPD in the GUI, persisted as `Stereo Scale`, with English/Chinese labels and tooltips.
+- Fixed left/right eye order so ordinary SBS viewing no longer depends on enabling `Cross Eyed` as a workaround.
+- Added static tests for hot-reload stereo parameters and eye-order visual regression coverage.
+- Improved runtime profiling/logging around stereo synthesis stages and removed noisy third-party console messages from the product logs.
+- Kept temporal scene-change detection as a temporal-stability feature, not as stereo scene auto-switching. GPU hot-path sync points were reduced; depth-safety CPU paths were removed with the feature.
+
+Current uncommitted changes after `8ca5b07`:
+
+- `src/gui.py`:
+  - `Temporal Strength` stereo dropdown now uses dense options `0.0` through `1.0` in `0.1` steps, default `0.7`.
+  - Stereo quality localization now treats both `CN` and `ZH` as Chinese, so the quality dropdown shows `最低 / 中等 / 较高 / 最高` instead of `Lowest / Medium / High / Highest` when the GUI language is Chinese.
+- `src/settings.yaml`:
+  - `Stereo Scale: 0.5` is present.
+  - `Temporal Strength` default is aligned to `0.7`.
+- `docs/13-realtime-stereo-parameter-guide.md`:
+  - Temporal Strength GUI range is documented as `0.0-1.0`, step `0.1`, default `0.7`.
+- `tests/test_gui_config.py`:
+  - Added assertions locking the dense Temporal Strength options and `CN`/`ZH` stereo quality language behavior.
+
+Scene reset threshold note:
+
+- The `Scene Reset Threshold` options `0.00, 0.12, 0.18, 0.22, 0.28, 0.35` are hand-tuned temporal reset sensitivity presets, not computed from a formula.
+- Lower values reset temporal history more aggressively on scene changes; higher values are more conservative. `0.22` is the current balanced default.
+- This threshold belongs to temporal stabilization reset behavior and is unrelated to the removed stereo-scene Auto switching UI.
+
+Latest targeted verification for the current uncommitted changes:
+
+```powershell
+src\python3\python.exe -m py_compile src\gui.py tests\test_gui_config.py
+src\python3\python.exe -m pytest tests\test_gui_config.py -q
+```
+
+Result:
+
+```text
+16 passed
+```
+
+Current worktree status at this handoff update:
+
+```text
+M docs/13-realtime-stereo-parameter-guide.md
+M src/gui.py
+M src/settings.yaml
+M tests/test_gui_config.py
+```
+
+Before the next commit, review these four files together. The `src/settings.yaml` diff is currently expected because it keeps GUI defaults aligned with the new controls.
 
 ### 2026-06-19 GUI Runtime Parameter Layout + Streaming Asset Move
 

@@ -11,9 +11,9 @@ if not exist "%APP_DIR%\python3\python.exe" (
     exit /b 1
 )
 
-if not exist "%APP_DIR%\gui.py" (
+if not exist "%APP_DIR%\gui\gui.py" (
     echo [Error] [EN] %APP_DIR%\gui.py not found.
-    echo [Error] [CN] 初始化 Python 环境 ...失败，未找到 %APP_DIR%\gui.py
+    echo [Error] [CN] 初始化 Python 环境 ...失败，未找到 %APP_DIR%\gui\gui.py
     pause
     exit /b 1
 )
@@ -34,3 +34,4 @@ Set "PYTHON_EXE=.\python3\python.exe"
 %PYTHON_EXE% -m gui
 popd
 exit /b 0
+pause

@@ -303,11 +303,12 @@ Depth Antialias Strength: 1.0
 Foreground Scale: 0.5
 IPD: 0.064
 Convergence: 0.25
+Stereo Scale: 0.5
 Stereo Preset: cinema
 Stereo Quality: quality_4k
 Max Shift Ratio: 0.05
 Temporal: true
-Temporal Strength: 0.75
+Temporal Strength: 0.7
 Auto Scene Reset: true
 Scene Reset Threshold: 0.22
 Reset Cooldown Frames: 3
