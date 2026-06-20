@@ -1,8 +1,6 @@
 # main.py
 import threading
 import time
-import signal
-import sys
 import subprocess
 import os
 
@@ -10,10 +8,10 @@ from utils import OS_NAME, OUTPUT_RESOLUTION, CAPTURE_MODE, CAPTURE_TOOL, MONITO
 from capture import capture_frame_to_rgb, prepare_rgb_for_stereo_runtime
 from capture.session import CaptureSessionLoop
 from stereo_runtime.pipeline import RuntimePipelineLoop
-from utils.queue_utils import clear_nonblocking, drain_latest, put_latest
-from app_support.cleanup import cleanup_resources
 from app_support.app_runner import build_app_mode_callbacks, build_current_app_mode_settings, run_app_mode
+from app_support.shutdown import build_cleanup_handler, build_signal_handler, register_signal_handlers
 from app_support.runtime_context import build_capture_callbacks, build_runtime_pipeline_context, create_runtime_context
+from app_support.runtime_callbacks import RuntimeCallbacks
 from streaming.rtmp import global_processes, rtmp_stream
 from viewer.window_utils import is_window_visible_on_screen, list_windows
 
@@ -62,157 +60,24 @@ _source_health = context.source_health
 _fps_breakdown = context.fps_breakdown
 capture_config = context.capture_config
 thread_latencies = context.thread_latencies
-
-def _stereo_warmup_key(rgb_frame):
-    return stereo_warmup_tracker.key_for_frame(rgb_frame)
-
-
-def _warmup_stereo_once_for_frame(rgb_frame):
-    stereo_warmup_tracker.warmup_once_for_frame(rgb_frame)
-
-def _breakdown_inc(name, amount=1):
-    _fps_breakdown.inc(name, amount)
-
-
-def _breakdown_add_time(name, seconds):
-    _fps_breakdown.add_time(name, seconds)
-
-
-def _breakdown_add_runtime_timing(runtime_result):
-    _fps_breakdown.add_runtime_timing(runtime_result)
-
-
-def _log_fps_breakdown(now=None):
-    _fps_breakdown.log(now)
-
-
-def _source_stat_inc(name, amount=1, **values):
-    _source_health.inc(name, amount, **values)
-
-
-def _source_stat_set(**values):
-    _source_health.set(**values)
-
-
-def _log_source_health(now=None, force=False):
-    _source_health.log(now, force)
-
-
-def _openxr_source_paused():
-    return openxr_state.source_paused()
-
-
-def _stop_active_capture_session():
-    global capture_control, capture_session
-    stopped = False
-    try:
-        if capture_control is not None:
-            capture_control.stop()
-            stopped = True
-    except Exception:
-        pass
-    try:
-        if not stopped and capture_session is not None and hasattr(capture_session, "stop"):
-            capture_session.stop()
-            stopped = True
-    except Exception:
-        pass
-    return stopped
-
-
-def _on_openxr_hard_idle_enter():
-    _queue_clear_nonblocking(raw_q)
-    _queue_clear_nonblocking(runtime_q)
-    _stop_active_capture_session()
-
-
-def _openxr_hard_idle_active():
-    return openxr_state.hard_idle_active(on_enter=_on_openxr_hard_idle_enter)
-
-
-def _queue_put_latest(q, item):
-    put_latest(q, item)
-
-
-def _queue_clear_nonblocking(q):
-    clear_nonblocking(q)
-
-
-def _queue_drain_latest(q, first_item):
-    def on_drop():
-        _source_stat_inc("raw_dropped_stale")
-        _breakdown_inc("raw_dropped_stale")
-
-    return drain_latest(q, first_item, on_drop=on_drop)
-
-
-def _update_openxr_runtime_config(*, ipd=None, depth_ratio=None, convergence=None, screen_roll=None):
-    openxr_state.update_runtime_config(
-        ipd=ipd,
-        depth_ratio=depth_ratio,
-        convergence=convergence,
-        screen_roll=screen_roll,
-    )
-
-
-def _current_openxr_render_config():
-    return openxr_state.current_render_config(stereo_runtime)
-
-
-def _apply_stereo_hot_reload_if_needed():
-    stereo_hot_reloader.apply_if_needed(
-        runtime=stereo_runtime,
-        active_preset=stereo_active_preset,
-        on_openxr_config_update=_update_openxr_runtime_config,
-        on_mode_log=_log_stereo_runtime_mode_once,
-    )
-
-def _log_stereo_runtime_mode(reason, decision=None, samples=None, motion=None):
-    stereo_runtime_logger.log_mode(reason, decision=decision, samples=samples, motion=motion)
-
-
-def _log_stereo_runtime_mode_once(reason="active"):
-    stereo_runtime_logger.log_mode_once(reason)
-
-
-def _log_fast_plus_fused_runtime_state(runtime_result):
-    stereo_runtime_logger.log_fast_plus_fused_runtime_state(runtime_result)
-
-
-
-def _capture_session_update(session, control):
-    global capture_control, capture_session
-    capture_session = session
-    capture_control = control
-
-
-def _put_raw_latest(item):
-    was_full = raw_q.full()
-    _queue_put_latest(raw_q, item)
-    return was_full
-
+runtime_callbacks = RuntimeCallbacks(context)
 
 def capture_loop():
     callbacks = build_capture_callbacks(
         raw_q=raw_q,
         shutdown_event=shutdown_event,
-        queue_clear=_queue_clear_nonblocking,
-        inc_source_stat=_source_stat_inc,
-        inc_breakdown=_breakdown_inc,
-        put_raw_latest=_put_raw_latest,
-        is_paused=_openxr_source_paused,
-        is_hard_idle=_openxr_hard_idle_active,
-        on_session_update=_capture_session_update,
-        on_tick=_log_source_health,
+        queue_clear=runtime_callbacks.queue_clear_nonblocking,
+        inc_source_stat=runtime_callbacks.source_stat_inc,
+        inc_breakdown=runtime_callbacks.breakdown_inc,
+        put_raw_latest=runtime_callbacks.put_raw_latest,
+        is_paused=runtime_callbacks.openxr_source_paused,
+        is_hard_idle=runtime_callbacks.openxr_hard_idle_active,
+        on_session_update=runtime_callbacks.capture_session_update,
+        on_tick=runtime_callbacks.log_source_health,
     )
     CaptureSessionLoop(capture_config, callbacks).run(shutdown_event)
 
 # Combined capture-to-runtime processing thread (replaces process_loop and runtime_loop)
-def _set_runtime_preprocess_backend(backend):
-    if FPS_BREAKDOWN_LOG:
-        _fps_breakdown.set_latest("rt_preprocess_backend", backend)
-
-
 def process_runtime_loop():
     pipeline_context = build_runtime_pipeline_context(
         shutdown_event=shutdown_event,
@@ -221,48 +86,38 @@ def process_runtime_loop():
         device=DEVICE,
         capture_frame_to_rgb=capture_frame_to_rgb,
         prepare_rgb_for_stereo_runtime=prepare_rgb_for_stereo_runtime,
-        current_openxr_render_config=_current_openxr_render_config,
-        is_hard_idle=_openxr_hard_idle_active,
-        is_source_paused=_openxr_source_paused,
-        log_source_health=_log_source_health,
-        source_stat_inc=_source_stat_inc,
-        breakdown_inc=_breakdown_inc,
-        breakdown_add_time=_breakdown_add_time,
-        breakdown_add_runtime_timing=_breakdown_add_runtime_timing,
-        set_preprocess_backend=_set_runtime_preprocess_backend,
-        queue_clear=_queue_clear_nonblocking,
-        queue_drain_latest=_queue_drain_latest,
-        queue_put_latest=_queue_put_latest,
-        log_stereo_runtime_mode_once=_log_stereo_runtime_mode_once,
-        apply_stereo_hot_reload_if_needed=_apply_stereo_hot_reload_if_needed,
-        warmup_stereo_once_for_frame=_warmup_stereo_once_for_frame,
-        log_fast_plus_fused_runtime_state=_log_fast_plus_fused_runtime_state,
+        current_openxr_render_config=runtime_callbacks.current_openxr_render_config,
+        is_hard_idle=runtime_callbacks.openxr_hard_idle_active,
+        is_source_paused=runtime_callbacks.openxr_source_paused,
+        log_source_health=runtime_callbacks.log_source_health,
+        source_stat_inc=runtime_callbacks.source_stat_inc,
+        breakdown_inc=runtime_callbacks.breakdown_inc,
+        breakdown_add_time=runtime_callbacks.breakdown_add_time,
+        breakdown_add_runtime_timing=runtime_callbacks.breakdown_add_runtime_timing,
+        set_preprocess_backend=runtime_callbacks.set_runtime_preprocess_backend,
+        queue_clear=runtime_callbacks.queue_clear_nonblocking,
+        queue_drain_latest=runtime_callbacks.queue_drain_latest,
+        queue_put_latest=runtime_callbacks.queue_put_latest,
+        log_stereo_runtime_mode_once=runtime_callbacks.log_stereo_runtime_mode_once,
+        apply_stereo_hot_reload_if_needed=runtime_callbacks.apply_stereo_hot_reload_if_needed,
+        warmup_stereo_once_for_frame=runtime_callbacks.warmup_stereo_once_for_frame,
+        log_fast_plus_fused_runtime_state=runtime_callbacks.log_fast_plus_fused_runtime_state,
     )
     RuntimePipelineLoop(pipeline_context).run()
 
-def cleanup_all_resources():
-    """Global cleanup function"""
-    cleanup_resources(
-        global_processes=global_processes,
-        stop_capture=_stop_active_capture_session,
-        streamer=globals().get("streamer"),
-        queues=[raw_q, runtime_q],
-        queue_timeout=TIME_SLEEP,
-        rtmp_thread=globals().get("rtmp_thread"),
-    )
-def signal_handler(signum, frame):
-    """Handle Ctrl+C and other termination signals"""
-    print(f"\n[Signal] Received signal {signum}, shutting down...")
-    shutdown_event.set()
-    cleanup_all_resources()
-    sys.exit(0)
-
-# Register signal handlers
-signal.signal(signal.SIGINT, signal_handler)
-signal.signal(signal.SIGTERM, signal_handler)
-if OS_NAME != "Windows":
-    signal.signal(signal.SIGQUIT, signal_handler)
-
+cleanup_all_resources = build_cleanup_handler(
+    global_processes=global_processes,
+    stop_capture=runtime_callbacks.stop_active_capture_session,
+    get_streamer=lambda: globals().get("streamer"),
+    queues=[raw_q, runtime_q],
+    queue_timeout=TIME_SLEEP,
+    get_rtmp_thread=lambda: globals().get("rtmp_thread"),
+)
+signal_handler = build_signal_handler(
+    shutdown_event=shutdown_event,
+    cleanup_all_resources=cleanup_all_resources,
+)
+register_signal_handlers(os_name=OS_NAME, signal_handler=signal_handler)
 
 def _set_rtmp_thread(thread):
     global rtmp_thread
@@ -283,13 +138,13 @@ def main(mode="Viewer"):
         )
         app_callbacks = build_app_mode_callbacks(
             shutdown_is_set=shutdown_event.is_set,
-            breakdown_inc=_breakdown_inc,
-            breakdown_add_time=_breakdown_add_time,
-            log_fps_breakdown=_log_fps_breakdown,
+            breakdown_inc=runtime_callbacks.breakdown_inc,
+            breakdown_add_time=runtime_callbacks.breakdown_add_time,
+            log_fps_breakdown=runtime_callbacks.log_fps_breakdown,
             is_window_visible_on_screen=is_window_visible_on_screen,
             set_rtmp_thread=_set_rtmp_thread,
             rtmp_stream=rtmp_stream,
-            update_openxr_runtime_config=_update_openxr_runtime_config,
+            update_openxr_runtime_config=runtime_callbacks.update_openxr_runtime_config,
             render_active_event=openxr_render_active,
             source_active_event=openxr_source_active,
             idle_active_event=openxr_wait_idle_active,

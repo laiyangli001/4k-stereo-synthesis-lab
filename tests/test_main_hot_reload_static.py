@@ -9,9 +9,10 @@ def test_main_has_limited_stereo_hot_reload_path():
 
     context_text = (root / "src" / "app_support" / "runtime_context.py").read_text(encoding="utf-8")
     assert "StereoHotReloader" in context_text
-    assert "def _apply_stereo_hot_reload_if_needed" in main_text
-    assert "stereo_hot_reloader.apply_if_needed" in (root / "src" / "stereo_runtime" / "hot_reload.py").read_text(encoding="utf-8") or "stereo_hot_reloader.apply_if_needed" in main_text
-    assert "_apply_stereo_hot_reload_if_needed()" in main_text
+    callbacks_text = (root / "src" / "app_support" / "runtime_callbacks.py").read_text(encoding="utf-8")
+    assert "def apply_stereo_hot_reload_if_needed" in callbacks_text
+    assert "stereo_hot_reloader.apply_if_needed" in callbacks_text or "apply_if_needed" in callbacks_text
+    assert "apply_stereo_hot_reload_if_needed" in callbacks_text
     assert "reset_temporal=False" not in main_text
 
     hot_reload_source = root / "src" / "stereo_runtime" / "hot_reload.py"
@@ -44,9 +45,10 @@ def test_stereo_warmup_uses_runtime_frame_shape_and_dedup_key():
     main_source = root / "src" / "main.py"
     main_text = main_source.read_text(encoding="utf-8")
 
-    assert "def _stereo_warmup_key(rgb_frame):" in main_text
-    assert "stereo_warmup_tracker.key_for_frame(rgb_frame)" in main_text
-    assert "warmup_stereo_once_for_frame=_warmup_stereo_once_for_frame" in main_text
+    callbacks_text = (root / "src" / "app_support" / "runtime_callbacks.py").read_text(encoding="utf-8")
+    assert "def stereo_warmup_key(self, rgb_frame):" in callbacks_text
+    assert "stereo_warmup_tracker.key_for_frame(rgb_frame)" in callbacks_text
+    assert "warmup_stereo_once_for_frame=runtime_callbacks.warmup_stereo_once_for_frame" in main_text
 
     pipeline_source = root / "src" / "stereo_runtime" / "pipeline.py"
     pipeline_text = pipeline_source.read_text(encoding="utf-8")
