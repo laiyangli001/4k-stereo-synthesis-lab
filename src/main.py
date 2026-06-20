@@ -33,38 +33,11 @@ context = create_runtime_context(
     depth_strength=DEPTH_STRENGTH,
     convergence=CONVERGENCE,
 )
-BASE_DIR = context.base_dir
-USE_CUDART = context.use_cudart
-TIME_SLEEP = context.time_sleep
-OPENXR_RUNTIME_DIRECT = context.openxr_runtime_direct
-raw_q = context.raw_q
-runtime_q = context.runtime_q
-runtime_config = context.runtime_config
-stereo_runtime = context.stereo_runtime
-stereo_auto_enabled = context.stereo_auto_enabled
-stereo_active_preset = context.stereo_active_preset
-stereo_still_duration_s = context.stereo_still_duration_s
-stereo_last_auto_ts = context.stereo_last_auto_ts
-stereo_hot_reloader = context.stereo_hot_reloader
-stereo_warmup_tracker = context.stereo_warmup_tracker
-stereo_runtime_logger = context.stereo_runtime_logger
-openxr_state = context.openxr_state
-openxr_render_active = openxr_state.render_active
-openxr_source_active = openxr_state.source_active
-openxr_wait_idle_active = openxr_state.wait_idle_active
-openxr_bootstrap_done = openxr_state.bootstrap_done
-capture_control = None
-capture_session = None
-FPS_BREAKDOWN_LOG = context.fps_breakdown_log
-_source_health = context.source_health
-_fps_breakdown = context.fps_breakdown
-capture_config = context.capture_config
-thread_latencies = context.thread_latencies
 runtime_callbacks = RuntimeCallbacks(context)
 
 def capture_loop():
     callbacks = build_capture_callbacks(
-        raw_q=raw_q,
+        raw_q=context.raw_q,
         shutdown_event=shutdown_event,
         queue_clear=runtime_callbacks.queue_clear_nonblocking,
         inc_source_stat=runtime_callbacks.source_stat_inc,
@@ -75,7 +48,7 @@ def capture_loop():
         on_session_update=runtime_callbacks.capture_session_update,
         on_tick=runtime_callbacks.log_source_health,
     )
-    CaptureSessionLoop(capture_config, callbacks).run(shutdown_event)
+    CaptureSessionLoop(context.capture_config, callbacks).run(shutdown_event)
 
 # Combined capture-to-runtime processing thread (replaces process_loop and runtime_loop)
 def process_runtime_loop():
@@ -109,8 +82,8 @@ cleanup_all_resources = build_cleanup_handler(
     global_processes=global_processes,
     stop_capture=runtime_callbacks.stop_active_capture_session,
     get_streamer=lambda: globals().get("streamer"),
-    queues=[raw_q, runtime_q],
-    queue_timeout=TIME_SLEEP,
+    queues=[context.raw_q, context.runtime_q],
+    queue_timeout=context.time_sleep,
     get_rtmp_thread=lambda: globals().get("rtmp_thread"),
 )
 signal_handler = build_signal_handler(
@@ -133,8 +106,8 @@ def main(mode="Viewer"):
 
     try:
         app_settings = build_current_app_mode_settings(
-            use_cudart=USE_CUDART,
-            time_sleep=TIME_SLEEP,
+            use_cudart=context.use_cudart,
+            time_sleep=context.time_sleep,
         )
         app_callbacks = build_app_mode_callbacks(
             shutdown_is_set=shutdown_event.is_set,
@@ -145,18 +118,18 @@ def main(mode="Viewer"):
             set_rtmp_thread=_set_rtmp_thread,
             rtmp_stream=rtmp_stream,
             update_openxr_runtime_config=runtime_callbacks.update_openxr_runtime_config,
-            render_active_event=openxr_render_active,
-            source_active_event=openxr_source_active,
-            idle_active_event=openxr_wait_idle_active,
-            render_active_clear=openxr_render_active.clear,
-            source_active_set=openxr_source_active.set,
-            wait_idle_clear=openxr_wait_idle_active.clear,
-            bootstrap_done_set=openxr_bootstrap_done.set,
+            render_active_event=context.openxr_state.render_active,
+            source_active_event=context.openxr_state.source_active,
+            idle_active_event=context.openxr_state.wait_idle_active,
+            render_active_clear=context.openxr_state.render_active.clear,
+            source_active_set=context.openxr_state.source_active.set,
+            wait_idle_clear=context.openxr_state.wait_idle_active.clear,
+            bootstrap_done_set=context.openxr_state.bootstrap_done.set,
         )
         result = run_app_mode(
             mode,
-            runtime_q=runtime_q,
-            thread_latencies=thread_latencies,
+            runtime_q=context.runtime_q,
+            thread_latencies=context.thread_latencies,
             settings=app_settings,
             callbacks=app_callbacks,
         )
