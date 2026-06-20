@@ -1,7 +1,7 @@
-import queue
+﻿import queue
 from types import SimpleNamespace
 
-from app_support.runtime_callbacks import RuntimeCallbacks
+from app_runtime.runtime_callbacks import RuntimeCallbacks
 
 
 class FakeCounter:

@@ -1,9 +1,9 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import queue
 import subprocess
 
-from app_support.cleanup import cleanup_resources
+from app_runtime.cleanup import cleanup_resources
 
 
 class FakeProcess:

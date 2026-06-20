@@ -1,4 +1,4 @@
-# main.py
+﻿# main.py
 import threading
 import time
 import subprocess
@@ -8,10 +8,10 @@ from utils import OS_NAME, OUTPUT_RESOLUTION, CAPTURE_MODE, CAPTURE_TOOL, MONITO
 from capture import capture_frame_to_rgb, prepare_rgb_for_stereo_runtime
 from capture.session import CaptureSessionLoop
 from stereo_runtime.pipeline import RuntimePipelineLoop
-from app_support.app_runner import build_app_mode_callbacks, build_current_app_mode_settings, run_app_mode
-from app_support.shutdown import build_cleanup_handler, build_signal_handler, register_signal_handlers
-from app_support.runtime_context import build_capture_callbacks, build_runtime_pipeline_context, create_runtime_context
-from app_support.runtime_callbacks import RuntimeCallbacks
+from app_runtime.app_runner import build_app_mode_callbacks, build_current_app_mode_settings, run_app_mode
+from app_runtime.shutdown import build_cleanup_handler, build_signal_handler, register_signal_handlers
+from app_runtime.runtime_context import build_capture_callbacks, build_runtime_pipeline_context, create_runtime_context
+from app_runtime.runtime_callbacks import RuntimeCallbacks
 from streaming.rtmp import global_processes, rtmp_stream
 from viewer.window_utils import is_window_visible_on_screen, list_windows
 

@@ -1,4 +1,4 @@
-from app_support.mode_configs import (
+﻿from app_runtime.mode_configs import (
     build_legacy_stream_config,
     build_openxr_runtime_config,
     build_viewer_runtime_config,

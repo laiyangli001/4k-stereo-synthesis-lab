@@ -1,13 +1,13 @@
-from types import SimpleNamespace
+﻿from types import SimpleNamespace
 
-from app_support.shutdown import build_cleanup_handler, build_signal_handler
+from app_runtime.shutdown import build_cleanup_handler, build_signal_handler
 
 
 def test_build_cleanup_handler_passes_current_resources(monkeypatch):
     calls = []
 
     monkeypatch.setattr(
-        "app_support.shutdown.cleanup_resources",
+        "app_runtime.shutdown.cleanup_resources",
         lambda **kwargs: calls.append(kwargs),
     )
 

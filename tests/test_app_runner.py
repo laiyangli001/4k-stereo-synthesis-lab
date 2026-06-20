@@ -1,4 +1,4 @@
-from app_support.app_runner import AppModeCallbacks, AppModeSettings, build_app_mode_callbacks, build_app_mode_settings, build_current_app_mode_settings, run_app_mode
+﻿from app_runtime.app_runner import AppModeCallbacks, AppModeSettings, build_app_mode_callbacks, build_app_mode_settings, build_current_app_mode_settings, run_app_mode
 
 
 def _settings():
@@ -57,7 +57,7 @@ def test_run_app_mode_dispatches_legacy(monkeypatch):
     calls = []
 
     monkeypatch.setattr(
-        "app_support.app_runner.run_legacy_stream_mode",
+        "app_runtime.app_runner.run_legacy_stream_mode",
         lambda runtime_q, config, callbacks, stats: calls.append((config, stats)) or "streamer",
     )
 

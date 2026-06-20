@@ -1,7 +1,7 @@
-import queue
+﻿import queue
 from types import SimpleNamespace
 
-from app_support.runtime_context import build_capture_callbacks, build_runtime_pipeline_context, env_flag, initial_stereo_preset_state
+from app_runtime.runtime_context import build_capture_callbacks, build_runtime_pipeline_context, env_flag, initial_stereo_preset_state
 
 
 def test_env_flag_accepts_common_truthy_values(monkeypatch):

@@ -1,4 +1,4 @@
-
+﻿
 from pathlib import Path
 
 
@@ -7,9 +7,9 @@ def test_main_has_limited_stereo_hot_reload_path():
     main_source = root / "src" / "main.py"
     main_text = main_source.read_text(encoding="utf-8")
 
-    context_text = (root / "src" / "app_support" / "runtime_context.py").read_text(encoding="utf-8")
+    context_text = (root / "src" / "app_runtime" / "runtime_context.py").read_text(encoding="utf-8")
     assert "StereoHotReloader" in context_text
-    callbacks_text = (root / "src" / "app_support" / "runtime_callbacks.py").read_text(encoding="utf-8")
+    callbacks_text = (root / "src" / "app_runtime" / "runtime_callbacks.py").read_text(encoding="utf-8")
     assert "def apply_stereo_hot_reload_if_needed" in callbacks_text
     assert "stereo_hot_reloader.apply_if_needed" in callbacks_text or "apply_if_needed" in callbacks_text
     assert "apply_stereo_hot_reload_if_needed" in callbacks_text
@@ -45,7 +45,7 @@ def test_stereo_warmup_uses_runtime_frame_shape_and_dedup_key():
     main_source = root / "src" / "main.py"
     main_text = main_source.read_text(encoding="utf-8")
 
-    callbacks_text = (root / "src" / "app_support" / "runtime_callbacks.py").read_text(encoding="utf-8")
+    callbacks_text = (root / "src" / "app_runtime" / "runtime_callbacks.py").read_text(encoding="utf-8")
     assert "def stereo_warmup_key(self, rgb_frame):" in callbacks_text
     assert "stereo_warmup_tracker.key_for_frame(rgb_frame)" in callbacks_text
     assert "warmup_stereo_once_for_frame=runtime_callbacks.warmup_stereo_once_for_frame" in main_text
@@ -82,5 +82,5 @@ def test_stereo_scene_auto_switch_removed():
     assert "_update_auto_stereo_mode(runtime_rgb)" not in text
     assert "_ensure_auto_signal_sampler()" not in text
     assert "auto={'on' if stereo_auto_enabled else 'off'}" not in text
-    runtime_context_text = (Path(__file__).resolve().parents[1] / "src" / "app_support" / "runtime_context.py").read_text(encoding="utf-8")
+    runtime_context_text = (Path(__file__).resolve().parents[1] / "src" / "app_runtime" / "runtime_context.py").read_text(encoding="utf-8")
     assert 'return False, "cinema" if preset == "auto" else preset' in runtime_context_text

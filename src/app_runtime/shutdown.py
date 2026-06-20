@@ -1,9 +1,9 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import signal
 import sys
 
-from app_support.cleanup import cleanup_resources
+from app_runtime.cleanup import cleanup_resources
 
 
 def build_cleanup_handler(
