@@ -325,8 +325,8 @@ CoreML: false
 Recompile CoreML: false
 Recompile OpenVINO: false
 Computing Device: 0
-Language: EN
-Run Mode: Local Viewer
+Language: CN
+Run Mode: OpenXR Link
 XR Preview Window: false
 Local VSync: true
 Target FPS: 90
