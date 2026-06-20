@@ -6,20 +6,16 @@ import sys
 import subprocess
 import os
 
-from utils import OS_NAME, OUTPUT_RESOLUTION, DISPLAY_MODE, CAPTURE_MODE, CAPTURE_TOOL, MONITOR_INDEX, SHOW_FPS, FPS, WINDOW_TITLE, IPD, DEPTH_STRENGTH, CONVERGENCE, RUN_MODE, STREAM_MODE, STREAM_PORT, STREAM_QUALITY, STEREOMIX_DEVICE, STREAM_KEY, AUDIO_DELAY, CRF, LOSSLESS_SCALING_SUPPORT, USE_3D_MONITOR, FILL_16_9, LOCAL_VSYNC, UPSCALER, UPSCALER_SHARPNESS, FIX_VIEWER_ASPECT, CAPTURE_MODE, STEREO_DISPLAY_SELECTION, STEREO_DISPLAY_INDEX, shutdown_event, DEVICE_ID, DEVICE_INFO, DEVICE, CONTROLLER_MODEL, ENVIRONMENT_MODEL, XR_PREVIEW_WINDOW, CACHE_PATH, settings
+from utils import OS_NAME, OUTPUT_RESOLUTION, CAPTURE_MODE, CAPTURE_TOOL, MONITOR_INDEX, FPS, WINDOW_TITLE, IPD, DEPTH_STRENGTH, CONVERGENCE, RUN_MODE, STEREOMIX_DEVICE, STREAM_KEY, AUDIO_DELAY, CRF, DEVICE_INFO, DEVICE, CACHE_PATH, settings, shutdown_event, SHOW_FPS
 from capture import capture_frame_to_rgb, prepare_rgb_for_stereo_runtime
 from capture.session import CaptureSessionLoop
 from stereo_runtime.pipeline import RuntimePipelineLoop
-from stereo_runtime.frame_stats import FrameStats
 from utils.queue_utils import clear_nonblocking, drain_latest, put_latest
 from app_support.cleanup import cleanup_resources
-from app_support.mode_configs import build_legacy_stream_config, build_openxr_runtime_config, build_viewer_runtime_config
+from app_support.app_runner import build_app_mode_callbacks, build_current_app_mode_settings, run_app_mode
 from app_support.runtime_context import build_capture_callbacks, build_runtime_pipeline_context, create_runtime_context
 from streaming.rtmp import global_processes, rtmp_stream
-from streaming.legacy_runtime import LegacyStreamCallbacks, run_legacy_stream_mode
 from viewer.window_utils import is_window_visible_on_screen, list_windows
-from viewer.viewer_runtime import ViewerRuntimeCallbacks, run_viewer_mode
-from xr_viewer.openxr_runtime import OpenXRRuntimeCallbacks, run_openxr_mode
 
 context = create_runtime_context(
     file_path=__file__,
@@ -278,97 +274,40 @@ def main(mode="Viewer"):
     # Replace separate process_loop and depth_loop with combined thread
     threading.Thread(target=process_runtime_loop, daemon=True).start()
 
-    stats = FrameStats(low_percentile=0.1).start(time.perf_counter())
-    streamer, window = None, None
+    stats = None
 
     try:
-        if mode == "Viewer":
-            viewer_config = build_viewer_runtime_config(
-                capture_mode=CAPTURE_MODE,
-                monitor_index=MONITOR_INDEX,
-                ipd=IPD,
-                depth_strength=DEPTH_STRENGTH,
-                convergence=CONVERGENCE,
-                display_mode=DISPLAY_MODE,
-                fill_16_9=FILL_16_9,
-                show_fps=SHOW_FPS,
-                use_3d_monitor=USE_3D_MONITOR,
-                fix_viewer_aspect=FIX_VIEWER_ASPECT,
-                stream_mode=STREAM_MODE,
-                lossless_scaling_support=LOSSLESS_SCALING_SUPPORT,
-                stereo_display_selection=STEREO_DISPLAY_SELECTION,
-                stereo_display_index=STEREO_DISPLAY_INDEX,
-                use_cudart=USE_CUDART,
-                device_id=DEVICE_ID,
-                local_vsync=LOCAL_VSYNC,
-                upscaler=UPSCALER,
-                upscaler_sharpness=UPSCALER_SHARPNESS,
-                os_name=OS_NAME,
-                fps=FPS,
-                stream_port=STREAM_PORT,
-                stream_quality=STREAM_QUALITY,
-                time_sleep=TIME_SLEEP,
-            )
-            viewer_callbacks = ViewerRuntimeCallbacks(
-                shutdown_is_set=shutdown_event.is_set,
-                breakdown_inc=_breakdown_inc,
-                breakdown_add_time=_breakdown_add_time,
-                log_fps_breakdown=_log_fps_breakdown,
-                rtmp_stream=rtmp_stream,
-                is_window_visible_on_screen=is_window_visible_on_screen,
-                set_rtmp_thread=_set_rtmp_thread,
-            )
-            stats, streamer, window = run_viewer_mode(
-                runtime_q,
-                viewer_config,
-                viewer_callbacks,
-                thread_latencies,
-            )
-            globals()["streamer"] = streamer
-            globals()["window"] = window
-
-        elif mode == "OpenXR":
-            openxr_config = build_openxr_runtime_config(
-                ipd=IPD,
-                depth_strength=DEPTH_STRENGTH,
-                convergence=CONVERGENCE,
-                fps=FPS,
-                show_fps=SHOW_FPS,
-                controller_model=CONTROLLER_MODEL,
-                environment_model=ENVIRONMENT_MODEL,
-                show_preview_window=XR_PREVIEW_WINDOW,
-                capture_mode=CAPTURE_MODE,
-                monitor_index=MONITOR_INDEX,
-            )
-            openxr_callbacks = OpenXRRuntimeCallbacks(
-                update_runtime_config=_update_openxr_runtime_config,
-                render_active_event=openxr_render_active,
-                source_active_event=openxr_source_active,
-                idle_active_event=openxr_wait_idle_active,
-                render_active_clear=openxr_render_active.clear,
-                source_active_set=openxr_source_active.set,
-                wait_idle_clear=openxr_wait_idle_active.clear,
-                bootstrap_done_set=openxr_bootstrap_done.set,
-            )
-            window = run_openxr_mode(runtime_q, openxr_config, openxr_callbacks)
-            globals()["window"] = window
-        else:
-            legacy_config = build_legacy_stream_config(
-                stream_port=STREAM_PORT,
-                fps=FPS,
-                stream_quality=STREAM_QUALITY,
-                time_sleep=TIME_SLEEP,
-            )
-            legacy_callbacks = LegacyStreamCallbacks(
-                shutdown_is_set=shutdown_event.is_set,
-            )
-            streamer = run_legacy_stream_mode(
-                runtime_q,
-                legacy_config,
-                legacy_callbacks,
-                stats,
-            )
-            globals()["streamer"] = streamer
+        app_settings = build_current_app_mode_settings(
+            use_cudart=USE_CUDART,
+            time_sleep=TIME_SLEEP,
+        )
+        app_callbacks = build_app_mode_callbacks(
+            shutdown_is_set=shutdown_event.is_set,
+            breakdown_inc=_breakdown_inc,
+            breakdown_add_time=_breakdown_add_time,
+            log_fps_breakdown=_log_fps_breakdown,
+            is_window_visible_on_screen=is_window_visible_on_screen,
+            set_rtmp_thread=_set_rtmp_thread,
+            rtmp_stream=rtmp_stream,
+            update_openxr_runtime_config=_update_openxr_runtime_config,
+            render_active_event=openxr_render_active,
+            source_active_event=openxr_source_active,
+            idle_active_event=openxr_wait_idle_active,
+            render_active_clear=openxr_render_active.clear,
+            source_active_set=openxr_source_active.set,
+            wait_idle_clear=openxr_wait_idle_active.clear,
+            bootstrap_done_set=openxr_bootstrap_done.set,
+        )
+        result = run_app_mode(
+            mode,
+            runtime_q=runtime_q,
+            thread_latencies=thread_latencies,
+            settings=app_settings,
+            callbacks=app_callbacks,
+        )
+        stats = result.stats
+        globals()["streamer"] = result.streamer
+        globals()["window"] = result.window
 
     except KeyboardInterrupt:
         print("\n[Main] Keyboard interrupt received, shutting down...")
@@ -379,7 +318,7 @@ def main(mode="Viewer"):
         shutdown_event.set()
         cleanup_all_resources()
 
-        if SHOW_FPS:
+        if SHOW_FPS and stats is not None:
             print(f"Overall Average FPS: {stats.overall_avg_fps(time.perf_counter()):.2f}")
             if stats.fps_values:
                 print(f"Recent Average FPS: {stats.avg_fps:.1f}")
