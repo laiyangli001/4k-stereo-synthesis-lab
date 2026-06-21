@@ -1,4 +1,9 @@
+from pathlib import Path
+
 from viewer.settings import resolve_viewer_settings
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 BASE_SETTINGS = {
@@ -40,3 +45,16 @@ def test_resolve_viewer_settings_requires_vsync_key():
         assert exc.args == ("VSync",)
     else:
         raise AssertionError("resolve_viewer_settings should require VSync")
+
+
+def test_viewer_hip_runtime_searches_rocm_sdk_paths():
+    source = (ROOT / "src" / "viewer" / "viewer.py").read_text(encoding="utf-8")
+
+    assert 'os.path.join(site_packages, "_rocm_sdk_core", "bin")' in source
+    assert 'os.path.join(site_packages, "_rocm_sdk_core", "lib")' in source
+    assert 'os.path.join(site_packages, "_rocm_sdk_devel", "bin")' in source
+    assert 'os.path.join(site_packages, "_rocm_sdk_devel", "lib")' in source
+    assert 'if "HIP_PATH" in os.environ:' in source
+    assert 'os.path.join(os.environ["HIP_PATH"], "bin")' in source
+    assert 'f.startswith("amdhip64") and f.endswith(".dll")' in source
+    assert 'f.startswith("libamdhip64") and ".so" in f' in source
