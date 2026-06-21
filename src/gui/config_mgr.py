@@ -2,7 +2,10 @@
 import os
 import asyncio
 from utils import OS_NAME, ALL_MODELS, DEFAULT_PORT, read_yaml
-from .config import DEFAULTS, DEFAULT_FAMILIES, DEFAULT_MODEL_LIST, FAMILY_TO_SIZES, parse_model_name, save_yaml
+from .config import (
+    DEFAULTS, DEFAULT_FAMILIES, DEFAULT_MODEL_LIST, FAMILY_TO_SIZES,
+    environment_display_label, parse_model_name, save_yaml,
+)
 from .paths import BASE_DIR, DIAG_LOG
 from .localization import UI_MESSAGES
 from .capture_sources import get_monitor_index_for_point, get_primary_monitor_index
@@ -95,8 +98,9 @@ class GUIConfigMixin:
 
         saved_ctrl = cfg.get("Controller Model", DEFAULTS.get("Controller Model", "PICO"))
         self.ctrl_model_dd.value = saved_ctrl if saved_ctrl in self.ctrl_model_dd.options else "PICO"
-        saved_env = cfg.get("Environment Model", DEFAULTS.get("Environment Model", "Default"))
-        self.env_model_dd.value = saved_env if saved_env in self.env_model_dd.options else self.env_model_dd.options[0]
+        saved_env = cfg.get("Environment Model", DEFAULTS.get("Environment Model", "None"))
+        self.env_key = saved_env if saved_env in self.env_model_keys else (self.env_model_keys[0] if self.env_model_keys else "None")
+        self.env_model_dd.value = environment_display_label(self.env_key, self.locale, self.env_model_display_names)
         self.torch_compile_cb.value = cfg.get("torch.compile", False)
         self.tensorrt_cb.value = cfg.get("TensorRT", False)
         self.recompile_trt_cb.value = cfg.get("Recompile TensorRT", DEFAULTS["Recompile TensorRT"])
@@ -227,7 +231,7 @@ class GUIConfigMixin:
             "Audio Delay": self._parse_float(self.audio_delay_tf.value, DEFAULTS["Audio Delay"]),
             "Stereo Output": stereo_idx,
             "Controller Model": self.ctrl_model_dd.value,
-            "Environment Model": self.env_model_dd.value,
+            "Environment Model": self.env_key,
         })
         self.recompile_trt_cb.value = False
         self.recompile_migraphx_cb.value = False

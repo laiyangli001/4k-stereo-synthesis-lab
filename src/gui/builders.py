@@ -5,7 +5,8 @@ from utils import OS_NAME, ALL_MODELS, DEFAULT_PORT
 from .config import (
     DEFAULTS, DEFAULT_FAMILIES, DEFAULT_MODEL_LIST,
     FAMILY_SIZE_TO_MODEL, FAMILY_TO_SIZES,
-    get_environment_model_options, parse_model_name,
+    environment_display_label, get_environment_model_options,
+    load_environment_display_names, parse_model_name,
 )
 from .controls import FONT_SIZE, SCALE, CompactDropdown, CompactTextField, S, set_label_align_width
 from .paths import BASE_DIR
@@ -439,10 +440,17 @@ class GUIBuilderMixin:
             ctrl_dirs = ["PICO"]
         self.ctrl_model_dd = CompactDropdown(options=[c for c in ctrl_dirs], value="PICO", width=S(130))
         self.environment_label = ft.Text("Environment:", size=FONT_SIZE, width=S(130))
-        env_dirs = get_environment_model_options()
+        self.env_model_keys = get_environment_model_options(return_keys=True)
+        self.env_model_display_names = load_environment_display_names(self.env_model_keys)
+        env_options = get_environment_model_options(self.locale)
+        self.env_key = DEFAULTS.get("Environment Model", "None")
+        if self.env_key not in self.env_model_keys:
+            self.env_key = self.env_model_keys[0] if self.env_model_keys else "None"
         self.env_model_dd = CompactDropdown(
-            options=[e for e in env_dirs],
-            value="None" if "None" in env_dirs else env_dirs[0], width=S(130))
+            options=[e for e in env_options],
+            value=environment_display_label(self.env_key, self.locale, self.env_model_display_names),
+            on_select=self.on_env_change,
+            width=S(130))
         self.row7a = ft.Row([self.run_mode_label, self.run_mode_dd, ft.Container(width=S(40)),
             self.display_mode_label, self.display_mode_dd, self.xr_preview_cb], spacing=1)
         self.row7b = ft.Row([self.controller_label, self.ctrl_model_dd, ft.Container(width=S(40)),

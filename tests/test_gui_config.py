@@ -151,6 +151,22 @@ def test_depth_safety_gui_controls_removed():
     assert "depth_safety" not in all_text
 
 
+def test_environment_dropdown_saves_canonical_key():
+    config_text = _config_source().read_text(encoding="utf-8")
+    builders_text = _file_text("builders.py")
+    handlers_text = _file_text("handlers.py")
+    config_mgr_text = _file_text("config_mgr.py")
+
+    assert "def environment_key_from_label" in config_text
+    assert "def environment_display_label" in config_text
+    assert "display_name" in config_text
+    assert "on_select=self.on_env_change" in builders_text
+    assert "def on_env_change" in handlers_text
+    assert 'self._config["Environment Model"] = self.env_key' in handlers_text
+    assert '"Environment Model": self.env_key' in config_mgr_text
+    assert '"Environment Model": self.env_model_dd.value' not in config_mgr_text
+
+
 def test_stereo_scale_control_is_next_to_ipd():
     builders_text = _file_text("builders.py")
     assert 'self.stereo_scale_label = ft.Text("Stereo Scale:"' in builders_text

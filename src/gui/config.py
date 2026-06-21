@@ -123,8 +123,8 @@ DEFAULTS = {
 }
 
 
-def get_environment_model_options():
-    """Return selectable room environment names."""
+def discover_environment_keys():
+    """Return canonical environment keys saved to settings.yaml."""
     env_base = os.path.join(BASE_DIR, "xr_viewer", "environments")
     options = ["None"]
     if not os.path.isdir(env_base):
@@ -134,21 +134,70 @@ def get_environment_model_options():
     room_dirs = []
     for name in os.listdir(env_base):
         room_dir = os.path.join(env_base, name)
-        if not os.path.isdir(room_dir) or name.startswith("."):
-            continue
-        profile_path = os.path.join(room_dir, "profile.json")
-        if not os.path.isfile(profile_path):
-            raise FileNotFoundError(f"[GUI] Missing room profile.json: {profile_path}")
-        try:
-            with open(profile_path, "r", encoding="utf-8-sig") as f:
-                profile = json.load(f)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"[GUI] Invalid room profile.json: {profile_path}: {exc}") from exc
-        if not isinstance(profile, dict):
-            raise ValueError(f"[GUI] Room profile.json root must be an object: {profile_path}")
-        room_dirs.append(name)
+        if os.path.isdir(room_dir) and not name.startswith(".") and os.path.isfile(os.path.join(room_dir, "environment.glb")):
+            room_dirs.append(name)
     options.extend(sorted(room_dirs, key=str.lower))
     return options
+
+
+def load_environment_display_names(keys=None):
+    """Return per-folder display_name values from profile.json."""
+    env_base = os.path.join(BASE_DIR, "xr_viewer", "environments")
+    names_by_key = {}
+    for key in keys or discover_environment_keys():
+        if key in ("None", "Default"):
+            continue
+        names = {}
+        profile_path = os.path.join(env_base, key, "profile.json")
+        try:
+            if os.path.isfile(profile_path):
+                with open(profile_path, "r", encoding="utf-8-sig") as f:
+                    raw = f.read().strip()
+                if raw:
+                    profile = json.loads(raw) or {}
+                    display_name = profile.get("display_name") if isinstance(profile, dict) else None
+                    if isinstance(display_name, dict):
+                        names = {str(k): str(v) for k, v in display_name.items() if v}
+                    elif isinstance(display_name, str) and display_name:
+                        names = {"EN": display_name, "CN": display_name}
+        except (OSError, ValueError):
+            names = {}
+        names_by_key[key] = names
+    return names_by_key
+
+
+def environment_display_label(key, lang="EN", names_by_key=None):
+    """Map canonical environment key to the localized GUI label."""
+    if key == "None":
+        return "None"
+    if key == "Default":
+        return "默认" if lang == "CN" else "Default"
+    names = (names_by_key or {}).get(key) or {}
+    return names.get(lang) or names.get("EN") or key
+
+
+def environment_key_from_label(label, lang="EN", keys=None, names_by_key=None):
+    """Map a localized environment label back to its canonical key."""
+    text = str(label or "").strip()
+    keys = keys or discover_environment_keys()
+    for key in keys:
+        if environment_display_label(key, lang, names_by_key) == text:
+            return key
+    for key in keys:
+        if key.lower() == text.lower():
+            return key
+    if text.lower() == "默认":
+        return "Default"
+    return "None" if "None" in keys else (keys[0] if keys else "None")
+
+
+def get_environment_model_options(lang="EN", return_keys=False):
+    """Return selectable room environment names for the GUI."""
+    keys = discover_environment_keys()
+    if return_keys:
+        return keys
+    names_by_key = load_environment_display_names(keys)
+    return [environment_display_label(key, lang, names_by_key) for key in keys]
 
 
 HAVE_YAML = True

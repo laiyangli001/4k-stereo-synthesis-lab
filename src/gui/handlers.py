@@ -13,7 +13,11 @@ from . import devices as devices_module
 from .capture_sources import (
     get_capture_tool_options, get_primary_monitor_index, list_windows,
 )
-from .config import DEFAULTS, FAMILY_SIZE_TO_MODEL, FAMILY_TO_SIZES
+from .config import (
+    DEFAULTS, FAMILY_SIZE_TO_MODEL, FAMILY_TO_SIZES,
+    environment_display_label, environment_key_from_label,
+    get_environment_model_options, load_environment_display_names,
+)
 from .controls import FONT_SIZE
 from .localization import UI_MESSAGES, is_supported_locale
 from .devices import DEVICES
@@ -302,6 +306,31 @@ class GUIHandlerMixin:
 
     # ── run mode / visibility handlers ──
 
+    def on_env_change(self, e):
+        label = e.control.value if e else self.env_model_dd.value
+        self.env_key = environment_key_from_label(
+            label,
+            self.locale,
+            getattr(self, "env_model_keys", None),
+            getattr(self, "env_model_display_names", None),
+        )
+        self._config["Environment Model"] = self.env_key
+
+    def _refresh_environment_options(self):
+        self.env_model_keys = get_environment_model_options(return_keys=True)
+        self.env_model_display_names = load_environment_display_names(self.env_model_keys)
+        if getattr(self, "env_key", None) not in self.env_model_keys:
+            self.env_key = self.env_model_keys[0] if self.env_model_keys else "None"
+        self.env_model_dd.options = [
+            environment_display_label(key, self.locale, self.env_model_display_names)
+            for key in self.env_model_keys
+        ]
+        self.env_model_dd.value = environment_display_label(
+            self.env_key,
+            self.locale,
+            self.env_model_display_names,
+        )
+
     def on_run_mode_change(self, e):
         label = e.control.value
         texts = UI_MESSAGES[self.locale]
@@ -517,6 +546,7 @@ class GUIHandlerMixin:
         self.lossless_cb.label = t["Lossless Scaling Support"]
         self.controller_label.value = t["Controller:"]
         self.environment_label.value = t["Environment:"]
+        self._refresh_environment_options()
         self.lang_label.value = t["Set Language:"]
         run_mode_texts = {}
         if OS_NAME == "Darwin":
