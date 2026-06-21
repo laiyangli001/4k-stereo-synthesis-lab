@@ -5390,14 +5390,25 @@ class OpenXRViewerCore:
         trans[2, 3] = -self._keyboard_distance
         return trans @ rot_y @ rot_x
 
+    def _status_panel_metrics(self):
+        """Return status panel gap and height in screen-local meters."""
+        if self.screen_height is None:
+            fw, fh = self.frame_size
+            if fh > fw:  # portrait: width becomes height
+                sh = self.screen_width
+            else:
+                sh = self.screen_width * 9.0 / 16.0
+        else:
+            sh = self.screen_height
+        return sh * 0.02, sh / 6.0
+
     def _anchor_keyboard_below_screen(self):
         """Snap the keyboard below the screen's bottom edge, facing the same direction.
 
         The keyboard sits below the FPS overlay panel so it doesn't overlap.
         """
-        FPS_GAP = 0.05   # gap between screen bottom and FPS overlay
-        FPS_H   = 0.12   # FPS overlay panel height
-        KB_GAP  = 0.05   # gap between FPS overlay bottom and keyboard top (same as FPS_GAP)
+        FPS_GAP, FPS_H = self._status_panel_metrics()
+        KB_GAP = FPS_GAP
         if self.screen_height is None:
             fw, fh = self.frame_size
             if fh > fw:  # portrait: width becomes height
@@ -6446,79 +6457,48 @@ class OpenXRViewerCore:
                 data = np.flipud(np.array(img, dtype=np.uint8))
                 self._overlay_tex.write(data.tobytes())
 
-        OVERLAY_H = 0.075  # world-space height (3 rows, shrunk from 0.10)
-        ow, oh    = self._overlay_tex_size
+        # Position below the screen bottom edge, same plane, left-aligned.
+        sh = self.screen_height
+        sx = self.screen_width / 2.0
+        sy = sh / 2.0
+        GAP, OVERLAY_H = self._status_panel_metrics()
+
+        ow, oh = self._overlay_tex_size
         OVERLAY_W = OVERLAY_H * (ow / oh)
 
-        panel_pos = None
-        panel_fwd = None
-        panel_up  = None
+        local_cx = -sx + OVERLAY_W / 2.0
+        local_cy = -sy - GAP - OVERLAY_H / 2.0
 
-        # Try left-controller attachment first; fall back to head-relative
-        if self._grip_mat_l is not None and self._aim_mat_l is not None:
-            # Grip axes in world space (columns of grip_mat)
-            grip_right = self._grip_mat_l[:3, 0].astype('f8')
-            grip_up    = self._grip_mat_l[:3, 1].astype('f8')
-            grip_fwd   = self._grip_mat_l[:3, 2].astype('f8')
-            grip_right /= np.linalg.norm(grip_right) + 1e-10
-            grip_up    /= np.linalg.norm(grip_up) + 1e-10
-            grip_fwd   /= np.linalg.norm(grip_fwd) + 1e-10
+        cy_s = math.cos(self.screen_yaw);   sy_s = math.sin(self.screen_yaw)
+        cp_s = math.cos(self.screen_pitch); sp_s = math.sin(self.screen_pitch)
+        R = (np.array([[ cy_s,  0, sy_s, 0],
+                       [    0,  1,     0, 0],
+                       [-sy_s,  0, cy_s,  0],
+                       [    0,  0,     0, 1]], dtype=np.float32) @
+             np.array([[1,    0,     0, 0],
+                       [0, cp_s, -sp_s, 0],
+                       [0, sp_s,  cp_s, 0],
+                       [0,    0,     0, 1]], dtype=np.float32))
+        T = np.eye(4, dtype=np.float32)
+        T[0, 3] = self.screen_pan_x
+        T[1, 3] = self.screen_pan_y
+        T[2, 3] = -self.screen_distance
 
-            # Laser forward direction (same as _laser_beam_setup)
-            fwd_w = -self._aim_mat_l[:3, 2].astype('f8')
-            right_w = self._aim_mat_l[:3, 0].astype('f8')
-            _ang = math.radians(12); _ca, _sa = math.cos(_ang), math.sin(_ang)
-            _k = right_w / (np.linalg.norm(right_w) + 1e-10)
-            laser_fwd = fwd_w * _ca + np.cross(_k, fwd_w) * _sa + _k * np.dot(_k, fwd_w) * (1 - _ca)
-            laser_fwd /= np.linalg.norm(laser_fwd) + 1e-10
+        S_ov = np.diag([OVERLAY_W / 2.0, OVERLAY_H / 2.0, 1.0, 1.0]).astype(np.float32)
+        T_local = np.eye(4, dtype=np.float32)
+        T_local[0, 3] = local_cx
+        T_local[1, 3] = local_cy
+        model = T @ R @ T_local @ S_ov
 
-            # Laser start point (same origin as _laser_beam_setup)
-            grip_pos = self._grip_mat_l[:3, 3].astype('f8')
-            laser_origin = grip_pos + grip_up * 0.020 + laser_fwd * 0.11
-
-            # Panel faces user: blend grip_up (button-surface normal) with
-            # toward_user (-laser_fwd). Both are controller-relative ->tracks.
-            toward_user = (-laser_fwd).astype('f8')
-            panel_fwd = grip_up + toward_user
-            panel_fwd /= np.linalg.norm(panel_fwd) + 1e-10
-            panel_up  = grip_up.copy()
-
-            # Pre-compute orthonormal basis
-            _pr = np.cross(panel_up, panel_fwd)
-            _pr /= np.linalg.norm(_pr) + 1e-10
-            _pu2 = np.cross(panel_fwd, _pr)
-            _pu2 /= np.linalg.norm(_pu2) + 1e-10
-
-            # Bottom edge midpoint at laser_origin + offset along panel normal.
-            # Top edge fixed at old 0.10 height so shrinking leaves gap below.
-            PANEL_OFFSET = 0.05
-            _top_ref = 0.10  # original OVERLAY_H, top edge anchor
-            panel_pos = laser_origin + panel_fwd * PANEL_OFFSET + _pu2 * (_top_ref - OVERLAY_H / 2.0)
-
-        if panel_pos is None and self._head_pos_w is not None and self._head_fwd_w is not None:
-            # Fallback: 1m in front of head, 0.15m below. Panel faces toward user.
-            hx, hy, hz = self._head_pos_w
-            fx, fy, fz = self._head_fwd_w
-            panel_pos = np.array([hx + fx * 1.0, hy + fy * 1.0 - 0.15, hz + fz * 1.0], dtype='f8')
-            panel_fwd = np.array([-fx, -fy, -fz], dtype='f8')
-            panel_up  = np.array([0.0, 1.0, 0.0], dtype='f8')
-
-        if panel_pos is not None:
-            # Build T @ R @ S: scale -> rotate -> translate
-            S = np.diag([OVERLAY_W/2.0, OVERLAY_H/2.0, 1.0, 1.0]).astype(np.float32)
-            panel_right = np.cross(panel_up, panel_fwd)
-            panel_right /= np.linalg.norm(panel_right) + 1e-10
-            panel_up2 = np.cross(panel_fwd, panel_right)
-            panel_up2 /= np.linalg.norm(panel_up2) + 1e-10
-            R = np.eye(4, dtype=np.float32)
-            R[:3, 0] = panel_right.astype(np.float32)
-            R[:3, 1] = panel_up2.astype(np.float32)
-            R[:3, 2] = panel_fwd.astype(np.float32)
-            T = np.eye(4, dtype=np.float32)
-            T[0, 3] = panel_pos[0]; T[1, 3] = panel_pos[1]; T[2, 3] = panel_pos[2]
-            mvp = vp_mat @ T @ R @ S
+        trigger_held = getattr(self, '_ov_ltrig_held', False) or getattr(self, '_ov_rtrig_held', False)
+        if trigger_held:
+            fade_speed = 8.0
+            dt = max(0.001, getattr(self, '_last_frame_dt', 0.016))
+            self._status_panel_alpha = max(0.15, getattr(self, '_status_panel_alpha', 1.0) - fade_speed * dt)
         else:
-            mvp = vp_mat  # fallback
+            self._status_panel_alpha = 1.0
+
+        mvp = vp_mat @ model
 
         mgl_fbo.use()
         # depth_mask = False  # do not write semi-transparent pixels to depth
@@ -6527,7 +6507,9 @@ class OpenXRViewerCore:
         self.ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
         self._overlay_tex.use(location=2)
         self._overlay_prog['u_mvp'].write(mvp.T.tobytes())
+        self._overlay_prog['u_alpha'].value = self._status_panel_alpha
         self._overlay_vao.render(moderngl.TRIANGLE_STRIP)
+        self._overlay_prog['u_alpha'].value = 1.0
         self.ctx.disable(moderngl.BLEND)
         self.ctx.depth_mask = True
 
@@ -7377,12 +7359,12 @@ class OpenXRViewerCore:
         if not self._fps_overlay_visible or self.screen_height is None:
             return BEAM_MAX
 
-        GAP       = 0.05
-        OVERLAY_H = 0.12
-        ow, oh    = self._overlay_tex_size
+        GAP, OVERLAY_H = self._status_panel_metrics()
+        ow, oh = self._overlay_tex_size
         OVERLAY_W = OVERLAY_H * (ow / oh)
 
         # Panel local-space centre (before yaw/pitch rotation) -matches _render_fps_overlay
+        lx_local = self.screen_pan_x - self.screen_width / 2.0 + OVERLAY_W / 2.0
         ly_local = self.screen_pan_y - self.screen_height / 2.0 - GAP - OVERLAY_H / 2.0
 
         cp  = math.cos(self.screen_pitch); sp  = math.sin(self.screen_pitch)
@@ -7392,7 +7374,7 @@ class OpenXRViewerCore:
         panel_n = np.array([cp * sy_, -sp, cp * cy], dtype='f8')
 
         # Rotate the panel's local centre into world space (same as _screen_world_pos)
-        lx, ly, lz = self.screen_pan_x, ly_local, -self.screen_distance
+        lx, ly, lz = lx_local, ly_local, -self.screen_distance
         ix  =  lx
         iy  =  ly * cp - lz * sp
         iz  =  ly * sp + lz * cp
