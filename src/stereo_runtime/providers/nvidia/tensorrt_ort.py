@@ -8,7 +8,7 @@ import sys
 import torch
 
 from ...depth_onnx_provider import (
-    DistillPreprocessor,
+    ModelOnnxPreprocessor,
     default_onnx_path,
 )
 from ...depth_provider import (
@@ -113,7 +113,7 @@ class DistillAnyDepthBaseTensorRtOrt:
             output_device="cuda",
         )
         self._session = None
-        self._preprocessor = DistillPreprocessor(device=self.device, dtype=self.dtype)
+        self._preprocessor = ModelOnnxPreprocessor(model_id=self.model_id, device=self.device, dtype=self.dtype)
 
     def load(self):
         if self._session is not None:

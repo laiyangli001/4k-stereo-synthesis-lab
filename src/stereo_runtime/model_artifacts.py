@@ -58,6 +58,18 @@ class PreparedModelArtifacts:
         }
 
 
+def _nearest_multiple(value: int, patch: int) -> int:
+    down = (value // patch) * patch
+    up = down + patch
+    return max(patch, up if abs(up - value) <= abs(value - down) else down)
+
+
+def export_size_for_model(model_id: str, export_height: int = 294, export_width: int = 518) -> tuple[int, int]:
+    model_lower = str(model_id).lower()
+    patch = 16 if "infinidepth" in model_lower else 14
+    return _nearest_multiple(int(export_height), patch), _nearest_multiple(int(export_width), patch)
+
+
 def artifact_paths_for_model(
     model_name_or_id: str,
     *,
@@ -69,6 +81,7 @@ def artifact_paths_for_model(
 ) -> ModelArtifactPaths:
     registry = registry or ModelRegistry.default()
     spec = registry.get(model_name_or_id)
+    export_height, export_width = export_size_for_model(spec.model_id, export_height, export_width)
     root = Path(model_dir) if model_dir is not None else resolve_model_dir(spec.model_id, cache_dir)
     return ModelArtifactPaths(
         model_id=spec.model_id,

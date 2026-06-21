@@ -20,6 +20,15 @@ def test_artifact_paths_follow_d2s_naming():
     assert paths.migraphx_fp16_path.name == "model_fp16_294x518.mgx"
 
 
+def test_infinidepth_artifact_paths_use_patch_16_export_size():
+    paths = artifact_paths_for_model("InfiniDepth-Base", cache_dir="models", export_height=294, export_width=518)
+
+    assert paths.model_id == "lc700x/InfiniDepth-Base"
+    assert paths.onnx_fp16_path.name == "model_fp16_288x512.onnx"
+    assert paths.onnx_fp32_path.name == "model_fp32_288x512.onnx"
+    assert paths.trt_fp16_path.name == "model_fp16_288x512.trt"
+
+
 def test_select_existing_onnx_prefers_fp16_for_auto(tmp_path: Path):
     paths = artifact_paths_for_model("Distill-Any-Depth-Base", cache_dir=tmp_path)
     paths.model_dir.mkdir(parents=True)

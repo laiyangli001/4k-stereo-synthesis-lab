@@ -362,7 +362,7 @@ def depth_provider_config_from_runtime(config: StereoRuntimeConfig) -> "DepthPro
         cache_dir=config.model_path.parent,
         onnx_path=config.onnx_path,
         engine_path=engine_path,
-        local_files_only=True,
+        local_files_only=False,
         prefer_native_tensorrt=backend == "tensorrt_native",
         prefer_tensorrt=backend == "tensorrt_native",
         prefer_onnx=backend == "onnx_cuda_iobinding",

@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+import torch
+
 OnnxDtypeMode = Literal["auto", "fp16", "fp32"]
 
 from .model_capabilities import FORCE_FP32_KEYWORDS
@@ -80,8 +82,47 @@ def probe_model_dtype(model, *, device, dtype, height: int, width: int) -> tuple
         return False, f"{type(exc).__name__}: {exc}"
 
 
+class DepthOnnxExportWrapper(torch.nn.Module):
+    def __init__(self, model) -> None:
+        super().__init__()
+        self.model = model
+
+    def forward(self, pixel_values):
+        output = self.model(pixel_values=pixel_values)
+        return _extract_depth_output(output)
+
+
+class InfiniDepthOnnxExportWrapper(torch.nn.Module):
+    def __init__(self, model, *, fp32: bool = False) -> None:
+        super().__init__()
+        self.model = model
+        self.fp32 = bool(fp32)
+
+    def forward(self, pixel_values):
+        return self.model(pixel_values, fp32=self.fp32)
+
+
+def _is_infinidepth_model(model_id: str) -> bool:
+    return "infinidepth" in str(model_id).lower()
+
+
 def load_model_for_dtype(auto_model_cls, model_id: str, *, dtype, device, cache_dir: Path, force_download: bool):
     import torch
+
+    if _is_infinidepth_model(model_id):
+        from models.InfiniDepth.api import InfiniDepthModel
+
+        from .depth_provider import _infinidepth_encoder_for_model, _resolve_hf_model_file
+
+        model_path = _resolve_hf_model_file(
+            model_id,
+            cache_dir,
+            local_files_only=False,
+            force_download=force_download,
+        )
+        model = InfiniDepthModel(model_path=model_path, encoder=_infinidepth_encoder_for_model(model_id)).to(device, dtype=dtype)
+        model.eval()
+        return InfiniDepthOnnxExportWrapper(model, fp32=dtype != torch.float16).eval()
 
     model = auto_model_cls.from_pretrained(
         model_id,
@@ -95,7 +136,7 @@ def load_model_for_dtype(auto_model_cls, model_id: str, *, dtype, device, cache_
     else:
         model.float()
     model.eval()
-    return model
+    return DepthOnnxExportWrapper(model).eval()
 
 
 def export_depth_model_onnx(

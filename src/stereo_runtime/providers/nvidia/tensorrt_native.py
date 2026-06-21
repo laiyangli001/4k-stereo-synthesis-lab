@@ -6,7 +6,7 @@ import time
 
 import torch
 
-from ...depth_onnx_provider import DistillPreprocessor, default_onnx_path
+from ...depth_onnx_provider import ModelOnnxPreprocessor, default_onnx_path
 from ...depth_provider import (
     DISTILL_ANY_DEPTH_BASE_MODEL_ID,
     DISTILL_ANY_DEPTH_BASE_NAME,
@@ -298,7 +298,7 @@ class DistillAnyDepthBaseNativeTensorRt:
             output_device="cuda",
         )
         self._engine: NativeTensorRtEngine | None = None
-        self._preprocessor = DistillPreprocessor(device=self.device, dtype=self.dtype)
+        self._preprocessor = ModelOnnxPreprocessor(model_id=self.model_id, device=self.device, dtype=self.dtype)
 
     def load(self) -> NativeTensorRtEngine:
         if self._engine is not None:

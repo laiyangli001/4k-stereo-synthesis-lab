@@ -15,7 +15,7 @@ from stereo_runtime.depth_provider import (
     create_depth_provider,
     estimate_depth,
 )
-from stereo_runtime.depth_onnx_provider import DistillPreprocessor, _preprocess_distill_rgb, estimate_depth_onnx_cuda
+from stereo_runtime.depth_onnx_provider import DistillPreprocessor, ModelOnnxPreprocessor, _preprocess_distill_rgb, estimate_depth_onnx_cuda
 from stereo_runtime.providers.nvidia.tensorrt_ort import estimate_depth_nvidia_chain
 
 
@@ -167,9 +167,19 @@ def test_generic_provider_predict_profile_with_fake_transformers_model(monkeypat
     assert float(result.depth.max()) <= 1.0
 
 
-def test_create_depth_provider_supports_native_tensorrt(tmp_path):
+def test_create_depth_provider_supports_native_tensorrt(monkeypatch, tmp_path):
     from stereo_runtime.providers.nvidia.tensorrt_native import NativeTensorRtDepthProvider
 
+    class Paths:
+        trt_fp16_path = tmp_path / "model.trt"
+
+    class Artifacts:
+        selected_onnx_path = tmp_path / "model.onnx"
+        paths = Paths()
+
+    import stereo_runtime.depth_provider as provider_module
+
+    monkeypatch.setattr(provider_module, "_prepare_accelerated_artifacts", lambda *args, **kwargs: Artifacts())
     engine_path = tmp_path / "model.trt"
     provider = create_depth_provider(
         DepthProviderConfig(
@@ -183,6 +193,7 @@ def test_create_depth_provider_supports_native_tensorrt(tmp_path):
 
     assert isinstance(provider, NativeTensorRtDepthProvider)
     assert provider.info.depth_backend == "tensorrt_native"
+    assert provider.onnx_path == tmp_path / "model.onnx"
     assert provider.engine_path == engine_path
     assert provider.build_engine is True
 
@@ -253,6 +264,22 @@ def test_distill_preprocessor_matches_reference():
     actual = DistillPreprocessor(device=device, dtype=dtype)(rgb)
 
     assert torch.equal(actual, expected)
+
+
+def test_infinidepth_onnx_preprocessor_uses_patch_16_without_normalization():
+    rgb = torch.linspace(0, 1, steps=3 * 12 * 18, dtype=torch.float32).view(1, 3, 12, 18)
+    preprocessor = ModelOnnxPreprocessor(
+        model_id="lc700x/InfiniDepth-Base",
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+    )
+
+    actual = preprocessor(rgb)
+
+    assert actual.shape[-2] % 16 == 0
+    assert actual.shape[-1] % 16 == 0
+    assert float(actual.min()) >= 0.0
+    assert float(actual.max()) <= 1.0
 
 def test_distill_preprocessor_can_use_fixed_tensorrt_input_size():
     rgb = torch.zeros(1, 3, 2160, 1920)

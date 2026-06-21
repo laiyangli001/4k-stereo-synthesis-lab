@@ -11,9 +11,11 @@ from .depth_provider import (
     DISTILL_ANY_DEPTH_BASE_NAME,
     DISTILL_ANY_DEPTH_BASE_RESOLUTION,
     DISTILL_ANY_DEPTH_PATCH_SIZE,
+    INFINIDEPTH_PATCH_SIZE,
     DepthProfileResult,
     DepthProviderInfo,
     TorchDepthProvider,
+    _is_infinidepth_model,
     _model_input_size,
     _normalize_depth,
     default_lab_cache_dir,
@@ -52,18 +54,22 @@ def _preprocess_distill_rgb(rgb: torch.Tensor, *, device: torch.device, dtype: t
     return (tensor - mean) / std
 
 
-class DistillPreprocessor:
+class ModelOnnxPreprocessor:
     def __init__(
         self,
         *,
+        model_id: str,
         device: torch.device,
         dtype: torch.dtype,
         fixed_input_size: tuple[int, int] | None = None,
     ) -> None:
+        self.model_id = model_id
         self.device = device
         self.dtype = dtype
         self.fixed_input_size = fixed_input_size
         self._shape_cache: dict[tuple[int, int], tuple[int, int]] = {}
+        self._is_infinidepth = _is_infinidepth_model(model_id)
+        self._patch_size = INFINIDEPTH_PATCH_SIZE if self._is_infinidepth else DISTILL_ANY_DEPTH_PATCH_SIZE
         self._mean = torch.tensor([0.485, 0.456, 0.406], device=device, dtype=dtype).view(1, 3, 1, 1)
         self._std = torch.tensor([0.229, 0.224, 0.225], device=device, dtype=dtype).view(1, 3, 1, 1)
 
@@ -78,7 +84,7 @@ class DistillPreprocessor:
             height,
             width,
             DISTILL_ANY_DEPTH_BASE_RESOLUTION,
-            DISTILL_ANY_DEPTH_PATCH_SIZE,
+            self._patch_size,
         )
         self._shape_cache[key] = size
         return size
@@ -94,7 +100,25 @@ class DistillPreprocessor:
             align_corners=False,
             antialias=True if self.device.type == "cuda" else False,
         ).to(self.dtype)
+        if self._is_infinidepth:
+            return tensor
         return (tensor - self._mean) / self._std
+
+
+class DistillPreprocessor(ModelOnnxPreprocessor):
+    def __init__(
+        self,
+        *,
+        device: torch.device,
+        dtype: torch.dtype,
+        fixed_input_size: tuple[int, int] | None = None,
+    ) -> None:
+        super().__init__(
+            model_id=DISTILL_ANY_DEPTH_BASE_MODEL_ID,
+            device=device,
+            dtype=dtype,
+            fixed_input_size=fixed_input_size,
+        )
 
 
 class DistillAnyDepthBaseOnnxCuda:
@@ -136,7 +160,7 @@ class DistillAnyDepthBaseOnnxCuda:
             output_device="cuda" if self.use_iobinding else "cpu",
         )
         self._session = None
-        self._preprocessor = DistillPreprocessor(device=self.device, dtype=self.dtype)
+        self._preprocessor = ModelOnnxPreprocessor(model_id=self.model_id, device=self.device, dtype=self.dtype)
 
     def load(self):
         if self._session is not None:

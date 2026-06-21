@@ -548,6 +548,25 @@ def _postprocess_generic_depth(depth: torch.Tensor, model_id: str) -> torch.Tens
     return _normalize_depth(depth)
 
 
+def _prepare_accelerated_artifacts(cfg: DepthProviderConfig, *, build_trt: bool = False):
+    from .model_artifacts import prepare_model_artifacts
+
+    cache_dir = Path(cfg.cache_dir) if cfg.cache_dir is not None else default_lab_cache_dir()
+    model_dir = Path(cfg.onnx_path).parent if cfg.onnx_path is not None else None
+    result = prepare_model_artifacts(
+        cfg.model_id,
+        cache_dir=cache_dir,
+        model_dir=model_dir,
+        local_files_only=cfg.local_files_only,
+        force_download=cfg.force_download,
+        download_if_missing=not cfg.local_files_only,
+        export_onnx_if_missing=True,
+        build_trt_if_missing=build_trt,
+        force_rebuild_trt=cfg.force_rebuild,
+    )
+    return result
+
+
 def create_depth_provider(config: DepthProviderConfig | dict[str, Any] | None = None):
     cfg = config if isinstance(config, DepthProviderConfig) else DepthProviderConfig(**(config or {}))
     backend = cfg.backend
@@ -627,11 +646,16 @@ def create_depth_provider(config: DepthProviderConfig | dict[str, Any] | None = 
     ):
         from .providers.nvidia.tensorrt_native import NativeTensorRtDepthProvider
 
+        artifacts = _prepare_accelerated_artifacts(cfg, build_trt=cfg.build_engine or cfg.force_rebuild)
+        onnx_path = artifacts.selected_onnx_path or cfg.onnx_path
+        engine_path = artifacts.paths.trt_fp16_path if cfg.engine_path is None else cfg.engine_path
         return NativeTensorRtDepthProvider(
             device=device,
             cache_dir=cfg.cache_dir,
-            onnx_path=cfg.onnx_path,
-            engine_path=cfg.engine_path,
+            onnx_path=onnx_path,
+            engine_path=engine_path,
+            model_id=cfg.model_id,
+            model_name=cfg.model_name,
             build_engine=cfg.build_engine,
             force_rebuild=cfg.force_rebuild,
             use_cuda_graph=cfg.use_cuda_graph or backend == "tensorrt_native_graph",
@@ -643,11 +667,14 @@ def create_depth_provider(config: DepthProviderConfig | dict[str, Any] | None = 
     if backend in {"distill_base_nvidia", "nvidia_chain", "tensorrt", "tensorrt_ort"} and cfg.prefer_tensorrt:
         from .providers.nvidia.tensorrt_ort import TensorRtOrtDepthProvider
 
+        artifacts = _prepare_accelerated_artifacts(cfg)
         return TensorRtOrtDepthProvider(
             device=device,
             cache_dir=cfg.cache_dir,
-            onnx_path=cfg.onnx_path,
+            onnx_path=artifacts.selected_onnx_path or cfg.onnx_path,
             trt_cache_dir=cfg.trt_cache_dir,
+            model_id=cfg.model_id,
+            model_name=cfg.model_name,
             depth_upsample=cfg.depth_upsample,
             depth_upsample_edge_strength=cfg.depth_upsample_edge_strength,
         )
@@ -655,10 +682,13 @@ def create_depth_provider(config: DepthProviderConfig | dict[str, Any] | None = 
     if backend in {"distill_base_nvidia", "nvidia_chain", "onnx_cuda", "onnx_cuda_iobinding"} and cfg.prefer_onnx:
         from .providers.nvidia.onnx_cuda import OnnxCudaDepthProvider
 
+        artifacts = _prepare_accelerated_artifacts(cfg)
         return OnnxCudaDepthProvider(
             device=device,
             cache_dir=cfg.cache_dir,
-            onnx_path=cfg.onnx_path,
+            onnx_path=artifacts.selected_onnx_path or cfg.onnx_path,
+            model_id=cfg.model_id,
+            model_name=cfg.model_name,
             use_iobinding=cfg.use_iobinding,
             use_dlpack=cfg.use_dlpack,
             depth_upsample=cfg.depth_upsample,
