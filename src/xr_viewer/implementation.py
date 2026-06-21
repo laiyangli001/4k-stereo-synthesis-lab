@@ -3240,6 +3240,13 @@ class OpenXRViewerCore:
         self._key_callback_ref = self._make_key_callback()
         glfw.set_key_callback(self.window, self._key_callback_ref)
 
+    def _toggle_status_panel(self):
+        self._fps_overlay_visible = not self._fps_overlay_visible
+
+    def _cycle_status_panel_mode(self):
+        self._panel_mode = (self._panel_mode + 1) % 3
+        self._fps_overlay_visible = self._panel_mode != 2
+
     def _make_key_callback(self):
         viewer = self
         def _cb(window, key, scancode, action, mods):
@@ -3248,8 +3255,7 @@ class OpenXRViewerCore:
             d = 0.1; s = 0.15; p = 0.1; r = 0.05
             screen_locked = viewer._environment_screen_locked()
             if key == glfw.KEY_F:
-                viewer._panel_mode = (viewer._panel_mode + 1) % 3
-                viewer._fps_overlay_visible = viewer._panel_mode != 2
+                viewer._toggle_status_panel()
             elif key == glfw.KEY_Z:
                 viewer.depth_strength = max(0.0, viewer.depth_strength - 0.01)
             elif key == glfw.KEY_C:
@@ -10246,8 +10252,7 @@ class OpenXRViewerCore:
             self._menu_long_fired = False
         if not menu_now and self._menu_pressed_last:
             if not self._menu_long_fired and (time.perf_counter() - self._menu_press_t) < MENU_LONG:
-                self._panel_mode = (self._panel_mode + 1) % 3
-                self._fps_overlay_visible = self._panel_mode != 2
+                self._toggle_status_panel()
         self._menu_pressed_last = menu_now
 
         # A / B (right):
@@ -10262,8 +10267,6 @@ class OpenXRViewerCore:
             # If right-grip is held we intentionally do not perform A/B immediate
             # actions here (depth_ratio is adjusted via right-stick Y below).
             if not grip_r:
-                # Use XR runtime's `changed` flag when available -more reliable than
-                # manual frame-to-frame tracking when a button sits under a resting thumb.
                 # A: long press 1s ->toggle FPS/status panel
                 A_LONG = 1.0
                 if a_now and not self._a_last:
@@ -10271,8 +10274,7 @@ class OpenXRViewerCore:
                     self._a_long_fired = False
                 if a_now and not self._a_long_fired:
                     if time.perf_counter() - self._a_press_t >= A_LONG:
-                        self._panel_mode = (self._panel_mode + 1) % 3
-                        self._fps_overlay_visible = self._panel_mode != 2
+                        self._toggle_status_panel()
                         self._a_long_fired = True
                 if not a_now and self._a_last and not self._a_long_fired:
                     self._screen_curved = not self._screen_curved
@@ -10289,6 +10291,7 @@ class OpenXRViewerCore:
                     self._b_long_fired = False
                 if b_now and not self._b_long_fired:
                     if time.perf_counter() - self._b_press_t >= B_LONG:
+                        self._cycle_status_panel_mode()
                         self._b_long_fired = True
                 if not b_now and self._b_last and not self._b_long_fired:
                     if not hasattr(self, '_bg_color_saved_for_b') or self._bg_color_saved_for_b is None:
