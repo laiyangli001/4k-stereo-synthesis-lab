@@ -65,6 +65,7 @@ class OpenXRViewer(OpenXRViewerCore, OverlayMixin):
         self._env_texture_anisotropy = float(base['texture_anisotropy'])
         self._env_perf_log = bool(base.get('perf_log', False))
         self._xr_render_scale = float(base['xr_render_scale'])
+        self._screen_light_intensity = float(base.get('screen_light_intensity', self._screen_light_intensity))
 
 
     def _configure_environment_profile(self):
@@ -155,6 +156,11 @@ class OpenXRViewer(OpenXRViewerCore, OverlayMixin):
                 self._xr_render_scale = max(0.5, min(1.0, float(profile['xr_render_scale'])))
             except (TypeError, ValueError):
                 pass
+        if 'screen_light_intensity' in profile:
+            try:
+                self._screen_light_intensity = float(profile['screen_light_intensity'])
+            except (TypeError, ValueError):
+                pass
 
         self._env_head_light_color = tuple(self._profile_vec3(
             profile, ('env_head_light_color', 'head_light_color'), self._env_head_light_color))
@@ -182,7 +188,20 @@ class OpenXRViewer(OpenXRViewerCore, OverlayMixin):
     def _configure_profile_view_layout(self):
         """Cache optional room-specific viewer and screen layout settings."""
         profile = self._env_profile if isinstance(self._env_profile, dict) else {}
-        view_pose = profile.get('view_pose', profile.get('camera', {}))
+        view_poses = profile.get('view_poses')
+        if isinstance(view_poses, list):
+            self._view_pose_profiles = [p for p in view_poses if isinstance(p, dict)]
+        else:
+            self._view_pose_profiles = []
+        try:
+            self._view_pose_index = int(profile.get('view_pose_index', 0))
+        except (TypeError, ValueError):
+            self._view_pose_index = 0
+        if self._view_pose_profiles:
+            self._view_pose_index %= len(self._view_pose_profiles)
+            view_pose = self._view_pose_profiles[self._view_pose_index]
+        else:
+            view_pose = profile.get('view_pose', profile.get('camera', {}))
         screen = profile.get('screen', {})
         self._view_pose_profile = view_pose if isinstance(view_pose, dict) else {}
         self._screen_profile = screen if isinstance(screen, dict) else {}

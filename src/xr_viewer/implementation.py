@@ -2578,6 +2578,11 @@ class OpenXRViewerCore:
         self._environment_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'environments')
         self._available_environment_models = self._discover_environment_models()
         self._env_profile = {}
+        self._screen_profile = {}
+        self._view_pose_profile = {}
+        self._view_pose_profiles = []
+        self._view_pose_index = 0
+        self._screen_light_intensity = float(kwargs.get('screen_light_intensity', 3.5))
         self._env_model_path = None
         self._env_model_prims = []        # list of {'vao', 'vbo', 'ibo', 'tex_key', 'tri_count'}
         self._scene_lights = []            # KHR_lights_punctual lights
@@ -2629,6 +2634,7 @@ class OpenXRViewerCore:
             'texture_anisotropy': self._env_texture_anisotropy,
             'perf_log': self._env_perf_log,
             'xr_render_scale': self._xr_render_scale,
+            'screen_light_intensity': self._screen_light_intensity,
         }
         self._configure_environment_profile()
 
@@ -2769,6 +2775,18 @@ class OpenXRViewerCore:
         self._screen_grab_grip_l = None  # grab offset (screen_centre - grip_pos) for left
         self._screen_grab_grip_r = None  # grab offset (screen_centre - grip_pos) for right
         self._resizing       = False  # right grip held ->resize mode
+        self._seat_adjust_active = False
+        self._seat_adjust_t = 0.0
+        self._seat_adjust_osd_tex = None
+        self._seat_adjust_osd_vao = None
+        self._seat_adjust_osd_tex_size = (768, 78)
+        self._seat_adjust_osd_show_t = 0.0
+        self._seat_adjust_osd_alpha = 0.0
+        self._seat_adjust_osd_dirty = True
+        self._seat_adjust_grip_move = False
+        self._both_grips_last = False
+        self._both_grips_hold_t = 0.0
+        self._both_grips_long_fired = False
         self._a_last         = False  # A-button previous frame state
         self._a_press_t      = 0.0    # A-button long-press start time
         self._a_long_fired   = False  # A-button long-press already fired
@@ -3406,6 +3424,15 @@ class OpenXRViewerCore:
         vbo_bosd = self.ctx.buffer(vertices.tobytes())
         self._brand_osd_vao = self.ctx.vertex_array(
             self._overlay_prog, [(vbo_bosd, '2f 2f', 'in_position', 'in_uv')]
+        )
+
+        # Seat adjustment OSD
+        saw, sah = self._seat_adjust_osd_tex_size
+        self._seat_adjust_osd_tex = self.ctx.texture((saw, sah), 4, dtype='f1')
+        self._seat_adjust_osd_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
+        vbo_seat_osd = self.ctx.buffer(vertices.tobytes())
+        self._seat_adjust_osd_vao = self.ctx.vertex_array(
+            self._overlay_prog, [(vbo_seat_osd, '2f 2f', 'in_position', 'in_uv')]
         )
 
         # Help panel: follows right controller, shows key functions (reuses _overlay_prog)
@@ -6536,6 +6563,199 @@ class OpenXRViewerCore:
     def _cycle_screen_preset(self):
         return self._apply_preset(self._preset_index + 1)
 
+    def _reset_seating_vertical(self):
+        view = getattr(self, '_view_pose_profile', {}) or {}
+        if not isinstance(view, dict) or not view:
+            return
+        if 'y' in view:
+            x, y, z, angle = self._seat_adjust_current_pos()
+            self._apply_seat_adjust_xr_space(x, y, z, angle)
+            return
+        views = getattr(self, '_last_located_views', None)
+        if not views or views[0] is None or views[1] is None:
+            return
+        raw_head = self._head_model_mat4_from_views(views)
+        if raw_head is None:
+            return
+        auto_center = bool(view.get('auto_center_on_screen', False))
+        pos_keys = ('position', 'camera_position', 'viewer_position')
+        rot_deg_keys = ('rotation_deg', 'camera_rotation_deg', 'viewer_rotation_deg')
+        rot_rad_keys = ('rotation', 'camera_rotation', 'viewer_rotation')
+        has_rot = any(key in view for key in rot_deg_keys + rot_rad_keys)
+        has_pos = any(key in view for key in pos_keys)
+        if auto_center:
+            auto_pos = self._auto_view_position_from_screen(view, has_rot, rot_deg_keys, rot_rad_keys)
+            if auto_pos is None and has_pos:
+                auto_pos = self._profile_vec3(view, pos_keys, [0.0, 0.0, 0.0])
+            if auto_pos is None:
+                return
+            desired_y = float(auto_pos[1])
+        elif has_pos:
+            desired_y = float(self._profile_vec3(view, pos_keys, [0.0, 0.0, 0.0])[1])
+        else:
+            return
+        current_space = getattr(self, '_xr_space_pose_in_ref', np.eye(4, dtype=np.float32))
+        native_head_y = float((current_space @ raw_head)[1, 3])
+        dy = native_head_y - desired_y
+        new_space_in_ref = current_space.copy()
+        new_space_in_ref[1, 3] = dy
+        try:
+            new_space = xr.create_reference_space(
+                self._xr_session,
+                xr.ReferenceSpaceCreateInfo(
+                    reference_space_type=self._xr_ref_space_type,
+                    pose_in_reference_space=mat4_to_xr_posef(new_space_in_ref),
+                ),
+            )
+        except Exception as exc:
+            print(f"[OpenXRViewer] Vertical reseat failed: {exc}")
+            return
+        old_space = self._xr_space
+        self._xr_space = new_space
+        self._xr_space_pose_in_ref = new_space_in_ref
+        if old_space is not None:
+            try:
+                xr.destroy_space(old_space)
+            except Exception:
+                pass
+        print(f"[OpenXRViewer] Vertical reseat: desired_y={desired_y:.3f} native_y={native_head_y:.3f}")
+
+    def _seat_adjust_current_pos(self):
+        view = getattr(self, '_view_pose_profile', {}) or {}
+        try:
+            x = float(view.get('x', 0.0))
+            y = float(view.get('y', 0.6))
+            z = float(view.get('z', 0.0))
+            angle = float(view.get('angle', 0.0))
+        except (TypeError, ValueError):
+            x, y, z, angle = 0.0, 0.6, 0.0, 0.0
+        return x, y, z, angle
+
+    def _enter_seat_adjust_mode(self):
+        if self._seat_adjust_active:
+            return
+        self._seat_adjust_active = True
+        self._seat_adjust_t = time.perf_counter()
+        self._seat_adjust_osd_show_t = time.perf_counter()
+        self._seat_adjust_osd_dirty = True
+        self._seat_adjust_grip_move = False
+        print("[OpenXRViewer] Entered seat adjust mode")
+
+    def _exit_seat_adjust_mode(self, save=True):
+        if not self._seat_adjust_active:
+            return
+        self._seat_adjust_active = False
+        if save:
+            self._save_view_pose_to_profile()
+        self._seat_adjust_osd_dirty = True
+        print("[OpenXRViewer] Exited seat adjust mode (saved=%s)" % save)
+
+    def _apply_seat_adjust_xr_space(self, x, y, z, angle):
+        screen = getattr(self, '_screen_profile', {}) or {}
+        if not isinstance(screen, dict) or not screen:
+            return
+        position = screen.get('position', screen.get('screen_position'))
+        if not isinstance(position, (list, tuple)) or len(position) < 3:
+            return
+        try:
+            screen_pos = np.array([float(position[0]), float(position[1]), float(position[2])], dtype=np.float32)
+        except (TypeError, ValueError):
+            return
+        screen_rot = self._profile_rotation_rad(
+            screen,
+            ('rotation_deg', 'screen_rotation_deg'),
+            ('rotation', 'screen_rotation'),
+            [0.0, 0.0, 0.0],
+        )
+        screen_mat = euler_to_mat4(*screen_rot).astype(np.float32)
+        screen_normal = screen_mat[:3, 2].copy()
+        screen_right = screen_mat[:3, 0].copy()
+        screen_up = screen_mat[:3, 1].copy()
+        viewer_pos = screen_pos + screen_right * float(x) + screen_normal * float(y) + screen_up * float(z)
+        angle_rad = math.radians(float(angle))
+        face_screen_yaw = math.atan2(float(screen_normal[0]), float(screen_normal[2]))
+        viewer_yaw = face_screen_yaw + angle_rad
+        desired_head = euler_to_mat4(viewer_yaw, 0.0, 0.0).astype(np.float32)
+        desired_head[:3, 3] = viewer_pos
+        views = getattr(self, '_last_located_views', None)
+        if not views or views[0] is None or views[1] is None:
+            return
+        raw_head = self._head_model_mat4_from_views(views)
+        if raw_head is None:
+            return
+        current_space_in_ref = getattr(self, '_xr_space_pose_in_ref', np.eye(4, dtype=np.float32))
+        reference_head = current_space_in_ref @ raw_head
+        leveled = self._level_head_model_mat4(reference_head)
+        if leveled is not None:
+            reference_head = leveled
+        space_in_ref = reference_head @ np.linalg.inv(desired_head)
+        try:
+            new_space = xr.create_reference_space(
+                self._xr_session,
+                xr.ReferenceSpaceCreateInfo(
+                    reference_space_type=self._xr_ref_space_type,
+                    pose_in_reference_space=mat4_to_xr_posef(space_in_ref.astype(np.float32)),
+                ),
+            )
+        except Exception as exc:
+            print(f"[OpenXRViewer] Seat adjust XR space failed: {exc}")
+            return
+        old_space = self._xr_space
+        self._xr_space = new_space
+        self._xr_space_pose_in_ref = space_in_ref.astype(np.float32)
+        if old_space is not None:
+            try:
+                xr.destroy_space(old_space)
+            except Exception:
+                pass
+
+    def _save_view_pose_to_profile(self):
+        view = getattr(self, '_view_pose_profile', {}) or {}
+        if not isinstance(view, dict):
+            return
+        env_name = getattr(self, '_active_environment', None) or getattr(self, '_environment_model', None)
+        if not env_name or str(env_name).lower() in ('default', 'default glow', 'none'):
+            return
+        room_dir = os.path.join(self._environment_root, str(env_name))
+        profile_path = os.path.join(room_dir, 'profile.json')
+        if not os.path.exists(profile_path):
+            return
+        try:
+            with open(profile_path, 'r', encoding='utf-8-sig') as f:
+                profile = json.load(f)
+        except Exception as exc:
+            print(f"[OpenXRViewer] Failed to read profile for save: {exc}")
+            return
+        vp = None
+        view_poses = profile.get('view_poses')
+        if isinstance(view_poses, list) and view_poses:
+            idx = int(getattr(self, '_view_pose_index', 0)) % len(view_poses)
+            if not isinstance(view_poses[idx], dict):
+                view_poses[idx] = {}
+            vp = view_poses[idx]
+            profile['view_pose_index'] = idx
+        if vp is None:
+            if 'view_pose' not in profile or not isinstance(profile.get('view_pose'), dict):
+                profile['view_pose'] = {}
+            vp = profile['view_pose']
+        vp['x'] = round(float(view.get('x', 0.0)), 4)
+        vp['y'] = round(float(view.get('y', 0.6)), 4)
+        vp['z'] = round(float(view.get('z', 0.0)), 4)
+        vp['angle'] = round(float(view.get('angle', 0.0)), 1)
+        profile['model_position'] = [round(float(v), 4) for v in self._env_model_pos]
+        profile['screen_light_intensity'] = round(float(getattr(self, '_screen_light_intensity', 3.5)), 2)
+        if 'screen' in profile and isinstance(profile['screen'], dict):
+            profile['screen']['curved'] = bool(self._screen_curved)
+        try:
+            with open(profile_path, 'w', encoding='utf-8') as f:
+                json.dump(profile, f, indent=2, ensure_ascii=False)
+            print(
+                f"[OpenXRViewer] Saved view_pose to {profile_path}: "
+                f"x={vp['x']} y={vp['y']} z={vp['z']} angle={vp['angle']} curved={self._screen_curved}"
+            )
+        except Exception as exc:
+            print(f"[OpenXRViewer] Failed to save profile: {exc}")
+
     def _reset_screen_to_default(self, show_border=False):
         """Reset screen to upright default: 2 m ahead horizontally, perpendicular to floor.
 
@@ -7679,6 +7899,11 @@ class OpenXRViewerCore:
         if self._brand_osd_tex is not None and self._grip_mat_r is not None:
             self.ctx.viewport = (0, 0, sc_w, sc_h)
             self._render_brand_osd(eye_index, mgl_fbo, vp_mat)
+
+        # 6c. Seat adjustment OSD
+        if self._seat_adjust_osd_tex is not None:
+            self.ctx.viewport = (0, 0, sc_w, sc_h)
+            self._render_seat_adjust_osd(eye_index, mgl_fbo, vp_mat)
 
         # 7. Laser beam (opaque rainbow) -rendered behind controllers so the
         # controller ring and body correctly occlude the beam near its origin.
@@ -8940,6 +9165,19 @@ class OpenXRViewerCore:
         # Laser-anchored grip dragging
 
         both_grips = grip_l and grip_r
+        GRIP_LONG = 3.0
+        if both_grips and not self._both_grips_last:
+            self._both_grips_hold_t = time.perf_counter()
+            self._both_grips_long_fired = False
+        if both_grips and not self._both_grips_long_fired and screen_locked:
+            if time.perf_counter() - self._both_grips_hold_t >= GRIP_LONG:
+                self._both_grips_long_fired = True
+                if self._seat_adjust_active:
+                    self._exit_seat_adjust_mode(save=True)
+                else:
+                    self._enter_seat_adjust_mode()
+        self._both_grips_last = both_grips
+        seat_adjust_active = self._seat_adjust_active
 
         # Latch per-hand grip target on rising edge
         # "Only grip one item at a time": once a grip press locks onto the
@@ -8976,7 +9214,7 @@ class OpenXRViewerCore:
         ]:
             is_left = (grab_attr == '_screen_grab_grip_l')
 
-            if grip_now and not stick_active and not both_grips and laser_on \
+            if grip_now and not stick_active and not both_grips and not seat_adjust_active and laser_on \
                     and grip_target == 'screen':
 
                 if aim_mat is None:
@@ -9207,7 +9445,7 @@ class OpenXRViewerCore:
         # Average the two laser hit positions, project onto sphere around
         # head, and move the screen as a single rigid system.  This allows
         # two-handed repositioning without individual grip fighting.
-        if (not screen_locked) and both_grips and not stick_active_l and not stick_active_r \
+        if (not screen_locked) and both_grips and not seat_adjust_active and not stick_active_l and not stick_active_r \
                 and laser_l_on_screen and laser_r_on_screen:
             mats = []
             for aim_mat, grab_attr, local_attr in [
@@ -9274,6 +9512,64 @@ class OpenXRViewerCore:
                     self.screen_yaw   = base_yaw   + self._yaw_offset
                     self.screen_pitch = base_pitch + self._pitch_offset
 
+        if seat_adjust_active:
+            single_grip = (grip_l or grip_r) and not both_grips
+            self._seat_adjust_grip_move = single_grip
+            if single_grip:
+                ENV_MOVE_SPEED = 1.0
+                mp = list(self._env_model_pos)
+                env_changed = False
+                if abs(lx) > DEAD:
+                    mp[0] += lx * ENV_MOVE_SPEED * dt
+                    env_changed = True
+                if abs(ly) > DEAD:
+                    mp[2] += ly * ENV_MOVE_SPEED * dt
+                    env_changed = True
+                if abs(rx) > DEAD:
+                    mp[0] += rx * ENV_MOVE_SPEED * dt
+                    env_changed = True
+                if abs(ry) > DEAD:
+                    mp[1] += ry * ENV_MOVE_SPEED * dt
+                    env_changed = True
+                if env_changed:
+                    self._env_model_pos = [round(float(v), 4) for v in mp]
+                    if hasattr(self, '_cached_env_model_mat4_frame'):
+                        self._cached_env_model_mat4_frame = -1
+                    self._seat_adjust_osd_dirty = True
+            else:
+                SEAT_MOVE_SPEED = 0.3
+                SEAT_ANGLE_SPEED = 30.0
+                view = getattr(self, '_view_pose_profile', {}) or {}
+                if not isinstance(view, dict):
+                    view = {}
+                sa_x = float(view.get('x', 0.0))
+                sa_y = float(view.get('y', 0.6))
+                sa_z = float(view.get('z', 0.0))
+                sa_angle = float(view.get('angle', 0.0))
+                changed = False
+                if abs(lx) > DEAD:
+                    sa_x += lx * SEAT_MOVE_SPEED * dt
+                    changed = True
+                if abs(ly) > DEAD:
+                    sa_y += -ly * SEAT_MOVE_SPEED * dt
+                    sa_y = max(0.1, sa_y)
+                    changed = True
+                if abs(rx) > DEAD:
+                    sa_angle += -rx * SEAT_ANGLE_SPEED * dt
+                    sa_angle = max(-90.0, min(90.0, sa_angle))
+                    sa_angle = round(sa_angle)
+                    changed = True
+                if abs(ry) > DEAD:
+                    sa_z += ry * SEAT_MOVE_SPEED * dt
+                    changed = True
+                if changed:
+                    view['x'] = round(sa_x, 4)
+                    view['y'] = round(sa_y, 4)
+                    view['z'] = round(sa_z, 4)
+                    view['angle'] = round(sa_angle, 1)
+                    self._view_pose_profile = view
+                    self._apply_seat_adjust_xr_space(sa_x, sa_y, sa_z, sa_angle)
+                    self._seat_adjust_osd_dirty = True
 
         # Grip + stick fine-tuning (pan, resize, rotate, depth) ----------
         KB_MOVE_SPEED = 0.4    # m/s at full deflection
@@ -9282,7 +9578,7 @@ class OpenXRViewerCore:
         DEPTH_RATIO_SPEED = 0.5   # units/s at full deflection
         DEPTH_RATIO_MIN   = 0.0
         DEPTH_RATIO_MAX   = 10.0
-        if grip_l:
+        if grip_l and not seat_adjust_active:
             if self._keyboard_visible and self._grip_target_l == 'keyboard':
                 # Left grip latched to keyboard + left stick ->standalone
                 # translation: orbit the keyboard around the head on a sphere
@@ -9327,7 +9623,7 @@ class OpenXRViewerCore:
                     else:
                         self._pitch_offset += ly * rot_speed
                         self.screen_pitch  += ly * rot_speed
-        elif grip_r:
+        elif grip_r and not seat_adjust_active:
             # Right grip + left stick Y ->depth strength
             DEPTH_STR_SPEED = 0.5
             DEPTH_STR_MIN   = 0.0
@@ -9355,7 +9651,7 @@ class OpenXRViewerCore:
         # Left grip + right stick Y: depth strength (unchanged) ----------------
         # Right stick (no grip): mouse scroll-----
         RESIZE_SPEED = 1.2    # m/s of width change at full deflection
-        if grip_r and not grip_l:
+        if grip_r and not grip_l and not seat_adjust_active:
             if self._keyboard_visible and self._grip_target_r == 'keyboard':
                 # Keyboard controls via LEFT stick (right grip held)
                 if abs(lx) > abs(ly) and abs(lx) > DEAD:
@@ -9420,7 +9716,7 @@ class OpenXRViewerCore:
                             self.screen_pan_y    = float(hy + uy * R3_new)
                             self.screen_distance = float(-(hz + uz * R3_new))
                             self._screen_osd_show_t = time.perf_counter()
-        elif grip_l and not grip_r:
+        elif grip_l and not grip_r and not seat_adjust_active:
             if self._keyboard_visible and self._grip_target_l == 'keyboard':
                 # Left grip latched onto keyboard + right stick ->standalone
                 # keyboard yaw / pitch offsets (auto-orientation still aims at
@@ -10271,6 +10567,7 @@ class OpenXRViewerCore:
             self._preset_osd_tex,
             self._screen_osd_tex,
             self._brand_osd_tex,
+            self._seat_adjust_osd_tex,
             self.color_tex,
             self.depth_tex,
         ):
@@ -10284,6 +10581,7 @@ class OpenXRViewerCore:
         self._preset_osd_tex = None
         self._screen_osd_tex = None
         self._brand_osd_tex = None
+        self._seat_adjust_osd_tex = None
         if self._calib_tex:
             try:
                 self._calib_tex.release()
