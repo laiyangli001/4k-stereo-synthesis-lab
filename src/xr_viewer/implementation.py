@@ -54,7 +54,7 @@ except ImportError:
     OPENXR_AVAILABLE = False
     print("[OpenXRViewer] pyopenxr not installed. Run: pip install pyopenxr")
 
-from .constants import KB_CURSOR_PRIORITY_BIAS, KB_CURSOR_RELEASE_GRACE
+from .constants import KB_CURSOR_PRIORITY_BIAS, KB_CURSOR_RELEASE_GRACE, _VIVE_TB_Y
 from .input import (
     _TOUCH_AVAILABLE, _TOUCH_CONTACT_ID_LEFT, _TOUCH_CONTACT_ID_RIGHT,
     _TOUCH_PINCH_SPREAD_GAIN, _touch_injector,
@@ -2963,6 +2963,14 @@ class OpenXRViewerCore:
         self._brand_sw_fired = False
         self._ab_was_held = False
 
+        # Vive/WMR trackpad button emulation (computed per-frame, OR'd into reads).
+        self._emu_y = False
+        self._emu_x = False
+        self._emu_b = False
+        self._emu_a = False
+        self._emu_lsc = False
+        self._emu_rsc = False
+
         # Screen border (slightly larger quad, solid color)
         self._border_prog = None
         self._border_vao  = None
@@ -5045,6 +5053,42 @@ class OpenXRViewerCore:
                 ("/user/hand/right/input/aim/pose",         self._act_aim_right),
                 ("/user/hand/left/input/grip/pose",         self._act_grip_left),
                 ("/user/hand/right/input/grip/pose",        self._act_grip_right),
+            ],
+            # HTC Vive wand: trackpad (no thumbstick), squeeze/click (boolean,
+            # no analog value), trigger value/click, menu, no A/B/X/Y buttons.
+            # The trackpad's 2D parent binds to Vector2f stick actions, and
+            # trackpad/click stands in for thumbstick click. Grip uses
+            # squeeze/click directly since the wand has no analog squeeze.
+            "/interaction_profiles/htc/vive_controller": [
+                ("/user/hand/left/input/trackpad",           self._act_left_stick),
+                ("/user/hand/right/input/trackpad",          self._act_right_stick),
+                ("/user/hand/left/input/trackpad/click",     self._act_left_stick_click),
+                ("/user/hand/right/input/trackpad/click",    self._act_right_stick_click),
+                ("/user/hand/left/input/menu/click",         self._act_menu_btn),
+                ("/user/hand/left/input/squeeze/click",      self._act_left_grip),
+                ("/user/hand/right/input/squeeze/click",     self._act_right_grip),
+                ("/user/hand/left/input/trigger/value",      self._act_left_trigger),
+                ("/user/hand/right/input/trigger/value",     self._act_right_trigger),
+                ("/user/hand/left/input/aim/pose",           self._act_aim_left),
+                ("/user/hand/right/input/aim/pose",          self._act_aim_right),
+                ("/user/hand/left/input/grip/pose",          self._act_grip_left),
+                ("/user/hand/right/input/grip/pose",         self._act_grip_right),
+            ],
+            # Windows Mixed Reality motion controllers expose a clickable trackpad.
+            "/interaction_profiles/microsoft/motion_controller": [
+                ("/user/hand/left/input/trackpad",           self._act_left_stick),
+                ("/user/hand/right/input/trackpad",          self._act_right_stick),
+                ("/user/hand/left/input/trackpad/click",     self._act_left_stick_click),
+                ("/user/hand/right/input/trackpad/click",    self._act_right_stick_click),
+                ("/user/hand/left/input/menu/click",         self._act_menu_btn),
+                ("/user/hand/left/input/squeeze/click",      self._act_left_grip),
+                ("/user/hand/right/input/squeeze/click",     self._act_right_grip),
+                ("/user/hand/left/input/trigger/value",      self._act_left_trigger),
+                ("/user/hand/right/input/trigger/value",     self._act_right_trigger),
+                ("/user/hand/left/input/aim/pose",           self._act_aim_left),
+                ("/user/hand/right/input/aim/pose",          self._act_aim_right),
+                ("/user/hand/left/input/grip/pose",          self._act_grip_left),
+                ("/user/hand/right/input/grip/pose",         self._act_grip_right),
             ],
             # KHR simple only has select/click (boolean) and menu -no sticks or grip
             "/interaction_profiles/khr/simple_controller": [
@@ -7790,8 +7834,8 @@ class OpenXRViewerCore:
                 self._enter_preview_only_wait()
                 break
 
-    def _read_bool_action(self, action, hand_path_str="/user/hand/left"):
-        """Return True if the boolean action is currently pressed on the given hand."""
+    def _read_bool_action_raw(self, action, hand_path_str="/user/hand/left"):
+        """Return the raw OpenXR boolean action state without trackpad emulation."""
         if action is None:
             return False
         try:
@@ -7806,6 +7850,23 @@ class OpenXRViewerCore:
             return bool(state.is_active and state.current_state)
         except Exception:
             return False
+
+    def _read_bool_action(self, action, hand_path_str="/user/hand/left"):
+        """Return True if the boolean action is pressed, including trackpad emulation."""
+        pressed = self._read_bool_action_raw(action, hand_path_str)
+        if action is self._act_y_btn and hand_path_str == "/user/hand/left":
+            pressed = pressed or self._emu_y
+        elif action is self._act_x_btn and hand_path_str == "/user/hand/left":
+            pressed = pressed or self._emu_x
+        elif action is self._act_b_btn and hand_path_str == "/user/hand/right":
+            pressed = pressed or self._emu_b
+        elif action is self._act_a_btn and hand_path_str == "/user/hand/right":
+            pressed = pressed or self._emu_a
+        elif action is self._act_left_stick_click and hand_path_str == "/user/hand/left":
+            pressed = pressed or self._emu_lsc
+        elif action is self._act_right_stick_click and hand_path_str == "/user/hand/right":
+            pressed = pressed or self._emu_rsc
+        return pressed
 
     def _read_bool_edge(self, action, hand_path_str, prev_state):
         """Return True on the rising edge of a boolean action.
@@ -7825,7 +7886,7 @@ class OpenXRViewerCore:
                 self._xr_session,
                 xr.ActionStateGetInfo(action=action, subaction_path=path),
             )
-            pressed = bool(state.is_active and state.current_state)
+            pressed = self._read_bool_action(action, hand_path_str)
 
             # pyopenxr wraps XrActionStateBoolean. Try the Python attribute first,
             # then fall back to reading the underlying ctypes struct.
@@ -7847,6 +7908,42 @@ class OpenXRViewerCore:
             return pressed and not prev_state
         except Exception:
             return False
+
+    def _update_trackpad_button_emu(self):
+        """Compute per-frame Vive/WMR trackpad button emulation flags."""
+        for hand, stick_act, click_act, attr_top, attr_bot, attr_ctr in [
+            ("/user/hand/left", self._act_left_stick, self._act_left_stick_click,
+             '_emu_y', '_emu_x', '_emu_lsc'),
+            ("/user/hand/right", self._act_right_stick, self._act_right_stick_click,
+             '_emu_b', '_emu_a', '_emu_rsc'),
+        ]:
+            clicked = self._read_bool_action_raw(click_act, hand)
+            if not clicked:
+                setattr(self, attr_top, False)
+                setattr(self, attr_bot, False)
+                setattr(self, attr_ctr, False)
+                continue
+            try:
+                path = self._path_left if hand == "/user/hand/left" else self._path_right
+                state = xr.get_action_state_vector2f(
+                    self._xr_session,
+                    xr.ActionStateGetInfo(action=stick_act, subaction_path=path),
+                )
+                py = float(state.current_state.y) if state.is_active else 0.0
+            except Exception:
+                py = 0.0
+            if py > _VIVE_TB_Y:
+                setattr(self, attr_top, True)
+                setattr(self, attr_bot, False)
+                setattr(self, attr_ctr, False)
+            elif py < -_VIVE_TB_Y:
+                setattr(self, attr_top, False)
+                setattr(self, attr_bot, True)
+                setattr(self, attr_ctr, False)
+            else:
+                setattr(self, attr_top, False)
+                setattr(self, attr_bot, False)
+                setattr(self, attr_ctr, True)
 
     def _read_float_action(self, action, hand_path_str="/user/hand/left"):
         """Return the float value [0,1] of a trigger/squeeze action."""
@@ -9669,10 +9766,13 @@ class OpenXRViewerCore:
 
             if self._controller_miss_frames < 30:
                 self._smooth_controller_poses()
+                self._update_trackpad_button_emu()
                 self._poll_controller_input(dt)
             else:
                 # No controllers -clear cursor/grab state so downstream code
                 # (grip-to-move, trigger handling) sees no laser on screen.
+                self._emu_y = self._emu_x = self._emu_b = False
+                self._emu_a = self._emu_lsc = self._emu_rsc = False
                 self._cursor_uv_l = None
                 self._cursor_uv_r = None
                 self._cursor_ctrl = None
