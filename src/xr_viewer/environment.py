@@ -427,6 +427,11 @@ class OpenXRViewer(OpenXRViewerCore, OverlayMixin):
         return True
 
 
+    def _cycle_environment(self):
+        """Advance the environment one slot."""
+        self._switch_environment_model()
+
+
     def _cycle_lighting_preset(self):
         """Cycle through lighting_presets in the current profile."""
         presets = getattr(self, '_lighting_presets', []) or []
@@ -1115,6 +1120,16 @@ class OpenXRViewer(OpenXRViewerCore, OverlayMixin):
         self._generate_default_room()
 
 
+    def _switch_environment(self, name, *, save_outgoing=True, apply_profile=True):
+        if name is None:
+            self._release_env_model_resources()
+            self._active_environment = None
+            self._glow_intensity_multiplier = 0.0
+            self._persist_runtime_settings()
+            return
+        self._switch_environment_model(model_name=name)
+
+
     def _switch_environment_model(self, model_name=None):
         """Switch to another room environment during runtime."""
         if not getattr(self, '_environment_enabled', True):
@@ -1163,6 +1178,51 @@ class OpenXRViewer(OpenXRViewerCore, OverlayMixin):
 
     def _render_screen_foreground_effects(self, mgl_fbo, vp_mat):
         return None
+
+    def _apply_cinema_light_uniforms(self):
+        """Push current screen area-light uniforms to the environment shader."""
+        if self.screen_height is None or self._screen_light_intensity <= 0.0:
+            self._env_prog['u_screen_light_enabled'].value = 0
+            self._cl_light_state_key = None
+            self._cl_uniform_frame = -5
+            return
+        fc = getattr(self, '_frame_count', 0)
+        pose_key = (
+            self.screen_yaw, self.screen_pitch, self.screen_roll,
+            self.screen_pan_x, self.screen_pan_y, self.screen_distance,
+            self.screen_width, self.screen_height,
+        )
+        if pose_key != getattr(self, '_cl_pose_key', None):
+            sx_pos = float(self.screen_pan_x)
+            sy_pos = float(self.screen_pan_y)
+            sz_pos = float(-self.screen_distance)
+            cy = math.cos(self.screen_yaw)
+            sy_ = math.sin(self.screen_yaw)
+            cp = math.cos(self.screen_pitch)
+            sp = math.sin(self.screen_pitch)
+            self._cl_pos = (sx_pos, sy_pos, sz_pos)
+            self._cl_normal = (sy_ * cp, -sp, cy * cp)
+            self._cl_half = (float(self.screen_width) * 0.5, float(self.screen_height) * 0.5)
+            self._cl_pose_key = pose_key
+        state_key = (pose_key, getattr(self, '_active_environment', None), float(self._screen_light_intensity))
+        last_state_key = getattr(self, '_cl_light_state_key', None)
+        last_frame = getattr(self, '_cl_uniform_frame', -999)
+        if state_key == last_state_key and (fc - last_frame) < 5:
+            return
+        self._cl_light_state_key = state_key
+        self._cl_uniform_frame = fc
+        self._advance_glow_color(lerp=0.14)
+        sc = getattr(self, '_glow_color', (0.30, 0.55, 1.0))
+        intensity = float(self._screen_light_intensity)
+        if getattr(self, '_active_environment', None) == 'Dark Room':
+            intensity *= 0.9
+        self._env_prog['u_screen_light_enabled'].value = 1
+        self._env_prog['u_screen_light_pos'].value = self._cl_pos
+        self._env_prog['u_screen_light_normal'].value = self._cl_normal
+        self._env_prog['u_screen_light_half_size'].value = self._cl_half
+        self._env_prog['u_screen_light_color'].value = (float(sc[0]), float(sc[1]), float(sc[2]))
+        self._env_prog['u_screen_light_intensity'].value = intensity
+
 
     def _render_env_model(self, mgl_fbo, vp_mat, view_mat):
         """Render the glTF environment model in world space."""
@@ -1242,6 +1302,8 @@ class OpenXRViewer(OpenXRViewerCore, OverlayMixin):
             else:
                 self._env_prog[f'u_fill_light_color{slot}'].value = (0.0, 0.0, 0.0)
                 self._env_prog[f'u_fill_light_range{slot}'].value = 1.0
+
+        self._apply_cinema_light_uniforms()
 
         glFrontFace(GL_CCW)
 

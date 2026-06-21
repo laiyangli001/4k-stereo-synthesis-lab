@@ -2591,6 +2591,10 @@ class OpenXRViewerCore:
         self._glow_intensity = float(kwargs.get('glow_intensity', 0.65))
         self._glow_width_m = float(kwargs.get('glow_width', 0.16))
         self._glow_intensity_multiplier = float(kwargs.get('glow_intensity_multiplier', 0.0))
+        self._glow_ref_screen = float(kwargs.get('glow_ref_screen', 2.4))
+        self._glow_color = tuple(kwargs.get('glow_color', (0.30, 0.55, 1.0)))
+        self._glow_target_color = self._glow_color
+        self._glow_color_counter = 0
         self._screen_light_intensity = float(kwargs.get('screen_light_intensity', 3.5))
         self._env_model_path = None
         self._env_model_prims = []        # list of {'vao', 'vbo', 'ibo', 'tex_key', 'tri_count'}
@@ -3515,12 +3519,29 @@ class OpenXRViewerCore:
         self._env_prog['u_mr_texcoord'].value = 0
         self._env_prog['u_emissive_texcoord'].value = 0
         self._env_prog['u_baked_lightmap'].value = 0
+        self._env_prog['u_screen_light_enabled'].value = 0
+        self._env_prog['u_screen_light_pos'].value = (0.0, 0.0, -2.0)
+        self._env_prog['u_screen_light_normal'].value = (0.0, 0.0, 1.0)
+        self._env_prog['u_screen_light_half_size'].value = (1.2, 0.675)
+        self._env_prog['u_screen_light_color'].value = (0.3, 0.6, 1.0)
+        self._env_prog['u_screen_light_intensity'].value = 2.0
 
         self._ctrl_tex_cache = {}
         self._ctrl_prims_l = []
         self._ctrl_prims_r = []
         self._init_all_controller_models()
         # Environment model loaded lazily after OpenXR session starts
+
+    def _advance_glow_color(self, lerp=0.03):
+        """Advance glow color toward the sampled frame average."""
+        c = getattr(self, '_glow_color', (0.30, 0.55, 1.0))
+        t = getattr(self, '_glow_target_color', c)
+        self._glow_color = (
+            float(c[0]) + lerp * (float(t[0]) - float(c[0])),
+            float(c[1]) + lerp * (float(t[1]) - float(c[1])),
+            float(c[2]) + lerp * (float(t[2]) - float(c[2])),
+        )
+
 
     def _load_brand_models(self, brand_name):
         """Load models and configuration for a specific brand, returning {prims_l, prims_r, tex_cache, offset, rot_deg}."""
