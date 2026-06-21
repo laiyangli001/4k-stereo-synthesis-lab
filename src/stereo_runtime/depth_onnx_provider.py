@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+import re
 
 import torch
 import torch.nn.functional as F
@@ -14,7 +15,9 @@ from .depth_provider import (
     INFINIDEPTH_PATCH_SIZE,
     DepthProfileResult,
     DepthProviderInfo,
+    DepthProviderConfig,
     TorchDepthProvider,
+    _prepare_accelerated_artifacts,
     _is_infinidepth_model,
     _model_input_size,
     _normalize_depth,
@@ -31,6 +34,22 @@ def default_distill_base_onnx_path(cache_dir: str | Path | None = None) -> Path:
 
 def default_onnx_path(cache_dir: str | Path | None = None) -> Path:
     return default_distill_base_onnx_path(cache_dir)
+
+
+def _input_size_from_artifact_name(path: Path) -> tuple[int, int] | None:
+    match = re.search(r"_(\d+)x(\d+)(?:\.[^.]+)?$", path.name)
+    if not match:
+        return None
+    return int(match.group(1)), int(match.group(2))
+
+
+def _dtype_from_onnx_name(path: Path, fallback: torch.dtype) -> torch.dtype:
+    name = path.name.lower()
+    if "fp32" in name:
+        return torch.float32
+    if "fp16" in name:
+        return torch.float16
+    return fallback
 
 
 def _preprocess_distill_rgb(rgb: torch.Tensor, *, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
@@ -132,17 +151,22 @@ class DistillAnyDepthBaseOnnxCuda:
         model_name: str = DISTILL_ANY_DEPTH_BASE_NAME,
         use_iobinding: bool = True,
         use_dlpack: bool = False,
+        local_files_only: bool = False,
+        force_download: bool = False,
         depth_upsample: DepthUpsampleMode = "bilinear",
         depth_upsample_edge_strength: float = 0.35,
     ) -> None:
         self.device = torch.device(device)
         self.cache_dir = Path(cache_dir) if cache_dir is not None else default_lab_cache_dir()
-        self.onnx_path = Path(onnx_path) if onnx_path is not None else default_onnx_path(self.cache_dir)
-        self.dtype = torch.float16 if self.device.type == "cuda" else torch.float32
+        self._explicit_onnx_path = Path(onnx_path) if onnx_path is not None else None
+        self.onnx_path = self._explicit_onnx_path or default_onnx_path(self.cache_dir)
+        self.dtype = _dtype_from_onnx_name(self.onnx_path, torch.float16 if self.device.type == "cuda" else torch.float32)
         self.model_id = model_id
         self.model_name = model_name
         self.use_iobinding = bool(use_iobinding and self.device.type == "cuda")
         self.use_dlpack = bool(use_dlpack and self.use_iobinding)
+        self.local_files_only = bool(local_files_only)
+        self.force_download = bool(force_download)
         self.depth_upsample = depth_upsample
         self.depth_upsample_edge_strength = float(depth_upsample_edge_strength)
         self.info = DepthProviderInfo(
@@ -160,7 +184,50 @@ class DistillAnyDepthBaseOnnxCuda:
             output_device="cuda" if self.use_iobinding else "cpu",
         )
         self._session = None
-        self._preprocessor = ModelOnnxPreprocessor(model_id=self.model_id, device=self.device, dtype=self.dtype)
+        self._artifact_input_size: tuple[int, int] | None = None
+        self._preprocessor = ModelOnnxPreprocessor(
+            model_id=self.model_id,
+            device=self.device,
+            dtype=self.dtype,
+            fixed_input_size=_input_size_from_artifact_name(self.onnx_path) if self._explicit_onnx_path else None,
+        )
+
+    def _set_onnx_path(self, path: Path, input_size: tuple[int, int]) -> None:
+        dtype = _dtype_from_onnx_name(path, self.dtype)
+        if path != self.onnx_path or dtype != self.dtype:
+            self._session = None
+        self.onnx_path = path
+        self.dtype = dtype
+        self._artifact_input_size = input_size
+        self._preprocessor = ModelOnnxPreprocessor(
+            model_id=self.model_id,
+            device=self.device,
+            dtype=self.dtype,
+            fixed_input_size=input_size,
+        )
+        self.info = replace(self.info, onnx_path=str(self.onnx_path))
+
+    def _ensure_artifacts_for_input(self, height: int, width: int) -> None:
+        input_size = self._preprocessor.input_size(height, width)
+        if self._explicit_onnx_path is not None:
+            fixed_size = _input_size_from_artifact_name(self._explicit_onnx_path) or input_size
+            if self._artifact_input_size != fixed_size:
+                self._set_onnx_path(self._explicit_onnx_path, fixed_size)
+            return
+        if self._artifact_input_size == input_size and self.onnx_path.exists():
+            return
+        cfg = DepthProviderConfig(
+            model_id=self.model_id,
+            model_name=self.model_name,
+            device=self.device,
+            cache_dir=self.cache_dir,
+            local_files_only=self.local_files_only,
+            force_download=self.force_download,
+        )
+        artifacts = _prepare_accelerated_artifacts(cfg, input_size=input_size)
+        if artifacts.selected_onnx_path is None:
+            raise FileNotFoundError(f"ONNX artifact not found for {self.model_id} at input size {input_size}")
+        self._set_onnx_path(Path(artifacts.selected_onnx_path), input_size)
 
     def load(self):
         if self._session is not None:
@@ -195,6 +262,7 @@ class DistillAnyDepthBaseOnnxCuda:
         start = time.perf_counter()
         rgb = ensure_bchw(rgb, name="rgb")
         _, _, height, width = rgb.shape
+        self._ensure_artifacts_for_input(height, width)
         tensor = self._preprocessor(rgb)
         ort_input = tensor if self.use_dlpack else tensor.detach().cpu().numpy()
         sync()
@@ -295,6 +363,8 @@ def estimate_depth_onnx_cuda(
             onnx_path=onnx_path,
             use_iobinding=use_iobinding,
             use_dlpack=False,
+            local_files_only=local_files_only,
+            force_download=force_download,
         )
         return provider.predict(rgb), provider.info
     except Exception as exc:

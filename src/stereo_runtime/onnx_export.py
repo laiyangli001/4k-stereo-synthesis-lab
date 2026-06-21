@@ -37,6 +37,8 @@ def choose_export_dtype(model_id: str, device, requested: OnnxDtypeMode) -> tupl
     model_lower = model_id.lower()
     if device.type != "cuda":
         return torch.float32, "fp32", "auto: non-CUDA device"
+    if "infinidepth" in model_lower:
+        return torch.float32, "fp32", "auto: InfiniDepth requires fp32"
     if any(keyword in model_lower for keyword in FORCE_FP32_KEYWORDS):
         return torch.float32, "fp32", "auto: model requires fp32"
     return torch.float16, "fp16", "auto: CUDA default"
@@ -206,6 +208,7 @@ def export_depth_model_onnx(
             export_params=True,
             verbose=False,
             training=torch.onnx.TrainingMode.EVAL,
+            dynamo=False,
         )
 
     return OnnxExportResult(

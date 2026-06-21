@@ -173,29 +173,35 @@ def test_create_depth_provider_supports_native_tensorrt(monkeypatch, tmp_path):
     class Paths:
         trt_fp16_path = tmp_path / "model.trt"
 
+        def trt_path_for_dtype(self, dtype_name):
+            return self.trt_fp16_path
+
     class Artifacts:
         selected_onnx_path = tmp_path / "model.onnx"
         paths = Paths()
 
-    import stereo_runtime.depth_provider as provider_module
+    import stereo_runtime.providers.nvidia.tensorrt_native as native_module
 
-    monkeypatch.setattr(provider_module, "_prepare_accelerated_artifacts", lambda *args, **kwargs: Artifacts())
+    monkeypatch.setattr(native_module, "_prepare_accelerated_artifacts", lambda *args, **kwargs: Artifacts())
     engine_path = tmp_path / "model.trt"
     provider = create_depth_provider(
         DepthProviderConfig(
             backend="tensorrt_native",
             device="cuda",
             cache_dir=tmp_path,
-            engine_path=engine_path,
             build_engine=True,
         )
     )
 
     assert isinstance(provider, NativeTensorRtDepthProvider)
     assert provider.info.depth_backend == "tensorrt_native"
+    assert provider.onnx_path.name == "model_fp16_294x518.onnx"
+    assert provider.engine_path.name == "model_fp16_294x518.trt"
+    assert provider.build_engine is True
+
+    provider._ensure_artifacts_for_input(768, 1024)
     assert provider.onnx_path == tmp_path / "model.onnx"
     assert provider.engine_path == engine_path
-    assert provider.build_engine is True
 
 
 def test_native_tensorrt_infers_large_metadata_from_model_path(tmp_path):
@@ -281,6 +287,38 @@ def test_infinidepth_onnx_preprocessor_uses_patch_16_without_normalization():
     assert float(actual.min()) >= 0.0
     assert float(actual.max()) <= 1.0
 
+def test_onnx_provider_prepares_artifact_for_first_frame_shape(monkeypatch, tmp_path):
+    from stereo_runtime.depth_onnx_provider import OnnxCudaDepthProvider
+
+    calls = {}
+    selected = tmp_path / "models--lc700x--Distill-Any-Depth-Base-hf" / "model_fp16_392x518.onnx"
+
+    class Artifacts:
+        selected_onnx_path = selected
+
+    def fake_prepare(*args, **kwargs):
+        calls.update(kwargs)
+        selected.parent.mkdir(parents=True, exist_ok=True)
+        selected.write_bytes(b"onnx")
+        return Artifacts()
+
+    import stereo_runtime.depth_onnx_provider as provider_module
+
+    monkeypatch.setattr(provider_module, "_prepare_accelerated_artifacts", fake_prepare)
+    provider = OnnxCudaDepthProvider(
+        device="cpu",
+        cache_dir=tmp_path,
+        model_id="lc700x/Distill-Any-Depth-Base-hf",
+        model_name="Distill-Any-Depth-Base",
+    )
+
+    provider._ensure_artifacts_for_input(768, 1024)
+
+    assert calls["input_size"] == (392, 518)
+    assert provider.onnx_path == selected
+    assert provider._preprocessor.fixed_input_size == (392, 518)
+
+
 def test_distill_preprocessor_can_use_fixed_tensorrt_input_size():
     rgb = torch.zeros(1, 3, 2160, 1920)
     preprocessor = DistillPreprocessor(
@@ -321,6 +359,8 @@ def test_native_tensorrt_provider_uses_engine_static_input_size(monkeypatch, tmp
     )
     provider._engine = FakeEngine()
     provider._preprocessor = FakePreprocessor()
+    provider._artifact_input_size = (294, 518)
+    monkeypatch.setattr(provider, "_ensure_artifacts_for_input", lambda height, width: None)
     monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
 
     result = provider.predict_profile(torch.zeros(1, 3, 2160, 1920))

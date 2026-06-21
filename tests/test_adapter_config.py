@@ -42,8 +42,8 @@ def test_runtime_config_maps_depth_backend_auto_to_native_tensorrt():
 
     assert depth_config.backend == "tensorrt_native"
     assert depth_config.cache_dir == config.model_path.parent
-    assert depth_config.onnx_path == config.onnx_path
-    assert depth_config.engine_path == config.trt_engine_path
+    assert depth_config.onnx_path is None
+    assert depth_config.engine_path is None
     assert depth_config.local_files_only is False
     assert depth_config.depth_upsample == "guided"
     assert depth_config.depth_upsample_edge_strength == 0.5

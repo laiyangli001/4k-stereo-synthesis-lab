@@ -350,7 +350,8 @@ def depth_provider_config_from_runtime(config: StereoRuntimeConfig) -> "DepthPro
         backend = "onnx_cuda_iobinding"
     if backend == "pytorch_cuda":
         backend = "pytorch_cuda"
-    engine_path = config.migraphx_graph_path if backend == "migraphx_rocm" else config.trt_engine_path
+    onnx_path = config.onnx_path if backend == "migraphx_rocm" else None
+    engine_path = config.migraphx_graph_path if backend == "migraphx_rocm" else None
     build_engine = config.build_migraphx_graph if backend == "migraphx_rocm" else config.build_trt_engine
     force_rebuild = config.force_rebuild_migraphx if backend == "migraphx_rocm" else config.force_rebuild_trt
 
@@ -360,7 +361,7 @@ def depth_provider_config_from_runtime(config: StereoRuntimeConfig) -> "DepthPro
         model_name=ModelRegistry.default().get(config.resolved_model_id).name,
         device=config.device,
         cache_dir=config.model_path.parent,
-        onnx_path=config.onnx_path,
+        onnx_path=onnx_path,
         engine_path=engine_path,
         local_files_only=False,
         prefer_native_tensorrt=backend == "tensorrt_native",

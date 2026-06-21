@@ -39,32 +39,25 @@ def test_model_registry_contains_infinidepth_family():
     assert registry.resolve_model_id("InfiniDepth-Large") == "lc700x/InfiniDepth-Large"
 
 
-def test_infinidepth_onnx_provider_prepares_exported_artifact(monkeypatch, tmp_path):
-    calls = {}
-    selected = tmp_path / "models--lc700x--InfiniDepth-Base" / "model_fp16_288x512.onnx"
+def test_infinidepth_onnx_provider_prepares_exported_artifact_for_first_frame_shape(monkeypatch, tmp_path):
+    import torch
 
-    class Paths:
-        trt_fp16_path = tmp_path / "models--lc700x--InfiniDepth-Base" / "model_fp16_288x512.trt"
+    calls = {}
+    selected = tmp_path / "models--lc700x--InfiniDepth-Base" / "model_fp32_384x512.onnx"
 
     class Artifacts:
         selected_onnx_path = selected
-        paths = Paths()
 
     def fake_prepare(*args, **kwargs):
         calls["prepare_args"] = args
         calls.update(kwargs)
+        selected.parent.mkdir(parents=True, exist_ok=True)
+        selected.write_bytes(b"onnx")
         return Artifacts()
 
-    class FakeOnnxProvider:
-        def __init__(self, **kwargs):
-            calls["provider_kwargs"] = kwargs
-
-    import stereo_runtime.depth_provider as provider_module
-    import stereo_runtime.providers.nvidia.onnx_cuda as onnx_module
+    import stereo_runtime.depth_onnx_provider as provider_module
 
     monkeypatch.setattr(provider_module, "_prepare_accelerated_artifacts", fake_prepare)
-    monkeypatch.setattr(onnx_module, "OnnxCudaDepthProvider", FakeOnnxProvider)
-
     provider = create_depth_provider(
         DepthProviderConfig(
             backend="onnx_cuda",
@@ -77,8 +70,10 @@ def test_infinidepth_onnx_provider_prepares_exported_artifact(monkeypatch, tmp_p
         )
     )
 
-    assert isinstance(provider, FakeOnnxProvider)
-    assert calls.get("build_trt", False) is False
-    assert calls["provider_kwargs"]["onnx_path"] == selected
-    assert calls["provider_kwargs"]["model_id"] == "lc700x/InfiniDepth-Base"
-    assert calls["provider_kwargs"]["model_name"] == "InfiniDepth-Base"
+    provider._ensure_artifacts_for_input(768, 1024)
+
+    assert calls["input_size"] == (384, 512)
+    assert provider.onnx_path == selected
+    assert provider.dtype == torch.float32
+    assert provider.model_id == "lc700x/InfiniDepth-Base"
+    assert provider.model_name == "InfiniDepth-Base"

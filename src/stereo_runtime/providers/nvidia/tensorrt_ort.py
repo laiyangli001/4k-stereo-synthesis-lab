@@ -9,6 +9,8 @@ import torch
 
 from ...depth_onnx_provider import (
     ModelOnnxPreprocessor,
+    _dtype_from_onnx_name,
+    _input_size_from_artifact_name,
     default_onnx_path,
 )
 from ...depth_provider import (
@@ -16,8 +18,10 @@ from ...depth_provider import (
     DISTILL_ANY_DEPTH_BASE_NAME,
     DISTILL_ANY_DEPTH_BASE_RESOLUTION,
     DepthProfileResult,
+    DepthProviderConfig,
     DepthProviderInfo,
     TorchDepthProvider,
+    _prepare_accelerated_artifacts,
     _normalize_depth,
     default_lab_cache_dir,
 )
@@ -85,6 +89,8 @@ class DistillAnyDepthBaseTensorRtOrt:
         trt_cache_dir: str | Path | None = None,
         model_id: str = DISTILL_ANY_DEPTH_BASE_MODEL_ID,
         model_name: str = DISTILL_ANY_DEPTH_BASE_NAME,
+        local_files_only: bool = False,
+        force_download: bool = False,
         depth_upsample: DepthUpsampleMode = "bilinear",
         depth_upsample_edge_strength: float = 0.35,
     ) -> None:
@@ -92,11 +98,14 @@ class DistillAnyDepthBaseTensorRtOrt:
         if self.device.type != "cuda":
             raise RuntimeError("TensorRT depth provider requires CUDA")
         self.cache_dir = Path(cache_dir) if cache_dir is not None else default_lab_cache_dir()
-        self.onnx_path = Path(onnx_path) if onnx_path is not None else default_onnx_path(self.cache_dir)
+        self._explicit_onnx_path = Path(onnx_path) if onnx_path is not None else None
+        self.onnx_path = self._explicit_onnx_path or default_onnx_path(self.cache_dir)
         self.trt_cache_dir = Path(trt_cache_dir) if trt_cache_dir is not None else default_tensorrt_cache_dir(self.cache_dir)
-        self.dtype = torch.float16
+        self.dtype = _dtype_from_onnx_name(self.onnx_path, torch.float16)
         self.model_id = model_id
         self.model_name = model_name
+        self.local_files_only = bool(local_files_only)
+        self.force_download = bool(force_download)
         self.depth_upsample = depth_upsample
         self.depth_upsample_edge_strength = float(depth_upsample_edge_strength)
         self.info = DepthProviderInfo(
@@ -113,7 +122,50 @@ class DistillAnyDepthBaseTensorRtOrt:
             output_device="cuda",
         )
         self._session = None
-        self._preprocessor = ModelOnnxPreprocessor(model_id=self.model_id, device=self.device, dtype=self.dtype)
+        self._artifact_input_size: tuple[int, int] | None = None
+        self._preprocessor = ModelOnnxPreprocessor(
+            model_id=self.model_id,
+            device=self.device,
+            dtype=self.dtype,
+            fixed_input_size=_input_size_from_artifact_name(self.onnx_path) if self._explicit_onnx_path else None,
+        )
+
+    def _set_onnx_path(self, path: Path, input_size: tuple[int, int]) -> None:
+        dtype = _dtype_from_onnx_name(path, self.dtype)
+        if path != self.onnx_path or dtype != self.dtype:
+            self._session = None
+        self.onnx_path = path
+        self.dtype = dtype
+        self._artifact_input_size = input_size
+        self._preprocessor = ModelOnnxPreprocessor(
+            model_id=self.model_id,
+            device=self.device,
+            dtype=self.dtype,
+            fixed_input_size=input_size,
+        )
+        self.info = replace(self.info, onnx_path=str(self.onnx_path))
+
+    def _ensure_artifacts_for_input(self, height: int, width: int) -> None:
+        input_size = self._preprocessor.input_size(height, width)
+        if self._explicit_onnx_path is not None:
+            fixed_size = _input_size_from_artifact_name(self._explicit_onnx_path) or input_size
+            if self._artifact_input_size != fixed_size:
+                self._set_onnx_path(self._explicit_onnx_path, fixed_size)
+            return
+        if self._artifact_input_size == input_size and self.onnx_path.exists():
+            return
+        cfg = DepthProviderConfig(
+            model_id=self.model_id,
+            model_name=self.model_name,
+            device=self.device,
+            cache_dir=self.cache_dir,
+            local_files_only=self.local_files_only,
+            force_download=self.force_download,
+        )
+        artifacts = _prepare_accelerated_artifacts(cfg, input_size=input_size)
+        if artifacts.selected_onnx_path is None:
+            raise FileNotFoundError(f"ONNX artifact not found for {self.model_id} at input size {input_size}")
+        self._set_onnx_path(Path(artifacts.selected_onnx_path), input_size)
 
     def load(self):
         if self._session is not None:
@@ -132,7 +184,7 @@ class DistillAnyDepthBaseTensorRtOrt:
 
         self.trt_cache_dir.mkdir(parents=True, exist_ok=True)
         trt_options = {
-            "trt_fp16_enable": True,
+            "trt_fp16_enable": self.dtype == torch.float16,
             "trt_engine_cache_enable": True,
             "trt_engine_cache_path": str(self.trt_cache_dir),
         }
@@ -165,6 +217,7 @@ class DistillAnyDepthBaseTensorRtOrt:
         start = time.perf_counter()
         rgb = ensure_bchw(rgb, name="rgb")
         _, _, height, width = rgb.shape
+        self._ensure_artifacts_for_input(height, width)
         tensor = self._preprocessor(rgb)
         ort_input = tensor.detach().cpu().numpy()
         sync()
@@ -230,6 +283,8 @@ def estimate_depth_nvidia_chain(
                 cache_dir=cache_dir,
                 onnx_path=onnx_path,
                 trt_cache_dir=trt_cache_dir,
+                local_files_only=local_files_only,
+                force_download=force_download,
             )
             return provider.predict(rgb), provider.info
         except Exception as exc:
@@ -245,6 +300,8 @@ def estimate_depth_nvidia_chain(
                 cache_dir=cache_dir,
                 onnx_path=onnx_path,
                 use_iobinding=True,
+                local_files_only=local_files_only,
+                force_download=force_download,
             )
             depth = provider.predict(rgb)
             info = replace(provider.info, fallback_reason="; ".join(fallback_reasons) or None)

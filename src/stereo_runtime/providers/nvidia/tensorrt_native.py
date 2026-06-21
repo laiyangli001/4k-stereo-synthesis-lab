@@ -6,13 +6,15 @@ import time
 
 import torch
 
-from ...depth_onnx_provider import ModelOnnxPreprocessor, default_onnx_path
+from ...depth_onnx_provider import ModelOnnxPreprocessor, _dtype_from_onnx_name, _input_size_from_artifact_name, default_onnx_path
 from ...depth_provider import (
     DISTILL_ANY_DEPTH_BASE_MODEL_ID,
     DISTILL_ANY_DEPTH_BASE_NAME,
     DISTILL_ANY_DEPTH_BASE_RESOLUTION,
     DepthProfileResult,
+    DepthProviderConfig,
     DepthProviderInfo,
+    _prepare_accelerated_artifacts,
     _normalize_depth,
     default_lab_cache_dir,
 )
@@ -258,6 +260,8 @@ class DistillAnyDepthBaseNativeTensorRt:
         engine_path: str | Path | None = None,
         model_id: str = DISTILL_ANY_DEPTH_BASE_MODEL_ID,
         model_name: str = DISTILL_ANY_DEPTH_BASE_NAME,
+        local_files_only: bool = False,
+        force_download: bool = False,
         build_engine: bool = False,
         force_rebuild: bool = False,
         use_cuda_graph: bool = False,
@@ -269,21 +273,25 @@ class DistillAnyDepthBaseNativeTensorRt:
         if self.device.type != "cuda":
             raise RuntimeError("Native TensorRT depth provider requires CUDA")
         self.cache_dir = Path(cache_dir) if cache_dir is not None else default_lab_cache_dir()
-        self.onnx_path = Path(onnx_path) if onnx_path is not None else default_onnx_path(self.cache_dir)
-        self.engine_path = Path(engine_path) if engine_path is not None else default_native_tensorrt_engine_path(self.cache_dir)
+        self._explicit_onnx_path = Path(onnx_path) if onnx_path is not None else None
+        self._explicit_engine_path = Path(engine_path) if engine_path is not None else None
+        self.onnx_path = self._explicit_onnx_path or default_onnx_path(self.cache_dir)
+        self.engine_path = self._explicit_engine_path or default_native_tensorrt_engine_path(self.cache_dir)
         self.model_id, self.model_name = _infer_model_metadata_from_paths(
             self.onnx_path,
             self.engine_path,
             model_id=model_id,
             model_name=model_name,
         )
+        self.local_files_only = bool(local_files_only)
+        self.force_download = bool(force_download)
         self.build_engine = bool(build_engine)
         self.force_rebuild = bool(force_rebuild)
         self.use_cuda_graph = bool(use_cuda_graph)
         self.profile_sync = bool(profile_sync)
         self.depth_upsample = depth_upsample
         self.depth_upsample_edge_strength = float(depth_upsample_edge_strength)
-        self.dtype = torch.float16
+        self.dtype = _dtype_from_onnx_name(self.onnx_path, torch.float16)
         self.info = DepthProviderInfo(
             provider="tensorrt.Runtime",
             model_name=self.model_name,
@@ -298,14 +306,62 @@ class DistillAnyDepthBaseNativeTensorRt:
             output_device="cuda",
         )
         self._engine: NativeTensorRtEngine | None = None
-        self._preprocessor = ModelOnnxPreprocessor(model_id=self.model_id, device=self.device, dtype=self.dtype)
+        self._artifact_input_size: tuple[int, int] | None = None
+        self._preprocessor = ModelOnnxPreprocessor(
+            model_id=self.model_id,
+            device=self.device,
+            dtype=self.dtype,
+            fixed_input_size=_input_size_from_artifact_name(self.onnx_path) if self._explicit_onnx_path else None,
+        )
+
+    def _set_artifact_paths(self, onnx_path: Path, engine_path: Path, input_size: tuple[int, int]) -> None:
+        dtype = _dtype_from_onnx_name(onnx_path, self.dtype)
+        if onnx_path != self.onnx_path or engine_path != self.engine_path or dtype != self.dtype:
+            if self._engine is not None:
+                self._engine.close()
+            self._engine = None
+        self.onnx_path = onnx_path
+        self.engine_path = engine_path
+        self.dtype = dtype
+        self._artifact_input_size = input_size
+        self._preprocessor = ModelOnnxPreprocessor(
+            model_id=self.model_id,
+            device=self.device,
+            dtype=self.dtype,
+            fixed_input_size=input_size,
+        )
+        self.info = replace(self.info, onnx_path=str(self.onnx_path))
+
+    def _ensure_artifacts_for_input(self, height: int, width: int) -> None:
+        input_size = self._preprocessor.input_size(height, width)
+        if self._explicit_onnx_path is not None or self._explicit_engine_path is not None:
+            fixed_size = _input_size_from_artifact_name(self.onnx_path) or _input_size_from_artifact_name(self.engine_path) or input_size
+            self._set_artifact_paths(self.onnx_path, self.engine_path, fixed_size)
+            return
+        if self._artifact_input_size == input_size and self.engine_path.exists():
+            return
+        cfg = DepthProviderConfig(
+            model_id=self.model_id,
+            model_name=self.model_name,
+            device=self.device,
+            cache_dir=self.cache_dir,
+            local_files_only=self.local_files_only,
+            force_download=self.force_download,
+            build_engine=self.build_engine,
+            force_rebuild=self.force_rebuild,
+        )
+        artifacts = _prepare_accelerated_artifacts(cfg, build_trt=self.build_engine or self.force_rebuild, input_size=input_size)
+        if artifacts.selected_onnx_path is None:
+            raise FileNotFoundError(f"ONNX artifact not found for {self.model_id} at input size {input_size}")
+        dtype_name = "fp32" if "fp32" in Path(artifacts.selected_onnx_path).name.lower() else "fp16"
+        self._set_artifact_paths(Path(artifacts.selected_onnx_path), artifacts.paths.trt_path_for_dtype(dtype_name), input_size)
 
     def load(self) -> NativeTensorRtEngine:
         if self._engine is not None:
             self._preprocessor.fixed_input_size = self._engine.input_image_size
             return self._engine
         if self.build_engine or self.force_rebuild or not self.engine_path.exists():
-            build_native_tensorrt_engine(self.onnx_path, self.engine_path, force=self.force_rebuild)
+            build_native_tensorrt_engine(self.onnx_path, self.engine_path, fp16=self.dtype == torch.float16, force=self.force_rebuild)
         trt_lib_dirs = ensure_tensorrt_dll_path()
         self._engine = NativeTensorRtEngine(self.engine_path, device=self.device, dtype=self.dtype)
         self._preprocessor.fixed_input_size = self._engine.input_image_size
@@ -324,11 +380,12 @@ class DistillAnyDepthBaseNativeTensorRt:
             if self.profile_sync and torch.cuda.is_available():
                 torch.cuda.synchronize(self.device)
 
+        rgb = ensure_bchw(rgb, name="rgb")
+        _, _, height, width = rgb.shape
+        self._ensure_artifacts_for_input(height, width)
         engine = self.load()
         sync()
         start = time.perf_counter()
-        rgb = ensure_bchw(rgb, name="rgb")
-        _, _, height, width = rgb.shape
         tensor = self._preprocessor(rgb)
         sync()
         preprocess_ms = (time.perf_counter() - start) * 1000.0

@@ -28,6 +28,13 @@ class ModelArtifactPaths:
             return self.onnx_fp32_path
         raise ValueError(f"unknown ONNX dtype: {dtype_name!r}")
 
+    def trt_path_for_dtype(self, dtype_name: str) -> Path:
+        if dtype_name == "fp16":
+            return self.trt_fp16_path
+        if dtype_name == "fp32":
+            return self.trt_fp16_path.with_name(self.trt_fp16_path.name.replace("model_fp16_", "model_fp32_"))
+        raise ValueError(f"unknown TensorRT dtype: {dtype_name!r}")
+
     def to_report(self) -> dict[str, str | int]:
         report = asdict(self)
         report["model_dir"] = str(self.model_dir)

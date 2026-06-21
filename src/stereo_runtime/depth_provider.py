@@ -149,13 +149,28 @@ def _resolve_hf_model_file(
 ) -> str:
     from huggingface_hub import hf_hub_download
 
-    for filename in ("model.safetensors", "model.pt", "model.ckpt"):
+    filenames = ("model.safetensors", "model.pt", "model.ckpt")
+    last_error: Exception | None = None
+    if not force_download:
+        for filename in filenames:
+            try:
+                return hf_hub_download(
+                    repo_id=model_id,
+                    filename=filename,
+                    cache_dir=str(cache_dir),
+                    local_files_only=True,
+                )
+            except Exception as exc:
+                last_error = exc
+    if local_files_only:
+        raise RuntimeError(f"unable to resolve local InfiniDepth weights for {model_id!r}") from last_error
+
+    for filename in filenames:
         try:
             return hf_hub_download(
                 repo_id=model_id,
                 filename=filename,
                 cache_dir=str(cache_dir),
-                local_files_only=local_files_only,
                 force_download=force_download,
             )
         except Exception as exc:
@@ -548,11 +563,19 @@ def _postprocess_generic_depth(depth: torch.Tensor, model_id: str) -> torch.Tens
     return _normalize_depth(depth)
 
 
-def _prepare_accelerated_artifacts(cfg: DepthProviderConfig, *, build_trt: bool = False):
+def _prepare_accelerated_artifacts(
+    cfg: DepthProviderConfig,
+    *,
+    build_trt: bool = False,
+    input_size: tuple[int, int] | None = None,
+):
     from .model_artifacts import prepare_model_artifacts
 
     cache_dir = Path(cfg.cache_dir) if cfg.cache_dir is not None else default_lab_cache_dir()
     model_dir = Path(cfg.onnx_path).parent if cfg.onnx_path is not None else None
+    kwargs: dict[str, int] = {}
+    if input_size is not None:
+        kwargs["export_height"], kwargs["export_width"] = int(input_size[0]), int(input_size[1])
     result = prepare_model_artifacts(
         cfg.model_id,
         cache_dir=cache_dir,
@@ -563,6 +586,7 @@ def _prepare_accelerated_artifacts(cfg: DepthProviderConfig, *, build_trt: bool 
         export_onnx_if_missing=True,
         build_trt_if_missing=build_trt,
         force_rebuild_trt=cfg.force_rebuild,
+        **kwargs,
     )
     return result
 
@@ -646,14 +670,13 @@ def create_depth_provider(config: DepthProviderConfig | dict[str, Any] | None = 
     ):
         from .providers.nvidia.tensorrt_native import NativeTensorRtDepthProvider
 
-        artifacts = _prepare_accelerated_artifacts(cfg, build_trt=cfg.build_engine or cfg.force_rebuild)
-        onnx_path = artifacts.selected_onnx_path or cfg.onnx_path
-        engine_path = artifacts.paths.trt_fp16_path if cfg.engine_path is None else cfg.engine_path
         return NativeTensorRtDepthProvider(
             device=device,
             cache_dir=cfg.cache_dir,
-            onnx_path=onnx_path,
-            engine_path=engine_path,
+            onnx_path=cfg.onnx_path,
+            engine_path=cfg.engine_path,
+            local_files_only=cfg.local_files_only,
+            force_download=cfg.force_download,
             model_id=cfg.model_id,
             model_name=cfg.model_name,
             build_engine=cfg.build_engine,
@@ -667,12 +690,13 @@ def create_depth_provider(config: DepthProviderConfig | dict[str, Any] | None = 
     if backend in {"distill_base_nvidia", "nvidia_chain", "tensorrt", "tensorrt_ort"} and cfg.prefer_tensorrt:
         from .providers.nvidia.tensorrt_ort import TensorRtOrtDepthProvider
 
-        artifacts = _prepare_accelerated_artifacts(cfg)
         return TensorRtOrtDepthProvider(
             device=device,
             cache_dir=cfg.cache_dir,
-            onnx_path=artifacts.selected_onnx_path or cfg.onnx_path,
+            onnx_path=cfg.onnx_path,
             trt_cache_dir=cfg.trt_cache_dir,
+            local_files_only=cfg.local_files_only,
+            force_download=cfg.force_download,
             model_id=cfg.model_id,
             model_name=cfg.model_name,
             depth_upsample=cfg.depth_upsample,
@@ -682,15 +706,16 @@ def create_depth_provider(config: DepthProviderConfig | dict[str, Any] | None = 
     if backend in {"distill_base_nvidia", "nvidia_chain", "onnx_cuda", "onnx_cuda_iobinding"} and cfg.prefer_onnx:
         from .providers.nvidia.onnx_cuda import OnnxCudaDepthProvider
 
-        artifacts = _prepare_accelerated_artifacts(cfg)
         return OnnxCudaDepthProvider(
             device=device,
             cache_dir=cfg.cache_dir,
-            onnx_path=artifacts.selected_onnx_path or cfg.onnx_path,
+            onnx_path=cfg.onnx_path,
             model_id=cfg.model_id,
             model_name=cfg.model_name,
             use_iobinding=cfg.use_iobinding,
             use_dlpack=cfg.use_dlpack,
+            local_files_only=cfg.local_files_only,
+            force_download=cfg.force_download,
             depth_upsample=cfg.depth_upsample,
             depth_upsample_edge_strength=cfg.depth_upsample_edge_strength,
         )
