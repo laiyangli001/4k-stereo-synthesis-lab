@@ -68,7 +68,7 @@ DEFAULTS = {
     "Depth Model": DEFAULT_MODEL_LIST[0] if DEFAULT_MODEL_LIST else "",
     "Depth Strength": 2.0,
     "Depth Quick": "Standard",
-    "Depth Resolution": 322,
+    "Depth Resolution": 518,
     "Anti-aliasing": 2,
     "Depth Antialias Strength": 0.4,
     "Foreground Scale": 0.5,

@@ -704,15 +704,16 @@ class GUIBuilderMixin:
         self.stereo_monitor_dd.update()
 
     def update_depth_resolution_options(self, model_name):
-        resolutions = ALL_MODELS.get(model_name, {}).get("resolutions", [322])
+        resolutions = ALL_MODELS.get(model_name, {}).get("resolutions", [DEFAULTS["Depth Resolution"]])
         self.depth_res_dd.options = [str(r) for r in resolutions]
         cur = self.depth_res_dd.value
         if cur and cur in [str(r) for r in resolutions]:
             return
+        preferred = 512 if "infinidepth" in str(model_name or "").lower() else DEFAULTS["Depth Resolution"]
         try:
-            cur_num = int(cur) if cur else 0
-            closest = min(resolutions, key=lambda x: abs(x - cur_num))
-            self.depth_res_dd.value = str(closest)
+            cur_num = int(cur) if cur else preferred
         except (ValueError, TypeError):
-            self.depth_res_dd.value = str(resolutions[0])
+            cur_num = preferred
+        closest = min(resolutions, key=lambda x: abs(x - cur_num))
+        self.depth_res_dd.value = str(closest)
         self.depth_res_dd.update()

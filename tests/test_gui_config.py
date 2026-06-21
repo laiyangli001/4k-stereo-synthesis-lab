@@ -286,3 +286,14 @@ def test_accelerator_policy_matches_teammate_config_semantics():
     assert 'mgx_val = cfg.get("MIGraphX")' in config_mgr_text
     assert 'cml_val = cfg.get("CoreML")' in config_mgr_text
     assert 'ov_val = cfg.get("OpenVINO")' in config_mgr_text
+
+
+def test_default_depth_resolution_prefers_518_except_infinidepth():
+    config_text = _config_source().read_text(encoding="utf-8")
+    builders_text = _file_text("builders.py")
+
+    assert '"Depth Resolution": 518' in config_text
+    assert 'resolutions = ALL_MODELS.get(model_name, {}).get("resolutions", [DEFAULTS["Depth Resolution"]])' in builders_text
+    assert 'preferred = 512 if "infinidepth" in str(model_name or "").lower() else DEFAULTS["Depth Resolution"]' in builders_text
+    assert 'closest = min(resolutions, key=lambda x: abs(x - cur_num))' in builders_text
+    assert '[322]' not in builders_text[builders_text.index("def update_depth_resolution_options"):]
