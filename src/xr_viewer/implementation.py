@@ -54,7 +54,7 @@ except ImportError:
     OPENXR_AVAILABLE = False
     print("[OpenXRViewer] pyopenxr not installed. Run: pip install pyopenxr")
 
-from .constants import KB_CURSOR_PRIORITY_BIAS, KB_CURSOR_RELEASE_GRACE, _VIVE_TB_Y
+from .constants import KB_CURSOR_PRIORITY_BIAS, KB_CURSOR_RELEASE_GRACE, _BG_COLORS, _VIVE_TB_Y
 from .input import (
     _TOUCH_AVAILABLE, _TOUCH_CONTACT_ID_LEFT, _TOUCH_CONTACT_ID_RIGHT,
     _TOUCH_PINCH_SPREAD_GAIN, _touch_injector,
@@ -1647,16 +1647,6 @@ void main() {
     fragColor = vec4(col, 1.0);
 }
 """
-
-# Background color presets: (r, g, b) in linear [0,1].  Index 0 = opaque black (default).
-_BG_COLORS = [
-    (0.000, 0.000, 0.000),   # default -opaque black
-    (0.827, 0.827, 0.827),   # light grey
-    (0.196, 0.196, 0.216),   # charcoal
-    (0.047, 0.071, 0.149),   # dark navy
-    (0.937, 0.886, 0.820),   # warm beige
-    (0.000, 0.600, 0.200),   # green screen (VD passthrough)
-]
 
 # Curved-screen vertex shader: in_position is a world-space vec3 arc point (no model matrix).
 # UV is passed through normally.  vp_mat is the combined view-projection for the current eye.

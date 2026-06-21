@@ -3,6 +3,7 @@
 # Shared runtime/rendering code is in xrviewer_core.py; room-specific code lives here.
 
 from .implementation import *
+from .constants import _BG_COLORS
 from .overlay import OverlayMixin
 from .render import _view_mat_inv
 
