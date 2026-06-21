@@ -17,6 +17,7 @@ import numpy as np
 
 
 APP_DIR = Path(__file__).resolve().parents[1]
+ENVIRONMENTS_DIR = APP_DIR / "xr_viewer" / "environments"
 sys.path.insert(0, str(APP_DIR))
 os.chdir(APP_DIR)
 warnings.filterwarnings(
@@ -112,8 +113,20 @@ def _rot_deg(data, default=(0.0, 0.0, 0.0)):
     return [math.radians(v) for v in _vec3(data, default)]
 
 
+def _resolve_room_dir(room: str) -> Path:
+    room_dir = ENVIRONMENTS_DIR / room
+    if room_dir.exists():
+        return room_dir
+    room_key = room.strip().lower()
+    if ENVIRONMENTS_DIR.exists():
+        for candidate in ENVIRONMENTS_DIR.iterdir():
+            if candidate.is_dir() and candidate.name.lower() == room_key:
+                return candidate
+    return room_dir
+
+
 def _load_profile(room: str):
-    room_dir = APP_DIR / "environment" / room
+    room_dir = _resolve_room_dir(room)
     profile_path = room_dir / "profile.json"
     if not profile_path.exists():
         raise FileNotFoundError(f"profile.json not found: {profile_path}")
