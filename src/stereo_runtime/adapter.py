@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 RuntimeMode = Literal["auto", "movie", "game", "image", "debug"]
 StereoQuality = Literal["fast", "fast_plus", "quality_4k", "hq_4k"]
-DepthBackend = Literal["auto", "tensorrt_native", "onnx_cuda", "pytorch_cuda"]
+DepthBackend = Literal["auto", "tensorrt_native", "onnx_cuda", "pytorch_cuda", "pytorch_rocm", "migraphx_rocm"]
 OnnxDtypeMode = Literal["auto", "fp16", "fp32"]
 DepthUpsampleMode = Literal["bilinear", "guided"]
 OutputFormat = Literal["half_sbs", "full_sbs", "half_tab", "full_tab", "mono", "anaglyph", "interleaved", "leia", "depth_map"]
@@ -43,6 +43,8 @@ class StereoRuntimeConfig:
     export_width: int = 518
     build_trt_engine: bool = False
     force_rebuild_trt: bool = False
+    build_migraphx_graph: bool = False
+    force_rebuild_migraphx: bool = False
     trt_workspace_gb: int = 4
     use_cuda_graph: bool = False
     profile_sync: bool = False
@@ -95,6 +97,10 @@ class StereoRuntimeConfig:
     def trt_engine_path(self) -> Path:
         return self._artifact_paths().trt_fp16_path
 
+    @property
+    def migraphx_graph_path(self) -> Path:
+        return self._artifact_paths().migraphx_fp16_path
+
     def _artifact_paths(self):
         return artifact_paths_for_model(
             self.resolved_model_id,
@@ -110,6 +116,7 @@ class StereoRuntimeConfig:
             "onnx_path": str(self.onnx_path),
             "fp32_onnx_path": str(self.fp32_onnx_path),
             "trt_engine_path": str(self.trt_engine_path),
+            "migraphx_graph_path": str(self.migraphx_graph_path),
         }
 
     def frame_contract(self) -> dict[str, str]:
@@ -160,7 +167,9 @@ def runtime_config_from_d2s_settings(
         raise ValueError("D2S settings must include 'Depth Model' or 'model_id'")
 
     depth_backend: DepthBackend
-    if settings.get("TensorRT", False):
+    if settings.get("MIGraphX", False):
+        depth_backend = "migraphx_rocm"
+    elif settings.get("TensorRT", False):
         depth_backend = "tensorrt_native"
     elif settings.get("ONNX", False):
         depth_backend = "onnx_cuda"
@@ -191,6 +200,8 @@ def runtime_config_from_d2s_settings(
         onnx_dtype=onnx_dtype,
         build_trt_engine=bool(settings.get("TensorRT", False)),
         force_rebuild_trt=bool(settings.get("Recompile TensorRT", False)),
+        build_migraphx_graph=bool(settings.get("MIGraphX", False)),
+        force_rebuild_migraphx=bool(settings.get("Recompile MIGraphX", False)),
         depth_strength=float(settings.get("Depth Strength", 2.0)),
         convergence=float(settings.get("Convergence", 0.45)),
         ipd=ipd_mm / 1000.0,
@@ -234,6 +245,12 @@ def _normalize_depth_backend(value: Any) -> DepthBackend:
         "onnx_cuda_iobinding": "onnx_cuda",
         "pytorch": "pytorch_cuda",
         "pytorch_cuda": "pytorch_cuda",
+        "pytorch_rocm": "pytorch_rocm",
+        "rocm": "pytorch_rocm",
+        "amd_rocm": "pytorch_rocm",
+        "migraphx": "migraphx_rocm",
+        "migraphx_rocm": "migraphx_rocm",
+        "rocm_migraphx": "migraphx_rocm",
     }
     try:
         return mapping[key]
@@ -333,6 +350,9 @@ def depth_provider_config_from_runtime(config: StereoRuntimeConfig) -> "DepthPro
         backend = "onnx_cuda_iobinding"
     if backend == "pytorch_cuda":
         backend = "pytorch_cuda"
+    engine_path = config.migraphx_graph_path if backend == "migraphx_rocm" else config.trt_engine_path
+    build_engine = config.build_migraphx_graph if backend == "migraphx_rocm" else config.build_trt_engine
+    force_rebuild = config.force_rebuild_migraphx if backend == "migraphx_rocm" else config.force_rebuild_trt
 
     return DepthProviderConfig(
         backend=backend,
@@ -341,15 +361,15 @@ def depth_provider_config_from_runtime(config: StereoRuntimeConfig) -> "DepthPro
         device=config.device,
         cache_dir=config.model_path.parent,
         onnx_path=config.onnx_path,
-        engine_path=config.trt_engine_path,
+        engine_path=engine_path,
         local_files_only=True,
         prefer_native_tensorrt=backend == "tensorrt_native",
         prefer_tensorrt=backend == "tensorrt_native",
         prefer_onnx=backend == "onnx_cuda_iobinding",
         use_iobinding=True,
         use_dlpack=backend == "onnx_cuda_iobinding",
-        build_engine=config.build_trt_engine,
-        force_rebuild=config.force_rebuild_trt,
+        build_engine=build_engine,
+        force_rebuild=force_rebuild,
         use_cuda_graph=config.use_cuda_graph,
         profile_sync=config.profile_sync,
         depth_upsample=config.depth_upsample,

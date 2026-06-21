@@ -17,6 +17,7 @@ class ModelArtifactPaths:
     onnx_fp16_path: Path
     onnx_fp32_path: Path
     trt_fp16_path: Path
+    migraphx_fp16_path: Path
     export_height: int
     export_width: int
 
@@ -33,6 +34,7 @@ class ModelArtifactPaths:
         report["onnx_fp16_path"] = str(self.onnx_fp16_path)
         report["onnx_fp32_path"] = str(self.onnx_fp32_path)
         report["trt_fp16_path"] = str(self.trt_fp16_path)
+        report["migraphx_fp16_path"] = str(self.migraphx_fp16_path)
         return report
 
 
@@ -75,6 +77,7 @@ def artifact_paths_for_model(
         onnx_fp16_path=root / f"model_fp16_{export_height}x{export_width}.onnx",
         onnx_fp32_path=root / f"model_fp32_{export_height}x{export_width}.onnx",
         trt_fp16_path=root / f"model_fp16_{export_height}x{export_width}.trt",
+        migraphx_fp16_path=root / f"model_fp16_{export_height}x{export_width}.mgx",
         export_height=int(export_height),
         export_width=int(export_width),
     )

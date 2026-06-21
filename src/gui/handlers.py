@@ -6,6 +6,7 @@ import flet as ft
 from utils import (
     OS_NAME, ALL_MODELS, DEFAULT_PORT, STEREO_MIX_NAMES,
     DISABLE_TRT_KEYWORDS, DISABLE_COREML_KEYWORDS, DISABLE_OPENVINO_KEYWORDS,
+    DISABLE_MIGRAPHX_KEYWORDS,
     get_local_ip,
 )
 from . import devices as devices_module
@@ -78,8 +79,11 @@ class GUIHandlerMixin:
         self._config["Depth Model"] = model
         self.update_depth_resolution_options(model)
         self.auto_enable_optimizers_based_on_device()
-        if not devices_module.IS_ROCM and "CUDA" in self.device_dd.value:
-            self.update_tensorrt_visibility_based_on_model(model)
+        if "CUDA" in self.device_dd.value:
+            if devices_module.IS_ROCM:
+                self.update_migraphx_visibility_based_on_model(model)
+            else:
+                self.update_tensorrt_visibility_based_on_model(model)
         elif "MPS" in self.device_dd.value:
             self.update_coreml_visibility_based_on_model(model)
         elif "XPU" in self.device_dd.value:
@@ -102,14 +106,18 @@ class GUIHandlerMixin:
 
     def _update_accelerator_visibility(self, device_label):
         cuda = "CUDA" in device_label
+        rocm = cuda and devices_module.IS_ROCM
         dml = "DirectML" in device_label
         mps = "MPS" in device_label
         xpu = "XPU" in device_label
         other = not (cuda or dml or mps or xpu)
         self.torch_compile_cb.visible = cuda
-        self.tensorrt_cb.visible = cuda and not devices_module.IS_ROCM
+        self.tensorrt_cb.visible = cuda and not rocm
         self.tensorrt_cb.disabled = False
         self.recompile_trt_cb.visible = self.tensorrt_cb.value if self.tensorrt_cb.visible else False
+        self.migraphx_cb.visible = rocm
+        self.migraphx_cb.disabled = False
+        self.recompile_migraphx_cb.visible = self.migraphx_cb.value if self.migraphx_cb.visible else False
         self.coreml_cb.visible = mps
         self.coreml_cb.disabled = False
         self.recompile_coreml_cb.visible = self.coreml_cb.value if self.coreml_cb.visible else False
@@ -125,13 +133,18 @@ class GUIHandlerMixin:
             self.torch_compile_cb.visible = False
             self.tensorrt_cb.visible = False
             self.recompile_trt_cb.visible = False
+            self.migraphx_cb.visible = False
+            self.recompile_migraphx_cb.visible = False
             self.coreml_cb.visible = False
             self.recompile_coreml_cb.visible = False
             self.openvino_cb.visible = False
             self.recompile_openvino_cb.visible = False
         current_model = self.current_model_name
-        if cuda and not devices_module.IS_ROCM:
-            self.update_tensorrt_visibility_based_on_model(current_model)
+        if cuda:
+            if rocm:
+                self.update_migraphx_visibility_based_on_model(current_model)
+            else:
+                self.update_tensorrt_visibility_based_on_model(current_model)
         if mps:
             self.update_coreml_visibility_based_on_model(current_model)
         if xpu:
@@ -149,15 +162,24 @@ class GUIHandlerMixin:
         self.recompile_openvino_cb.visible = self.openvino_cb.value
         self._fit_window_to_content()
 
+    def _on_migraphx_toggle(self, e):
+        self.recompile_migraphx_cb.visible = self.migraphx_cb.value
+        self._fit_window_to_content()
+
     def auto_enable_optimizers_based_on_device(self):
         device_label = self.device_dd.value
         model_lower = (self.current_model_name or "").lower()
         self.tensorrt_cb.value = False
+        self.migraphx_cb.value = False
         self.coreml_cb.value = False
         self.openvino_cb.value = False
-        if "CUDA" in device_label and not devices_module.IS_ROCM:
-            should = not any(kw in model_lower for kw in DISABLE_TRT_KEYWORDS)
-            self.tensorrt_cb.value = should
+        if "CUDA" in device_label:
+            if devices_module.IS_ROCM:
+                should = not any(kw in model_lower for kw in DISABLE_MIGRAPHX_KEYWORDS)
+                self.migraphx_cb.value = should
+            else:
+                should = not any(kw in model_lower for kw in DISABLE_TRT_KEYWORDS)
+                self.tensorrt_cb.value = should
             self.torch_compile_cb.value = True
         elif "MPS" in device_label:
             should = not any(kw in model_lower for kw in DISABLE_COREML_KEYWORDS)
@@ -166,6 +188,7 @@ class GUIHandlerMixin:
             should = not any(kw in model_lower for kw in DISABLE_OPENVINO_KEYWORDS)
             self.openvino_cb.value = should
         self._on_trt_toggle(None)
+        self._on_migraphx_toggle(None)
         self._on_coreml_toggle(None)
         self._on_openvino_toggle(None)
 
@@ -180,6 +203,19 @@ class GUIHandlerMixin:
                 self.recompile_trt_cb.visible = False
             else:
                 self.tensorrt_cb.disabled = False
+
+    def update_migraphx_visibility_based_on_model(self, model_name):
+        if not model_name:
+            return
+        if devices_module.IS_ROCM and "CUDA" in self.device_dd.value:
+            should_disable = any(kw in model_name.lower() for kw in DISABLE_MIGRAPHX_KEYWORDS)
+            if should_disable:
+                self.migraphx_cb.value = False
+                self.migraphx_cb.disabled = True
+                self.recompile_migraphx_cb.visible = False
+            else:
+                self.migraphx_cb.disabled = False
+                self.recompile_migraphx_cb.visible = self.migraphx_cb.value
 
     def update_coreml_visibility_based_on_model(self, model_name):
         if not model_name:

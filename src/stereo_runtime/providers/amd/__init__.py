@@ -1,5 +1,12 @@
 """AMD ROCm and DirectML depth providers."""
 
+from .migraphx import (
+    MIGraphXDepthProvider,
+    MIGraphXEngine,
+    build_migraphx_graph,
+    create_migraphx_rocm_provider,
+    is_migraphx_available,
+)
 from .pytorch_rocm import (
     DistillAnyDepthBaseRocm,
     GenericAutoDepthRocmProvider,
@@ -11,6 +18,11 @@ from .pytorch_rocm import (
 )
 
 __all__ = [
+    "MIGraphXDepthProvider",
+    "MIGraphXEngine",
+    "build_migraphx_graph",
+    "create_migraphx_rocm_provider",
+    "is_migraphx_available",
     "TorchRocmDepthProvider",
     "GenericTorchRocmDepthProvider",
     "DistillAnyDepthBaseRocm",

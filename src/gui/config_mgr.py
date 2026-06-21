@@ -100,11 +100,14 @@ class GUIConfigMixin:
         self.torch_compile_cb.value = cfg.get("torch.compile", False)
         self.tensorrt_cb.value = cfg.get("TensorRT", False)
         self.recompile_trt_cb.value = cfg.get("Recompile TensorRT", DEFAULTS["Recompile TensorRT"])
+        self.migraphx_cb.value = cfg.get("MIGraphX", False)
+        self.recompile_migraphx_cb.value = cfg.get("Recompile MIGraphX", DEFAULTS["Recompile MIGraphX"])
         self.coreml_cb.value = cfg.get("CoreML", False)
         self.recompile_coreml_cb.value = cfg.get("Recompile CoreML", DEFAULTS["Recompile CoreML"])
         self.openvino_cb.value = cfg.get("OpenVINO", False)
         self.recompile_openvino_cb.value = cfg.get("Recompile OpenVINO", DEFAULTS["Recompile OpenVINO"])
         self.recompile_trt_cb.visible = self.tensorrt_cb.value and self.tensorrt_cb.visible
+        self.recompile_migraphx_cb.visible = self.migraphx_cb.value and self.migraphx_cb.visible
         self.recompile_coreml_cb.visible = self.coreml_cb.value and self.coreml_cb.visible
         self.recompile_openvino_cb.visible = self.openvino_cb.value and self.openvino_cb.visible
         ct = cfg.get("Capture Tool", DEFAULTS["Capture Tool"])
@@ -130,6 +133,7 @@ class GUIConfigMixin:
         self._sync_capture_mode_visibility()
         self._apply_stereo_output(cfg)
         self.update_tensorrt_visibility_based_on_model(selected_model)
+        self.update_migraphx_visibility_based_on_model(selected_model)
         self.update_coreml_visibility_based_on_model(selected_model)
         self.update_openvino_visibility_based_on_model(selected_model)
         self.update_ui_texts()
@@ -207,6 +211,8 @@ class GUIConfigMixin:
             "torch.compile": self.torch_compile_cb.value,
             "TensorRT": self.tensorrt_cb.value,
             "Recompile TensorRT": self.recompile_trt_cb.value,
+            "MIGraphX": self.migraphx_cb.value,
+            "Recompile MIGraphX": self.recompile_migraphx_cb.value,
             "CoreML": self.coreml_cb.value,
             "Recompile CoreML": self.recompile_coreml_cb.value,
             "OpenVINO": self.openvino_cb.value,
@@ -224,6 +230,7 @@ class GUIConfigMixin:
             "Environment Model": self.env_model_dd.value,
         })
         self.recompile_trt_cb.value = False
+        self.recompile_migraphx_cb.value = False
         self.recompile_coreml_cb.value = False
         self.recompile_openvino_cb.value = False
 

@@ -46,6 +46,8 @@ class RuntimeExports:
     use_torch_compile: bool
     use_tensorrt: bool
     recompile_trt: bool
+    use_migraphx: bool
+    recompile_migraphx: bool
     use_coreml: bool
     recompile_coreml: bool
     use_openvino: bool
@@ -114,6 +116,8 @@ def resolve_runtime_exports(settings: dict, *, os_name: str) -> RuntimeExports:
         use_torch_compile=depth_settings.use_torch_compile,
         use_tensorrt=depth_settings.use_tensorrt,
         recompile_trt=depth_settings.recompile_trt,
+        use_migraphx=depth_settings.use_migraphx,
+        recompile_migraphx=depth_settings.recompile_migraphx,
         use_coreml=depth_settings.use_coreml,
         recompile_coreml=depth_settings.recompile_coreml,
         use_openvino=depth_settings.use_openvino,

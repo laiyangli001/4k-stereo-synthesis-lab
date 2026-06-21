@@ -404,6 +404,27 @@ def create_depth_provider(config: DepthProviderConfig | dict[str, Any] | None = 
     backend = cfg.backend
     device = torch.device(cfg.device)
 
+    if backend in {"migraphx_rocm", "rocm_migraphx", "migraphx"}:
+        from .providers.amd import create_migraphx_rocm_provider
+
+        return create_migraphx_rocm_provider(
+            model_id=cfg.model_id,
+            model_name=cfg.model_name,
+            device=device,
+            cache_dir=cfg.cache_dir,
+            onnx_path=cfg.onnx_path,
+            graph_path=cfg.engine_path,
+            build_graph=cfg.build_engine,
+            force_rebuild=cfg.force_rebuild,
+            local_files_only=cfg.local_files_only,
+            force_download=cfg.force_download,
+            allow_pytorch_fallback=cfg.allow_pytorch_fallback,
+            depth_resolution=cfg.depth_resolution,
+            patch_size=cfg.patch_size,
+            depth_upsample=cfg.depth_upsample,
+            depth_upsample_edge_strength=cfg.depth_upsample_edge_strength,
+        )
+
     if backend in {"pytorch_rocm", "rocm", "amd_rocm"}:
         from .providers.amd import create_pytorch_rocm_provider
 

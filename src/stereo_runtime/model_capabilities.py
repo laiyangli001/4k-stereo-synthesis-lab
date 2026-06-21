@@ -61,6 +61,11 @@ DISABLE_OPENVINO_KEYWORDS = [
     "dpt-hybrid-midas-hf",
 ]
 
+DISABLE_MIGRAPHX_KEYWORDS = [
+    "dpt-hybrid-midas",
+    "video-depth-anything",
+]
+
 DISABLE_CUDNN_KEYWORDS = [
     "6950",
     "6900",

@@ -25,7 +25,9 @@ def test_runtime_config_derives_artifacts_from_model_dir():
     assert config.onnx_path == model_dir / "model_fp16_294x518.onnx"
     assert config.fp32_onnx_path == model_dir / "model_fp32_294x518.onnx"
     assert config.trt_engine_path == model_dir / "model_fp16_294x518.trt"
+    assert config.migraphx_graph_path == model_dir / "model_fp16_294x518.mgx"
     assert config.artifact_paths()["model_dir"] == str(model_dir)
+    assert config.artifact_paths()["migraphx_graph_path"] == str(model_dir / "model_fp16_294x518.mgx")
 
 
 def test_runtime_config_maps_depth_backend_auto_to_native_tensorrt():
@@ -130,6 +132,32 @@ def test_runtime_config_from_d2s_settings_maps_legacy_model_and_trt_flags():
     assert config.ipd == 0.07
     assert config.ipd_mm == 70.0
     assert config.stereo_scale == 0.5
+
+
+def test_runtime_config_from_d2s_settings_maps_migraphx_flags_before_tensorrt():
+    config = runtime_config_from_d2s_settings(
+        {
+            "Depth Model": "Distill-Any-Depth-Base",
+            "MIGraphX": True,
+            "Recompile MIGraphX": True,
+            "TensorRT": True,
+            "Recompile TensorRT": True,
+        },
+        cache_dir="./models",
+        device="cuda",
+    )
+    depth_config = depth_provider_config_from_runtime(config)
+
+    assert config.depth_backend == "migraphx_rocm"
+    assert config.build_migraphx_graph is True
+    assert config.force_rebuild_migraphx is True
+    assert config.build_trt_engine is True
+    assert config.force_rebuild_trt is True
+    assert depth_config.backend == "migraphx_rocm"
+    assert depth_config.onnx_path == config.onnx_path
+    assert depth_config.engine_path == config.migraphx_graph_path
+    assert depth_config.build_engine is True
+    assert depth_config.force_rebuild is True
 
 
 def test_runtime_config_from_d2s_settings_uses_dtype_auto_for_gui_fp16_flag():

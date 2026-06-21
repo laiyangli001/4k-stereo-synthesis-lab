@@ -17,6 +17,7 @@ def test_artifact_paths_follow_d2s_naming():
     assert paths.onnx_fp16_path.name == "model_fp16_294x518.onnx"
     assert paths.onnx_fp32_path.name == "model_fp32_294x518.onnx"
     assert paths.trt_fp16_path.name == "model_fp16_294x518.trt"
+    assert paths.migraphx_fp16_path.name == "model_fp16_294x518.mgx"
 
 
 def test_select_existing_onnx_prefers_fp16_for_auto(tmp_path: Path):

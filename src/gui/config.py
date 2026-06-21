@@ -94,6 +94,8 @@ DEFAULTS = {
     "Recompile TensorRT": False,
     "CoreML": False,
     "Recompile CoreML": False,
+    "MIGraphX": False,
+    "Recompile MIGraphX": False,
     "Recompile OpenVINO": False,
     "Computing Device": 0,
     "Language": "EN",

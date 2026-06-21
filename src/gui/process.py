@@ -206,6 +206,7 @@ class GUIProcessMixin:
                     self._diag(f"process exited during wait, code={self.process.returncode}")
                     break
             self._config["Recompile TensorRT"] = False
+            self._config["Recompile MIGraphX"] = False
             self._config["Recompile CoreML"] = False
             self._config["Recompile OpenVINO"] = False
             self._config["FP16"] = DEFAULTS["FP16"]

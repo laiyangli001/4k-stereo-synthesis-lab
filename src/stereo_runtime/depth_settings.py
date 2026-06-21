@@ -19,6 +19,8 @@ class DepthSettings:
     use_torch_compile: bool
     use_tensorrt: bool
     recompile_trt: bool
+    use_migraphx: bool
+    recompile_migraphx: bool
     use_coreml: bool
     recompile_coreml: bool
     use_openvino: bool
@@ -41,6 +43,8 @@ def resolve_depth_settings(settings: dict, *, cache_path: str = "./models") -> D
         use_torch_compile=settings["torch.compile"],
         use_tensorrt=settings["TensorRT"],
         recompile_trt=settings["Recompile TensorRT"],
+        use_migraphx=settings.get("MIGraphX", False),
+        recompile_migraphx=settings.get("Recompile MIGraphX", False),
         use_coreml=settings["CoreML"],
         recompile_coreml=settings["Recompile CoreML"],
         use_openvino=settings["OpenVINO"],

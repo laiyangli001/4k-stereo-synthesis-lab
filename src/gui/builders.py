@@ -366,15 +366,20 @@ class GUIBuilderMixin:
             label="CoreML", on_change=self._on_coreml_toggle)
         self.openvino_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT,
             label="OpenVINO", on_change=self._on_openvino_toggle)
+        self.migraphx_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT,
+            label="MIGraphX", on_change=self._on_migraphx_toggle)
         self.recompile_trt_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="Recompile TensorRT")
         self.recompile_coreml_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="Recompile CoreML")
         self.recompile_openvino_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="Recompile OpenVINO")
+        self.recompile_migraphx_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="Recompile MIGraphX")
         accel_row1 = ft.Row([self.torch_compile_cb, self.tensorrt_cb, self.recompile_trt_cb], spacing=S(20))
         accel_row2 = ft.Row([self.coreml_cb, self.recompile_coreml_cb, self.openvino_cb, self.recompile_openvino_cb], spacing=S(20))
+        accel_row3 = ft.Row([self.migraphx_cb, self.recompile_migraphx_cb], spacing=S(20))
         self._accel_spacer = ft.Container(width=0)
         self.row4a = ft.Row([self.acceleration_label, accel_row1], spacing=1)
         self.row4b = ft.Row([self._accel_spacer, accel_row2], spacing=1)
-        self._advanced_stereo_rows.extend([self.row4a, self.row4b])
+        self.row4c = ft.Row([self._accel_spacer, accel_row3], spacing=1)
+        self._advanced_stereo_rows.extend([self.row4a, self.row4b, self.row4c])
         for row in self._advanced_stereo_rows:
             row.visible = self.advanced_stereo_cb.value
 
@@ -488,7 +493,7 @@ class GUIBuilderMixin:
         depth_group = ft.Container(
             ft.Column([row0, row1, stereo_row0, convergence_depth_row, row2b, row3,
                        stereo_row1, stereo_row2, stereo_row3, stereo_row4,
-                       self.row4a, self.row4b, advanced_stereo_row], spacing=S(8)),
+                       self.row4a, self.row4b, self.row4c, advanced_stereo_row], spacing=S(8)),
             margin=ft.Margin(0, 0, 0, S(8)),
             border=ft.Border(ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE),
                              ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE)),
