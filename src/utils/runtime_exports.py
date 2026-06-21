@@ -79,7 +79,7 @@ def resolve_runtime_exports(settings: dict, *, os_name: str) -> RuntimeExports:
         fix_viewer_aspect=settings["Fix Viewer Aspect"],
         lossless_scaling_support=settings["Lossless Scaling Support"],
     )
-    depth_settings = resolve_depth_settings(settings)
+    depth_settings = resolve_depth_settings(settings, os_name=os_name)
     viewer_settings = resolve_viewer_settings(settings)
 
     return RuntimeExports(

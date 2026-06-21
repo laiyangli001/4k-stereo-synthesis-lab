@@ -179,6 +179,7 @@ class GUIConfigMixin:
         scene_reset_threshold = self._parse_float(self.scene_reset_dd.value, DEFAULTS["Scene Reset Threshold"])
         foreground_scale = self._clamp_foreground_scale(self._parse_float(self.foreground_scale_dd.value, DEFAULTS["Foreground Scale"]))
         accelerator_values, recompile_values = self._platform_accelerator_values()
+        fp16_value = False if "MPS" in (self.device_dd.value or "") else bool(self.fp16_cb.value)
 
         self._config.update({
             "Capture Mode": self.capture_mode_key,
@@ -210,7 +211,7 @@ class GUIConfigMixin:
             "Anaglyph Method": self.anaglyph_dd.value,
             "Foreground Scale": foreground_scale,
             "Depth Resolution": self._parse_int(self.depth_res_dd.value, DEFAULTS["Depth Resolution"]),
-            "FP16": self.fp16_cb.value,
+            "FP16": fp16_value,
             "Computing Device": self.device_label_to_index.get(self.device_dd.value, DEFAULTS["Computing Device"]),
             "Language": self.locale,
             "Run Mode": self.run_mode_key,

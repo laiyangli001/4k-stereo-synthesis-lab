@@ -285,6 +285,14 @@ def test_vsync_uses_teammate_config_key_and_default():
     assert 'tooltip_local_vsync' not in localization_text
 
 
+def test_gui_forces_fp16_off_for_mps_save():
+    config_mgr_text = _file_text("config_mgr.py")
+
+    assert 'fp16_value = False if "MPS" in (self.device_dd.value or "") else bool(self.fp16_cb.value)' in config_mgr_text
+    assert '"FP16": fp16_value' in config_mgr_text
+    assert '"FP16": self.fp16_cb.value' not in config_mgr_text
+
+
 def test_accelerator_policy_matches_teammate_config_semantics():
     handlers_text = _file_text("handlers.py")
     config_mgr_text = _file_text("config_mgr.py")
