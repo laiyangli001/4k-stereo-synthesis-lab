@@ -34,12 +34,23 @@ def get_monitor_size(monitor_index=None):
         return 3840, 2160
 
 
-def compute_output_resolution(setting_value, display_mode, input_monitor_index, stereo_monitor_index):
+def compute_output_resolution(setting_value, display_mode, input_monitor_index, stereo_monitor_index, use_stereo_monitor=True):
     """Compute the source processing size used before depth inference.
 
     Integer values keep the legacy meaning of source eye height. WxH values and
     Auto are treated as the final packed display canvas, so Full-SBS uses half
     of the target width per eye and Full-TAB uses half of the target height.
+
+    When ``setting_value`` is Auto, the processing size is derived from a
+    monitor's native resolution.  Only the 3D Monitor output path actually
+    renders onto the stereo-output display, so only that path should size the
+    work to the stereo-output monitor.  For every other mode (OpenXR, plain
+    Viewer, streamers) the work must follow the CAPTURED (input) monitor --
+    otherwise a leftover ``Stereo Output`` index sizes the pipeline to a
+    different physical screen than the one being captured (e.g. capturing a
+    1080p screen but processing at the 4K stereo-output screen's resolution).
+    ``use_stereo_monitor`` gates this: pass False unless the 3D Monitor output
+    is active.
     """
     explicit_size = _parse_resolution_size(setting_value)
     if explicit_size is not None:
@@ -60,7 +71,7 @@ def compute_output_resolution(setting_value, display_mode, input_monitor_index, 
     except (TypeError, ValueError):
         pass
 
-    monitor_index = stereo_monitor_index or input_monitor_index
+    monitor_index = (stereo_monitor_index if use_stereo_monitor else None) or input_monitor_index
     out_w, out_h = get_monitor_size(monitor_index)
     return _packed_source_size(out_w, out_h, display_mode)
 

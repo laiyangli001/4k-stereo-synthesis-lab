@@ -39,11 +39,18 @@ def resolve_viewer_settings(settings: dict) -> ViewerSettings:
     display_mode = settings["Display Mode"]
     stereo_display_index = settings.get("Stereo Output")
     stereo_display_selection = False if not stereo_display_index else True
+    # Only the 3D Monitor run mode actually renders onto the stereo-output
+    # display, so only it should size the processing resolution to that screen.
+    # Other modes (OpenXR Link, Local Viewer, streamers) must follow the
+    # captured (input) monitor; otherwise a leftover "Stereo Output" index
+    # makes the pipeline process at the wrong screen's resolution.
+    use_stereo_monitor = settings.get("Run Mode") == "3D Monitor"
     output_resolution = compute_output_resolution(
         settings.get("Processing Resolution", "Auto"),
         display_mode,
         monitor_index,
         stereo_display_index,
+        use_stereo_monitor=use_stereo_monitor,
     )
     capture_mode = settings["Capture Mode"]
     window_title = settings["Window Title"] if capture_mode == "Window" else None
