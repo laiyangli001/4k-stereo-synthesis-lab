@@ -6156,10 +6156,16 @@ class OpenXRViewerCore:
             )
         except Exception as exc:
             print(f"[OpenXRViewer] screen footprint unavailable: {type(exc).__name__}: {exc}", flush=True)
-    def _build_model_mat4(self):
-        """
-        Build the model matrix for the screen in world space.
-        Caller must transpose before writing to OpenGL.
+    def _ensure_screen_dimensions(self):
+        """Lazily derive screen_width/height from the frame aspect ratio.
+
+        screen_height is reset to None on every new source frame, then
+        recomputed here.  It must be ready BEFORE the environment model
+        renders (which samples it for the cinema reflection light), otherwise
+        the first eye of a freshly-uploaded frame renders with the screen
+        light disabled while the second eye renders with it enabled -- a
+        per-eye flicker.  Extracted so both _build_model_mat4 and the env
+        render path can guarantee the dimensions are populated.
         """
         if self.screen_height is None:
             fw, fh = self.frame_size
@@ -6169,6 +6175,13 @@ class OpenXRViewerCore:
             else:
                 self.screen_width = self._screen_ref_size
                 self.screen_height = self.screen_width * 9.0 / 16.0
+
+    def _build_model_mat4(self):
+        """
+        Build the model matrix for the screen in world space.
+        Caller must transpose before writing to OpenGL.
+        """
+        self._ensure_screen_dimensions()
 
         sx  = self.screen_width  / 2.0
         sy  = self.screen_height / 2.0
@@ -8560,6 +8573,14 @@ class OpenXRViewerCore:
         # matrix against this rather than recomputing proj @ view each time.
         vp_mat = proj_mat @ view_mat
         self._current_view_mat = view_mat
+        # Ensure screen dimensions are resolved BEFORE the environment model
+        # renders -- it samples screen_width/height for the cinema reflection
+        # light.  screen_height is reset to None on every new source frame and
+        # was otherwise only recomputed later in _build_model_mat4 (during the
+        # main-screen pass), so the first eye of a fresh frame would render the
+        # reflection light disabled while the second eye rendered it enabled
+        # (left-eye flicker).
+        self._ensure_screen_dimensions()
         # -3. Environment model (glTF 3D scene, very back) -background layer only
         if self._env_model_visible and self._env_model_prims:
             self._render_env_model(mgl_fbo, vp_mat, view_mat)
