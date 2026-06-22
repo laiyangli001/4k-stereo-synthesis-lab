@@ -7739,14 +7739,26 @@ class OpenXRViewerCore:
                 beam_len = ov_dist
                 hit_target = 'overlay'
 
-            if beam_len >= 5.0:
+            # Skip only the "no hit" sentinel (each *_hit_dist returns BEAM_MAX
+            # = 30 m on a miss).  A real screen hit can exceed 5 m once an
+            # environment model pushes the screen further away (e.g. the cinema
+            # room raises the seat and screen distance), so gate on the sentinel
+            # rather than a fixed 5 m cap that would silently drop the circle.
+            if hit_target is None or beam_len >= 29.0:
                 continue
 
             # Draw the hit circle at beam_len distance
             HIT_OFFSET = 0.0
             hit_pos = ctrl_pos + fwd_w * (beam_len - HIT_OFFSET)
-            STROKE_R = 0.0096
-            FILL_R   = 0.0056
+            # Scale the circle with hit distance so its on-screen (angular) size
+            # stays roughly constant: a fixed world-space radius shrinks with
+            # perspective, which made the circle tiny once an environment model
+            # pushed the screen far away.  Keep the default size at the typical
+            # close-range hit distance and grow (clamped) for farther hits.
+            HIT_REF_DIST = 2.0
+            dist_scale = float(np.clip(beam_len / HIT_REF_DIST, 1.0, 3.0))
+            STROKE_R = 0.0096 * dist_scale
+            FILL_R   = 0.0056 * dist_scale
             for radius, color in [(STROKE_R, (0.2, 0.6, 1.0, 0.75)),
                                 (FILL_R,   (1.0, 1.0, 1.0, 0.75))]:
                 model = np.eye(4, dtype='f4')
