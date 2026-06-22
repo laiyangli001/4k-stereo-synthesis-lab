@@ -119,7 +119,11 @@ class StereoRuntimeLogger:
                 f" backend={state[0]}"
                 f" output={state[1]}"
                 f" dtype={state[2]}"
-                f" eye={state[3]}",
+                f" eye={state[3]}"
+                f" depth_strength={float(debug.get('openxr_depth_strength', 0.0)):.3f}"
+                f" stereo_scale={float(debug.get('openxr_stereo_scale', 0.0)):.3f}"
+                f" max_shift={float(debug.get('openxr_max_shift_ratio', 0.0)):.3f}"
+                f" convergence={float(debug.get('openxr_convergence', 0.0)):.3f}",
                 flush=True,
             )
             return

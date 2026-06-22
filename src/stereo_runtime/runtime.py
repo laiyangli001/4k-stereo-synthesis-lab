@@ -518,6 +518,11 @@ class StereoRuntime:
         debug["runtime_output_format"] = "openxr_eye_views"
         debug["runtime_output_dtype"] = _runtime_eye_dtype(openxr.left_eye, openxr.right_eye)
         debug["runtime_output_eye_size"] = _runtime_eye_size(openxr.left_eye)
+        if openxr_config is not None:
+            debug["openxr_depth_strength"] = float(openxr_config.depth_strength)
+            debug["openxr_stereo_scale"] = float(openxr_config.stereo_scale)
+            debug["openxr_max_shift_ratio"] = float(openxr_config.max_shift_ratio)
+            debug["openxr_convergence"] = float(openxr_config.convergence)
         debug["runtime_depth_upsample"] = self.config.depth_upsample
         if memory:
             debug.update(memory)

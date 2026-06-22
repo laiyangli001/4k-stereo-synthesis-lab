@@ -68,6 +68,9 @@ class OpenXRViewer(OpenXRViewerCore, OverlayMixin):
         self._env_perf_log = bool(base.get('perf_log', False))
         self._xr_render_scale = float(base['xr_render_scale'])
         self._screen_light_intensity = float(base.get('screen_light_intensity', self._screen_light_intensity))
+        self._screen_light_dynamic = bool(base.get('screen_light_dynamic', False))
+        self._screen_light_sample_interval = max(1, int(base.get('screen_light_sample_interval', 15)))
+        self._screen_light_lerp = max(0.0, min(1.0, float(base.get('screen_light_lerp', 0.14))))
 
 
     def _configure_environment_profile(self):
@@ -156,12 +159,49 @@ class OpenXRViewer(OpenXRViewerCore, OverlayMixin):
                 pass
         if 'xr_render_scale' in profile:
             try:
-                self._xr_render_scale = max(0.5, min(1.0, float(profile['xr_render_scale'])))
+                self._xr_render_scale = max(0.5, min(2.0, float(profile['xr_render_scale'])))
+            except (TypeError, ValueError):
+                pass
+        quality_filter = profile.get('screen_quality_filter', profile.get('xr_screen_quality_filter'))
+        if quality_filter is not None:
+            self._screen_quality_filter = bool(quality_filter)
+        quality_sharpness = profile.get('screen_quality_sharpness', profile.get('xr_screen_quality_sharpness'))
+        if quality_sharpness is not None:
+            try:
+                self._screen_quality_sharpness = max(0.0, min(1.0, float(quality_sharpness)))
+            except (TypeError, ValueError):
+                pass
+        quality_oversample = profile.get('screen_quality_oversample', profile.get('xr_screen_quality_oversample'))
+        if quality_oversample is not None:
+            try:
+                self._screen_quality_oversample = max(0.75, min(1.5, float(quality_oversample)))
+            except (TypeError, ValueError):
+                pass
+        quad_layer = profile.get('xr_quad_layer_enabled', profile.get('screen_quad_layer'))
+        if quad_layer is not None:
+            self._xr_quad_layer_enabled = bool(quad_layer)
+        quad_debug_offset = profile.get('xr_quad_layer_debug_offset')
+        if quad_debug_offset is not None:
+            try:
+                self._xr_quad_layer_debug_offset = float(quad_debug_offset)
             except (TypeError, ValueError):
                 pass
         if 'screen_light_intensity' in profile:
             try:
                 self._screen_light_intensity = float(profile['screen_light_intensity'])
+            except (TypeError, ValueError):
+                pass
+        dynamic_light = profile.get('screen_light_dynamic', profile.get('dynamic_screen_light'))
+        if dynamic_light is not None:
+            self._screen_light_dynamic = bool(dynamic_light)
+        if 'screen_light_sample_interval' in profile:
+            try:
+                self._screen_light_sample_interval = max(1, int(profile['screen_light_sample_interval']))
+            except (TypeError, ValueError):
+                pass
+        if 'screen_light_lerp' in profile:
+            try:
+                self._screen_light_lerp = max(0.0, min(1.0, float(profile['screen_light_lerp'])))
             except (TypeError, ValueError):
                 pass
 
@@ -490,12 +530,16 @@ class OpenXRViewer(OpenXRViewerCore, OverlayMixin):
             except Exception as exc:
                 print(f"[OpenXRViewer] Failed to save view_pose_index: {exc}")
         self._xr_profile_space_applied = False
-        views = getattr(self, '_last_located_views', None)
-        if views:
-            self._apply_profile_view_pose_to_xr_space(views)
-        self._seat_adjust_osd_dirty = True
-        self._seat_adjust_osd_show_t = time.perf_counter()
+        view_pose = self._view_pose_profile
+        if isinstance(view_pose, dict):
+            x = float(view_pose.get('x', 0))
+            y = float(view_pose.get('y', 0))
+            z = float(view_pose.get('z', 0))
+            angle = float(view_pose.get('angle', 0))
+            self._apply_seat_adjust_xr_space(x, y, z, angle)
         name = self._view_pose_profile.get('name', f'View {self._view_pose_index + 1}')
+        self._preset_name_overlay = name
+        self._preset_osd_show_t = time.perf_counter()
         print(f"[OpenXRViewer] View pose: {name} ({self._view_pose_index + 1}/{len(poses)})")
         return True
 
@@ -1378,25 +1422,43 @@ class OpenXRViewer(OpenXRViewerCore, OverlayMixin):
             sp = math.sin(self.screen_pitch)
             self._cl_pos = (sx_pos, sy_pos, sz_pos)
             self._cl_normal = (sy_ * cp, -sp, cy * cp)
+            self._cl_right = (cy, 0.0, -sy_)
+            self._cl_up = (sy_ * sp, cp, cy * sp)
             self._cl_half = (float(self.screen_width) * 0.5, float(self.screen_height) * 0.5)
             self._cl_pose_key = pose_key
-        state_key = (pose_key, getattr(self, '_active_environment', None), float(self._screen_light_intensity))
+        dynamic = bool(getattr(self, '_screen_light_dynamic', False))
+        state_key = (
+            pose_key,
+            getattr(self, '_active_environment', None),
+            float(self._screen_light_intensity),
+            dynamic,
+        )
         last_state_key = getattr(self, '_cl_light_state_key', None)
         last_frame = getattr(self, '_cl_uniform_frame', -999)
-        if state_key == last_state_key and (fc - last_frame) < 5:
+        update_interval = 1 if dynamic else 5
+        if state_key == last_state_key and (fc - last_frame) < update_interval:
             return
         self._cl_light_state_key = state_key
         self._cl_uniform_frame = fc
-        self._advance_glow_color(lerp=0.14)
+        self._advance_glow_color(lerp=float(getattr(self, '_screen_light_lerp', 0.14)))
         sc = getattr(self, '_glow_color', (0.30, 0.55, 1.0))
+        spatial = getattr(self, '_screen_light_colors', tuple([sc] * 6))
+        if len(spatial) < 6:
+            spatial = tuple([sc] * 6)
         intensity = float(self._screen_light_intensity)
         if getattr(self, '_active_environment', None) == 'Dark Room':
             intensity *= 0.9
         self._env_prog['u_screen_light_enabled'].value = 1
         self._env_prog['u_screen_light_pos'].value = self._cl_pos
         self._env_prog['u_screen_light_normal'].value = self._cl_normal
+        self._env_prog['u_screen_light_right'].value = self._cl_right
+        self._env_prog['u_screen_light_up'].value = self._cl_up
         self._env_prog['u_screen_light_half_size'].value = self._cl_half
         self._env_prog['u_screen_light_color'].value = (float(sc[0]), float(sc[1]), float(sc[2]))
+        for idx, color in enumerate(spatial[:6]):
+            self._env_prog[f'u_screen_light_color_grid{idx}'].value = (
+                float(color[0]), float(color[1]), float(color[2])
+            )
         self._env_prog['u_screen_light_intensity'].value = intensity
 
 

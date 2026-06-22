@@ -27,8 +27,10 @@ from utils import ROWS, ENV_ROWS
 from viewer.assets import get_font_type
 from OpenGL.GL import (
     glGenFramebuffers, glBindFramebuffer, glFramebufferTexture2D,
+    glFramebufferTextureLayer,
     glDeleteFramebuffers, glCheckFramebufferStatus,
     GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+    GL_TEXTURE_2D_ARRAY,
     GL_FRAMEBUFFER_COMPLETE, GL_RGBA8,
     glGenBuffers, glDeleteBuffers, glBindBuffer, glBufferData, glBufferSubData,
     glBindTexture, glTexSubImage2D, glGenerateMipmap,
@@ -43,7 +45,7 @@ from OpenGL.GL import (
     glTexParameterf, GL_TEXTURE_LOD_BIAS,
     glMapBuffer, glUnmapBuffer, GL_READ_ONLY, GL_MAP_UNSYNCHRONIZED_BIT,
     glClear, glReadPixels, glFlush, glGenTextures, glDeleteTextures,
-    glFinish
+    glFinish, glGetError, GL_NO_ERROR
 )
 
 try:
@@ -1517,6 +1519,135 @@ void main() {
 }
 """
 
+_SCREEN_QUALITY_VERT = """
+#version 330
+in vec2 in_position;
+in vec2 in_uv;
+out vec2 uv;
+void main() {
+    uv = in_uv;
+    gl_Position = vec4(in_position, 0.0, 1.0);
+}
+"""
+
+_SCREEN_DOWNSAMPLE_FRAG = """
+#version 330
+in vec2 uv;
+out vec4 frag_color;
+uniform sampler2D tex_color;
+uniform vec2 u_input_size;
+
+float sinc(float x) {
+    x = abs(x);
+    if (x < 1e-5) {
+        return 1.0;
+    }
+    float pix = 3.141592653589793 * x;
+    return sin(pix) / pix;
+}
+
+float lanczos2(float x) {
+    x = abs(x);
+    if (x >= 2.0) {
+        return 0.0;
+    }
+    return sinc(x) * sinc(x * 0.5);
+}
+
+void main() {
+    vec2 src_pos = uv * u_input_size - vec2(0.5);
+    vec2 base = floor(src_pos);
+    vec3 accum = vec3(0.0);
+    float weight_sum = 0.0;
+    for (int y = -1; y <= 2; ++y) {
+        for (int x = -1; x <= 2; ++x) {
+            vec2 sample_pos = base + vec2(float(x), float(y));
+            vec2 delta = src_pos - sample_pos;
+            float w = lanczos2(delta.x) * lanczos2(delta.y);
+            vec2 sample_uv = (sample_pos + vec2(0.5)) / u_input_size;
+            accum += texture(tex_color, clamp(sample_uv, vec2(0.0), vec2(1.0))).rgb * w;
+            weight_sum += w;
+        }
+    }
+    frag_color = vec4(clamp(accum / max(weight_sum, 1e-6), 0.0, 1.0), 1.0);
+}
+"""
+
+_SCREEN_RCAS_FRAG = """
+#version 330
+in vec2 uv;
+out vec4 frag_color;
+uniform sampler2D tex_scene;
+uniform vec2 u_output_size;
+uniform float u_sharpness;
+
+float sat(float x) {
+    return clamp(x, 0.0, 1.0);
+}
+
+float rcp_safe(float x) {
+    return 1.0 / max(abs(x), 1e-6);
+}
+
+float luma2(vec3 c) {
+    return c.b * 0.5 + (c.r * 0.5 + c.g);
+}
+
+vec3 sample_scene(vec2 p) {
+    return texture(tex_scene, clamp(p, vec2(0.0), vec2(1.0))).rgb;
+}
+
+vec3 fsr_rcas(vec2 p) {
+    vec2 texel = 1.0 / u_output_size;
+    vec3 b = sample_scene(p + vec2(0.0, -texel.y));
+    vec3 d = sample_scene(p + vec2(-texel.x, 0.0));
+    vec3 e = sample_scene(p);
+    vec3 f = sample_scene(p + vec2(texel.x, 0.0));
+    vec3 h = sample_scene(p + vec2(0.0, texel.y));
+
+    float bL = luma2(b);
+    float dL = luma2(d);
+    float eL = luma2(e);
+    float fL = luma2(f);
+    float hL = luma2(h);
+    float nz = 0.25 * bL + 0.25 * dL + 0.25 * fL + 0.25 * hL - eL;
+    float lMax = max(max(max(bL, dL), max(eL, fL)), hL);
+    float lMin = min(min(min(bL, dL), min(eL, fL)), hL);
+    nz = sat(abs(nz) * rcp_safe(lMax - lMin));
+    nz = -0.5 * nz + 1.0;
+
+    vec3 mn4 = min(min(b, d), min(f, h));
+    vec3 mx4 = max(max(b, d), max(f, h));
+    vec3 hitMin = min(mn4, e) / max(4.0 * mx4, vec3(1e-6));
+    vec3 hitMax = (vec3(1.0) - max(mx4, e)) / min(4.0 * mn4 - 4.0, vec3(-1e-6));
+    vec3 lobeRGB = max(-hitMin, hitMax);
+    float lobe = max(max(lobeRGB.r, lobeRGB.g), lobeRGB.b);
+    float rcasLimit = 0.25 - (1.0 / 16.0);
+
+    float sharpnessStops = mix(2.0, 0.0, sat(u_sharpness));
+    float con = exp2(-sharpnessStops);
+    lobe = max(-rcasLimit, min(lobe, 0.0)) * con * nz;
+    float rcpL = rcp_safe(4.0 * lobe + 1.0);
+    return clamp((lobe * b + lobe * d + lobe * h + lobe * f + e) * rcpL, 0.0, 1.0);
+}
+
+void main() {
+    frag_color = vec4(fsr_rcas(uv), 1.0);
+}
+"""
+
+_QUAD_COPY_FRAG = """
+#version 330
+in vec2 uv;
+out vec4 frag_color;
+uniform sampler2D tex_source;
+uniform int u_flip_y;
+void main() {
+    vec2 p = (u_flip_y == 1) ? vec2(uv.x, 1.0 - uv.y) : uv;
+    frag_color = texture(tex_source, p);
+}
+"""
+
 # Solid-color vertex shader (no UV -avoids GLSL optimizer stripping in_uv)
 _SOLID_VERT = """
 #version 330
@@ -1803,8 +1934,16 @@ uniform float u_fill_light_range1;
 uniform int u_screen_light_enabled;
 uniform vec3 u_screen_light_pos;
 uniform vec3 u_screen_light_normal;
+uniform vec3 u_screen_light_right;
+uniform vec3 u_screen_light_up;
 uniform vec2 u_screen_light_half_size;
 uniform vec3 u_screen_light_color;
+uniform vec3 u_screen_light_color_grid0;
+uniform vec3 u_screen_light_color_grid1;
+uniform vec3 u_screen_light_color_grid2;
+uniform vec3 u_screen_light_color_grid3;
+uniform vec3 u_screen_light_color_grid4;
+uniform vec3 u_screen_light_color_grid5;
 uniform float u_screen_light_intensity;
 uniform float u_env_exposure;
 uniform float u_env_gamma;
@@ -2021,9 +2160,26 @@ void main() {
                     max(half_diag * 0.95, 1.75),
                     d
                 );
-                vec3 E_s = u_screen_light_color
+                vec2 screen_p = vec2(
+                    dot(S_to_P, u_screen_light_right) / max(u_screen_light_half_size.x, 0.001),
+                    dot(S_to_P, u_screen_light_up) / max(u_screen_light_half_size.y, 0.001)
+                );
+                vec2 grid_uv = clamp(screen_p * 0.5 + 0.5, vec2(0.0), vec2(1.0));
+                float gx = grid_uv.x * 2.0;
+                float gy = grid_uv.y;
+                float ix = (gx < 1.0) ? 0.0 : 1.0;
+                float tx = smoothstep(0.0, 1.0, (ix < 0.5) ? gx : (gx - 1.0));
+                float ty = smoothstep(0.0, 1.0, gy);
+                vec3 top_a = (ix < 0.5) ? u_screen_light_color_grid0 : u_screen_light_color_grid1;
+                vec3 top_b = (ix < 0.5) ? u_screen_light_color_grid1 : u_screen_light_color_grid2;
+                vec3 bot_a = (ix < 0.5) ? u_screen_light_color_grid3 : u_screen_light_color_grid4;
+                vec3 bot_b = (ix < 0.5) ? u_screen_light_color_grid4 : u_screen_light_color_grid5;
+                vec3 screen_col = mix(mix(bot_a, bot_b, tx), mix(top_a, top_b, tx), ty);
+                screen_col = mix(screen_col, u_screen_light_color, 0.18);
+                float vertical_soft = 1.0 - 0.12 * smoothstep(0.35, 1.30, abs(screen_p.y));
+                vec3 E_s = screen_col
                            * u_screen_light_intensity
-                           * front * NdotL_s * attn * area_term * halo_free;
+                           * front * NdotL_s * attn * area_term * halo_free * vertical_soft;
                 Lo += diffuse * E_s * PI;
             }
         }
@@ -2542,6 +2698,7 @@ class OpenXRViewerCore:
         self._runtime_eye_texture_gpu_enabled = False
         self._runtime_eye_texture_logged = False
         self._runtime_eye_cpu_logged = False
+        self._runtime_eye_diff_logged = False
         self._runtime_eye_gpu_disabled_reason = None
         self._screen_footprint_logged = set()
         self._runtime_eye_texture_resources = [None, None]
@@ -2628,7 +2785,12 @@ class OpenXRViewerCore:
         self._glow_color = tuple(kwargs.get('glow_color', (0.30, 0.55, 1.0)))
         self._glow_target_color = self._glow_color
         self._glow_color_counter = 0
+        self._screen_light_colors = tuple([self._glow_color] * 6)
+        self._screen_light_target_colors = self._screen_light_colors
         self._screen_light_intensity = float(kwargs.get('screen_light_intensity', 3.5))
+        self._screen_light_dynamic = bool(kwargs.get('screen_light_dynamic', False))
+        self._screen_light_sample_interval = max(1, int(kwargs.get('screen_light_sample_interval', 15)))
+        self._screen_light_lerp = max(0.0, min(1.0, float(kwargs.get('screen_light_lerp', 0.14))))
         self._env_model_path = None
         self._env_model_prims = []        # list of {'vao', 'vbo', 'ibo', 'tex_key', 'tri_count'}
         self._scene_lights = []            # KHR_lights_punctual lights
@@ -2661,7 +2823,16 @@ class OpenXRViewerCore:
         self._env_perf_last_log = 0.0
         self._env_perf_accum_ms = 0.0
         self._env_perf_samples = 0
-        self._xr_render_scale = max(0.5, min(1.0, float(kwargs.get('xr_render_scale', 1.0))))
+        self._xr_render_scale = max(0.5, min(2.0, float(kwargs.get('xr_render_scale', 1.0))))
+        self._screen_quality_filter = bool(kwargs.get('screen_quality_filter', False))
+        self._screen_quality_sharpness = max(0.0, min(1.0, float(kwargs.get('screen_quality_sharpness', 0.35))))
+        self._screen_quality_oversample = max(0.75, min(1.5, float(kwargs.get('screen_quality_oversample', 1.0))))
+        self._xr_quad_layer_enabled = bool(kwargs.get('xr_quad_layer_enabled', False))
+        self._xr_quad_layer_active = False
+        self._xr_quad_layer_failed = False
+        self._xr_quad_layer_debug_offset = float(kwargs.get('xr_quad_layer_debug_offset', 0.05))
+        self._xr_quad_layer_stereo_boost = max(1.0, float(kwargs.get('xr_quad_layer_stereo_boost', 1.0)))
+        self._xr_quad_layer_debug_logged = False
         self._env_base_settings = {
             'model_pos': list(self._env_model_pos),
             'model_rot': list(self._env_model_rot),
@@ -2680,7 +2851,16 @@ class OpenXRViewerCore:
             'texture_anisotropy': self._env_texture_anisotropy,
             'perf_log': self._env_perf_log,
             'xr_render_scale': self._xr_render_scale,
+            'screen_quality_filter': self._screen_quality_filter,
+            'screen_quality_sharpness': self._screen_quality_sharpness,
+            'screen_quality_oversample': self._screen_quality_oversample,
+            'xr_quad_layer_enabled': self._xr_quad_layer_enabled,
+            'xr_quad_layer_debug_offset': self._xr_quad_layer_debug_offset,
+            'xr_quad_layer_stereo_boost': self._xr_quad_layer_stereo_boost,
             'screen_light_intensity': self._screen_light_intensity,
+            'screen_light_dynamic': self._screen_light_dynamic,
+            'screen_light_sample_interval': self._screen_light_sample_interval,
+            'screen_light_lerp': self._screen_light_lerp,
         }
         self._configure_environment_profile()
 
@@ -2777,6 +2957,11 @@ class OpenXRViewerCore:
         self._xr_swapchains = {}        # {eye_index: xr.Swapchain}
         self._swapchain_images = {}     # {eye_index: [XrSwapchainImageOpenGLKHR, ...]}
         self._swapchain_sizes = {}      # {eye_index: (w, h)}
+        self._quad_swapchains = {}
+        self._quad_swapchain_images = {}
+        self._quad_swapchain_sizes = {}
+        self._quad_swapchain_array_size = {}
+        self._quad_fbo_cache = {}
         self._fbo_cache = {}            # {(eye_index, image_index): (raw_id, mgl_fbo)}
         self._depth_rb_cache = {}       # {(eye_index, image_index): depth_rb}
         self._session_running = False
@@ -2799,7 +2984,7 @@ class OpenXRViewerCore:
         self._act_menu_btn        = None
         self._act_left_grip       = None   # grab/move mode
         self._act_right_grip      = None   # resize mode
-        self._act_a_btn           = None   # right A -double press = hide all
+        self._act_a_btn           = None   # right A
         self._act_b_btn           = None   # right B -right mouse click
         self._act_x_btn           = None   # left  X -toggle virtual keyboard
         self._act_y_btn           = None   # left  Y -reset screen position/size/rotation
@@ -2811,7 +2996,8 @@ class OpenXRViewerCore:
         # Menu button debounce + FPS overlay toggle + long-press reset
         self._menu_pressed_last   = False
         self._panel_mode          = 2  # our overlay: 0=head-facing, 1=fixed, 2=hidden
-        self._fps_overlay_visible = False  # our overlay is controlled by B long-press only
+        self._fps_overlay_visible = False  # controls help panel
+        self._hand_fps_visible = False  # controls hand-attached FPS overlay
         self._menu_press_t        = 0.0    # perf_counter when menu was pressed
         self._menu_long_fired     = False  # True once long-press action has fired
 
@@ -2984,8 +3170,11 @@ class OpenXRViewerCore:
         self._help_tex_size = (1, 1)  # Dynamic, _build_help_texture sets the actual size based on text layout
 
         # Teammate status/help overlays: screen-bottom status + left-side shortcuts.
-        self._team_status_visible = show_fps
+        self._team_status_visible = False
         self._team_help_visible = False
+        self._team_fps_visible = False
+        self._a_cycle_state = 0  # 0=hidden, 1=screen FPS, 2=screen help
+        self._b_cycle_state = 0  # 0=hidden, 1=hand FPS, 2=hand help
         self._team_status_tex = None
         self._team_status_tex_size = (768, 224)
         self._team_help_tex = None
@@ -3163,7 +3352,7 @@ class OpenXRViewerCore:
         self._rot_smooth = 0.10   # rotation smoothing (base damping)
         self._ray_deadzone_rad = 0.0052  # angle dead zone (~0.3 degrees)
         self._ray_deadzone_pos = 0.002   # position dead zone (2mm)
-        self._ray_edge_deadzone_rad = 0.1745  # edge snap release angle (~10 degrees)
+        self._ray_edge_deadzone_rad = 0.035  # edge snap release angle (~2 degrees)
         self._ray_edge_margin = 0.04   # edge deceleration region (~10cm at 2.4m screen)
         self._ray_edge_slow = 0.012  # smoothing factor after edge deceleration
         self._ray_prev_uv_l = None
@@ -3240,6 +3429,19 @@ class OpenXRViewerCore:
         self.color_tex = None
         self.depth_tex = None
         self._texture_size = None
+        self._screen_ds_prog = None
+        self._screen_rcas_prog = None
+        self._quad_copy_prog = None
+        self._screen_ds_vao = None
+        self._screen_rcas_vao = None
+        self._quad_copy_vao = None
+        self._screen_ds_tex = None
+        self._screen_rcas_tex = None
+        self._screen_ds_fbo = None
+        self._screen_rcas_fbo = None
+        self._screen_quality_size = None
+        self._screen_quality_logged_size = None
+        self._screen_quality_logged_sources = set()
 
     # Initialisation helpers
     def _init_glfw(self):
@@ -3263,10 +3465,37 @@ class OpenXRViewerCore:
 
     def _toggle_team_status_panel(self):
         self._team_status_visible = not self._team_status_visible
+        if self._team_status_visible:
+            self._team_fps_visible = self._team_status_visible
 
-    def _cycle_status_panel_mode(self):
-        self._panel_mode = (self._panel_mode + 1) % 3
-        self._fps_overlay_visible = self._panel_mode != 2
+    def _cycle_a_panel(self):
+        """Cycle A long-press: hidden ->screen FPS ->screen help ->hidden."""
+        self._a_cycle_state = (self._a_cycle_state + 1) % 3
+        if self._a_cycle_state == 0:
+            self._team_fps_visible = False
+            self._team_status_visible = False
+            self._team_help_visible = False
+        elif self._a_cycle_state == 1:
+            self._team_fps_visible = True
+            self._team_status_visible = True
+            self._team_help_visible = False
+        elif self._a_cycle_state == 2:
+            self._team_fps_visible = True
+            self._team_status_visible = True
+            self._team_help_visible = True
+
+    def _cycle_b_panel(self):
+        """Cycle B long-press: hidden ->hand FPS ->hand help ->hidden."""
+        self._b_cycle_state = (self._b_cycle_state + 1) % 3
+        if self._b_cycle_state == 0:
+            self._hand_fps_visible = False
+            self._fps_overlay_visible = False
+        elif self._b_cycle_state == 1:
+            self._hand_fps_visible = True
+            self._fps_overlay_visible = False
+        elif self._b_cycle_state == 2:
+            self._hand_fps_visible = True
+            self._fps_overlay_visible = True
 
     def _make_key_callback(self):
         viewer = self
@@ -3283,6 +3512,8 @@ class OpenXRViewerCore:
                 viewer.depth_strength = min(0.5, viewer.depth_strength + 0.01)
             elif key == glfw.KEY_X:
                 viewer.depth_strength = 0.0   # flat mode -no parallax distortion
+            elif key == glfw.KEY_V:
+                viewer._toggle_quad_layer_compare()
             elif key == glfw.KEY_R:
                 viewer._reset_screen_to_default(show_border=True)
             elif screen_locked:
@@ -3301,6 +3532,29 @@ class OpenXRViewerCore:
             elif key == glfw.KEY_T: viewer.screen_pitch += r
             elif key == glfw.KEY_G: viewer.screen_pitch -= r
         return _cb
+
+    def _toggle_quad_layer_compare(self):
+        if not self._xr_quad_layer_enabled:
+            self._preset_name_overlay = 'Projection Screen (Quad disabled)'
+        elif self._xr_quad_layer_failed or not self._quad_swapchains:
+            self._xr_quad_layer_active = False
+            self._preset_name_overlay = 'Projection Screen (Quad unavailable)'
+        else:
+            self._xr_quad_layer_active = not self._xr_quad_layer_active
+            self._preset_name_overlay = 'Quad Layer Screen' if self._xr_quad_layer_active else 'Projection Screen'
+        self._preset_osd_show_t = time.perf_counter()
+        self._publish_runtime_config()
+        print(
+            "[OpenXRViewer] Screen compare mode: "
+            f"{self._preset_name_overlay} "
+            f"enabled={self._xr_quad_layer_enabled} "
+            f"active={self._xr_quad_layer_active} "
+            f"swapchains={len(self._quad_swapchains)} "
+            f"array_size={int(self._quad_swapchain_array_size.get(0, 0) or 0)} "
+            f"per_eye_layers=True "
+            f"stereo_boost={float(getattr(self, '_xr_quad_layer_stereo_boost', 1.0)):.2f} "
+            f"failed={self._xr_quad_layer_failed}"
+        )
 
     def _init_moderngl(self):
         self.ctx = moderngl.create_context()
@@ -3324,6 +3578,31 @@ class OpenXRViewerCore:
         vbo = self.ctx.buffer(vertices)
         self.quad_vao = self.ctx.vertex_array(
             self.prog, [(vbo, '2f 2f', 'in_position', 'in_uv')]
+        )
+
+        self._screen_ds_prog = self.ctx.program(
+            vertex_shader=_SCREEN_QUALITY_VERT,
+            fragment_shader=_SCREEN_DOWNSAMPLE_FRAG,
+        )
+        self._screen_ds_prog['tex_color'].value = 0
+        self._screen_rcas_prog = self.ctx.program(
+            vertex_shader=_SCREEN_QUALITY_VERT,
+            fragment_shader=_SCREEN_RCAS_FRAG,
+        )
+        self._screen_rcas_prog['tex_scene'].value = 0
+        self._quad_copy_prog = self.ctx.program(
+            vertex_shader=_SCREEN_QUALITY_VERT,
+            fragment_shader=_QUAD_COPY_FRAG,
+        )
+        self._quad_copy_prog['tex_source'].value = 0
+        self._screen_ds_vao = self.ctx.vertex_array(
+            self._screen_ds_prog, [(vbo, '2f 2f', 'in_position', 'in_uv')]
+        )
+        self._screen_rcas_vao = self.ctx.vertex_array(
+            self._screen_rcas_prog, [(vbo, '2f 2f', 'in_position', 'in_uv')]
+        )
+        self._quad_copy_vao = self.ctx.vertex_array(
+            self._quad_copy_prog, [(vbo, '2f 2f', 'in_position', 'in_uv')]
         )
 
         # Screen border (solid-color quad rendered before the main screen)
@@ -3584,8 +3863,12 @@ class OpenXRViewerCore:
         self._env_prog['u_screen_light_enabled'].value = 0
         self._env_prog['u_screen_light_pos'].value = (0.0, 0.0, -2.0)
         self._env_prog['u_screen_light_normal'].value = (0.0, 0.0, 1.0)
+        self._env_prog['u_screen_light_right'].value = (1.0, 0.0, 0.0)
+        self._env_prog['u_screen_light_up'].value = (0.0, 1.0, 0.0)
         self._env_prog['u_screen_light_half_size'].value = (1.2, 0.675)
         self._env_prog['u_screen_light_color'].value = (0.3, 0.6, 1.0)
+        for idx in range(6):
+            self._env_prog[f'u_screen_light_color_grid{idx}'].value = (0.3, 0.6, 1.0)
         self._env_prog['u_screen_light_intensity'].value = 2.0
 
         self._ctrl_tex_cache = {}
@@ -3602,6 +3885,16 @@ class OpenXRViewerCore:
             float(c[0]) + lerp * (float(t[0]) - float(c[0])),
             float(c[1]) + lerp * (float(t[1]) - float(c[1])),
             float(c[2]) + lerp * (float(t[2]) - float(c[2])),
+        )
+        colors = getattr(self, '_screen_light_colors', tuple([self._glow_color] * 6))
+        targets = getattr(self, '_screen_light_target_colors', colors)
+        self._screen_light_colors = tuple(
+            (
+                float(c0[0]) + lerp * (float(t0[0]) - float(c0[0])),
+                float(c0[1]) + lerp * (float(t0[1]) - float(c0[1])),
+                float(c0[2]) + lerp * (float(t0[2]) - float(c0[2])),
+            )
+            for c0, t0 in zip(colors, targets)
         )
 
 
@@ -4256,9 +4549,12 @@ class OpenXRViewerCore:
         if not callable(callback):
             return
         try:
+            depth_ratio = float(self.depth_ratio)
+            if self._quad_layer_can_replace_projection_screen():
+                depth_ratio *= float(getattr(self, '_xr_quad_layer_stereo_boost', 1.0))
             callback(
                 ipd=self.ipd_uv,
-                depth_ratio=self.depth_ratio,
+                depth_ratio=depth_ratio,
                 convergence=self.convergence,
                 screen_roll=self.screen_roll,
             )
@@ -4308,6 +4604,20 @@ class OpenXRViewerCore:
             except Exception:
                 pass
         self._fbo_cache.clear()
+
+        quad_raw_ids = []
+        for mgl_fbo, raw_id, _w, _h in self._quad_fbo_cache.values():
+            try:
+                mgl_fbo.release()
+            except Exception:
+                pass
+            quad_raw_ids.append(raw_id)
+        if quad_raw_ids:
+            try:
+                glDeleteFramebuffers(len(quad_raw_ids), quad_raw_ids)
+            except Exception:
+                pass
+        self._quad_fbo_cache.clear()
 
         depth_rbs = list(self._depth_rb_cache.values())
         if depth_rbs:
@@ -4378,6 +4688,20 @@ class OpenXRViewerCore:
             except Exception:
                 pass
         self._xr_swapchains.clear()
+        seen_quad_swapchains = set()
+        for swapchain in self._quad_swapchains.values():
+            key = int(swapchain) if isinstance(swapchain, int) else id(swapchain)
+            if key in seen_quad_swapchains:
+                continue
+            seen_quad_swapchains.add(key)
+            try:
+                xr.destroy_swapchain(swapchain)
+            except Exception:
+                pass
+        self._quad_swapchains.clear()
+        self._quad_swapchain_images.clear()
+        self._quad_swapchain_sizes.clear()
+        self._quad_swapchain_array_size.clear()
         self._swapchain_images.clear()
         self._swapchain_sizes.clear()
 
@@ -4524,8 +4848,10 @@ class OpenXRViewerCore:
             rec_w = vcv.recommended_image_rect_width
             rec_h = vcv.recommended_image_rect_height
             scale = float(getattr(self, '_xr_render_scale', 1.0))
-            sc_w  = max(16, int(rec_w * scale)) & ~1
-            sc_h  = max(16, int(rec_h * scale)) & ~1
+            max_w = int(getattr(vcv, 'max_image_rect_width', rec_w) or rec_w)
+            max_h = int(getattr(vcv, 'max_image_rect_height', rec_h) or rec_h)
+            sc_w  = min(max_w, max(16, int(rec_w * scale))) & ~1
+            sc_h  = min(max_h, max(16, int(rec_h * scale))) & ~1
             print(f"[OpenXRViewer] Eye {eye_index} swapchain: {sc_w}x{sc_h} (D3D11, scale={scale:.2f})")
 
             sc_info = xr.SwapchainCreateInfo(
@@ -4939,8 +5265,10 @@ class OpenXRViewerCore:
             rec_w = vcv.recommended_image_rect_width
             rec_h = vcv.recommended_image_rect_height
             scale = float(getattr(self, '_xr_render_scale', 1.0))
-            sc_w = max(16, int(rec_w * scale)) & ~1
-            sc_h = max(16, int(rec_h * scale)) & ~1
+            max_w = int(getattr(vcv, 'max_image_rect_width', rec_w) or rec_w)
+            max_h = int(getattr(vcv, 'max_image_rect_height', rec_h) or rec_h)
+            sc_w = min(max_w, max(16, int(rec_w * scale))) & ~1
+            sc_h = min(max_h, max(16, int(rec_h * scale))) & ~1
             print(f"[OpenXRViewer] Eye {eye_index} swapchain: {sc_w}x{sc_h} (scale={scale:.2f})")
 
             sc_info = xr.SwapchainCreateInfo(
@@ -4961,6 +5289,42 @@ class OpenXRViewerCore:
             self._xr_swapchains[eye_index] = swapchain
             self._swapchain_images[eye_index] = images
             self._swapchain_sizes[eye_index] = (sc_w, sc_h)
+
+        if self._xr_quad_layer_enabled and view_configs:
+            try:
+                src_w, src_h = self.frame_size
+                max_w = max(int(getattr(v, 'max_image_rect_width', src_w) or src_w) for v in view_configs)
+                max_h = max(int(getattr(v, 'max_image_rect_height', src_h) or src_h) for v in view_configs)
+                quad_w = min(max_w, max(16, int(src_w))) & ~1
+                quad_h = min(max_h, max(16, int(src_h))) & ~1
+                for eye_index in range(2):
+                    sc_info = xr.SwapchainCreateInfo(
+                        usage_flags=(
+                            xr.SwapchainUsageFlags.COLOR_ATTACHMENT_BIT |
+                            xr.SwapchainUsageFlags.SAMPLED_BIT
+                        ),
+                        format=_GL_SRGB8_ALPHA8,
+                        sample_count=1,
+                        width=quad_w,
+                        height=quad_h,
+                        face_count=1,
+                        array_size=1,
+                        mip_count=1,
+                    )
+                    swapchain = xr.create_swapchain(self._xr_session, sc_info)
+                    self._quad_swapchains[eye_index] = swapchain
+                    self._quad_swapchain_images[eye_index] = xr.enumerate_swapchain_images(
+                        swapchain, xr.SwapchainImageOpenGLKHR
+                    )
+                    self._quad_swapchain_sizes[eye_index] = (quad_w, quad_h)
+                    self._quad_swapchain_array_size[eye_index] = 1
+                print(f"[OpenXRViewer] Quad per-eye swapchains: {quad_w}x{quad_h}x2 active=True")
+                self._xr_quad_layer_active = True
+                print(f"[OpenXRViewer] Quad layer swapchains: {quad_w}x{quad_h}/eye active={self._xr_quad_layer_active}")
+            except Exception as exc:
+                self._xr_quad_layer_active = False
+                self._xr_quad_layer_failed = True
+                print(f"[OpenXRViewer] Quad layer unavailable: {type(exc).__name__}: {exc}")
 
         # 8. Controller actions (optional -silently disabled if action set creation fails)
         try:
@@ -5390,7 +5754,16 @@ class OpenXRViewerCore:
     def _init_keyboard(self):
         """Initial keyboard build (called once when the user toggles it on)."""
         self._kb_show_shifted = False
+        # Set size once: 80% of screen width with original aspect ratio
+        if self.screen_width > 0 and self._keyboard_width == 1.6:
+            self._keyboard_width = self.screen_width * 0.8
+        self._sync_keyboard_size_from_width()
         self._build_keyboard_texture()
+
+    def _sync_keyboard_size_from_width(self):
+        """Keep keyboard physical size in sync with its texture aspect ratio."""
+        self._keyboard_height = self._keyboard_width * _KB_TEX_H / float(_KB_TEX_W)
+        self._kb_last_build_width = self._keyboard_width
 
     def _kb_world_mat(self):
         """Build the keyboard's world transform: rot_y(yaw) -rot_x(pitch) then translate.
@@ -5434,23 +5807,21 @@ class OpenXRViewerCore:
 
         The keyboard sits below the FPS overlay panel so it doesn't overlap.
         """
-        FPS_GAP = 0.05
-        FPS_H = 0.12
-        KB_GAP = 0.05
+        KB_GAP = 0.10
         if self.screen_height is None:
             fw, fh = self.frame_size
-            if fh > fw:  # portrait: width becomes height
+            if fh > fw:
                 sh = self.screen_width
             else:
                 sh = self.screen_width * 9.0 / 16.0
         else:
             sh = self.screen_height
-        # Place keyboard below the FPS overlay panel, same distance + yaw
+        eff_height = self._keyboard_height
         self._keyboard_pan_x    = self.screen_pan_x
         self._keyboard_pan_y    = (self.screen_pan_y - sh / 2.0
-                                - FPS_GAP - FPS_H - KB_GAP
-                                - self._keyboard_height / 2.0)
-        self._keyboard_distance = self.screen_distance
+                                - KB_GAP
+                                - eff_height / 2.0)
+        self._keyboard_distance = self.screen_distance - 0.001  # slightly closer than screen  # tiny Z offset to avoid depth fighting
         # Auto-orient keyboard toward the head (sphere center), same logic as screen.
         head = getattr(self, '_head_pos_w', None)
         if head is not None:
@@ -5553,6 +5924,38 @@ class OpenXRViewerCore:
         self.ctx.disable(moderngl.BLEND)
         self.ctx.depth_mask = True
 
+        # Draw keyboard cursor circle at smoothed position (both hands)
+        for _sk in ('_kb_smooth_l', '_kb_smooth_r'):
+            _smooth_pos = getattr(self, _sk, None)
+            if _smooth_pos is None:
+                continue
+            _cp = math.cos(self._keyboard_pitch); _sp = math.sin(self._keyboard_pitch)
+            _cy = math.cos(self._keyboard_yaw);   _sy = math.sin(self._keyboard_yaw)
+            _kb_r = np.array([_cy, 0.0, -_sy], dtype='f4')
+            _kb_u = np.array([_sy * _sp, _cp, _cy * _sp], dtype='f4')
+            _kb_nv = np.array([_sy * _cp, -_sp, _cy * _cp], dtype='f4')
+            _kb_pos = np.array([self._keyboard_pan_x, self._keyboard_pan_y, -self._keyboard_distance], dtype='f4')
+            _wp = _kb_pos + _kb_r * float(_smooth_pos[0]) + _kb_u * float(_smooth_pos[1])
+            # Scale with distance like screen cursor, and hide outside keyboard bounds
+            _kw2 = self._keyboard_width * 0.5
+            _kh2 = self._keyboard_height * 0.5
+            if abs(float(_smooth_pos[0])) <= _kw2 and abs(float(_smooth_pos[1])) <= _kh2:
+                _dist_scale = float(np.clip(self._keyboard_distance / 2.0, 1.0, 3.0))
+                self.ctx.disable(moderngl.DEPTH_TEST)
+                self.ctx.enable(moderngl.BLEND)
+                for _r, _col in [(_dist_scale * 0.0096, (0.2, 0.6, 1.0, 0.75)), (_dist_scale * 0.0056, (1.0, 1.0, 1.0, 0.75))]:
+                    _m = np.eye(4, dtype='f4')
+                    _m[:3, 0] = _kb_r * _r
+                    _m[:3, 1] = _kb_u * _r
+                    _m[:3, 2] = _kb_nv
+                    _m[:3, 3] = _wp
+                    _mvp = vp_mat @ _m
+                    self._border_prog['u_mvp'].write(_mvp.T.tobytes())
+                    self._border_prog['u_color'].value = _col
+                    self._circle_vao.render(moderngl.TRIANGLE_FAN)
+                self.ctx.disable(moderngl.BLEND)
+                self.ctx.enable(moderngl.DEPTH_TEST)
+
     def _init_cuda_pbos(self, w, h):
         """Create or recreate PBOs and register them with CUDA/HIP."""
         if not self._cuda_gl or BACKEND not in ("CUDA", "HIP"):
@@ -5615,13 +6018,29 @@ class OpenXRViewerCore:
         """Update glow target from a thin frame border with minimal CPU work."""
         try:
             if is_tensor:
-                h, w = int(rgb.shape[1]), int(rgb.shape[2])
+                rgb_t = rgb.detach()
+                if rgb_t.ndim == 4:
+                    rgb_t = rgb_t[0]
+                if rgb_t.ndim == 3 and rgb_t.shape[0] in (3, 4):
+                    channels_first = True
+                    rgb_t = rgb_t[:3]
+                    h, w = int(rgb_t.shape[1]), int(rgb_t.shape[2])
+                elif rgb_t.ndim == 3 and rgb_t.shape[-1] >= 3:
+                    channels_first = False
+                    rgb_t = rgb_t[..., :3]
+                    h, w = int(rgb_t.shape[0]), int(rgb_t.shape[1])
+                else:
+                    return
                 bt = max(1, int(min(h, w) * 0.08))
 
                 top_h = min(bt, h)
                 bot_h = min(bt, h)
-                total = rgb[:, :top_h, :].float().sum(dim=(1, 2))
-                total = total + rgb[:, max(0, h - bot_h):, :].float().sum(dim=(1, 2))
+                if channels_first:
+                    total = rgb_t[:, :top_h, :].float().sum(dim=(1, 2))
+                    total = total + rgb_t[:, max(0, h - bot_h):, :].float().sum(dim=(1, 2))
+                else:
+                    total = rgb_t[:top_h, :, :].float().sum(dim=(0, 1))
+                    total = total + rgb_t[max(0, h - bot_h):, :, :].float().sum(dim=(0, 1))
                 count = (top_h * w) + (bot_h * w)
 
                 mid_h = max(0, h - top_h - bot_h)
@@ -5629,16 +6048,51 @@ class OpenXRViewerCore:
                 if mid_h > 0 and side_w > 0:
                     y0 = top_h
                     y1 = h - bot_h
-                    total = total + rgb[:, y0:y1, :side_w].float().sum(dim=(1, 2))
-                    total = total + rgb[:, y0:y1, max(0, w - side_w):].float().sum(dim=(1, 2))
+                    if channels_first:
+                        total = total + rgb_t[:, y0:y1, :side_w].float().sum(dim=(1, 2))
+                        total = total + rgb_t[:, y0:y1, max(0, w - side_w):].float().sum(dim=(1, 2))
+                    else:
+                        total = total + rgb_t[y0:y1, :side_w, :].float().sum(dim=(0, 1))
+                        total = total + rgb_t[y0:y1, max(0, w - side_w):, :].float().sum(dim=(0, 1))
                     count += mid_h * side_w * 2
 
-                avg = (total / max(1, count)).clamp(0, 255).detach().cpu().numpy()
+                avg_t = (total / max(1, count)).float()
+                if avg_t.numel() and float(avg_t.detach().max().item()) <= 1.0:
+                    avg = avg_t.clamp(0.0, 1.0).detach().cpu().numpy()
+                    scale = 1.0
+                else:
+                    avg = avg_t.clamp(0.0, 255.0).detach().cpu().numpy()
+                    scale = 255.0
                 self._glow_target_color = (
-                    float(avg[0]) / 255.0,
-                    float(avg[1]) / 255.0,
-                    float(avg[2]) / 255.0,
+                    float(avg[0]) / scale,
+                    float(avg[1]) / scale,
+                    float(avg[2]) / scale,
                 )
+                stride = 8
+                grid = []
+                x_edges = (0, w // 3, (2 * w) // 3, w)
+                y_edges = (0, h // 2, h)
+                for row in range(2):
+                    y0, y1 = y_edges[row], y_edges[row + 1]
+                    for col in range(3):
+                        x0, x1 = x_edges[col], x_edges[col + 1]
+                        if x1 <= x0 or y1 <= y0:
+                            grid.append(self._glow_target_color)
+                            continue
+                        if channels_first:
+                            region = rgb_t[:, y0:y1:stride, x0:x1:stride].float()
+                            avg_t = region.mean(dim=(1, 2))
+                        else:
+                            region = rgb_t[y0:y1:stride, x0:x1:stride, :].float()
+                            avg_t = region.mean(dim=(0, 1))
+                        if avg_t.numel() and float(avg_t.detach().max().item()) <= 1.0:
+                            avg3 = avg_t.clamp(0.0, 1.0).detach().cpu().numpy()
+                            scale3 = 1.0
+                        else:
+                            avg3 = avg_t.clamp(0.0, 255.0).detach().cpu().numpy()
+                            scale3 = 255.0
+                        grid.append((float(avg3[0]) / scale3, float(avg3[1]) / scale3, float(avg3[2]) / scale3))
+                self._screen_light_target_colors = tuple(grid)
                 return
 
             rgb_np = np.asarray(rgb, dtype=np.uint8)
@@ -5667,6 +6121,20 @@ class OpenXRViewerCore:
                 float(avg[1]) / 255.0,
                 float(avg[2]) / 255.0,
             )
+            stride = 8
+            grid = []
+            x_edges = (0, w // 3, (2 * w) // 3, w)
+            y_edges = (0, h // 2, h)
+            for row in range(2):
+                y0, y1 = y_edges[row], y_edges[row + 1]
+                for col in range(3):
+                    x0, x1 = x_edges[col], x_edges[col + 1]
+                    if x1 <= x0 or y1 <= y0:
+                        grid.append(self._glow_target_color)
+                        continue
+                    avg3 = rgb_np[y0:y1:stride, x0:x1:stride, :].mean(axis=(0, 1))
+                    grid.append((float(avg3[0]) / 255.0, float(avg3[1]) / 255.0, float(avg3[2]) / 255.0))
+            self._screen_light_target_colors = tuple(grid)
         except Exception:
             pass
 
@@ -5793,6 +6261,13 @@ class OpenXRViewerCore:
             and float(getattr(self, '_glow_intensity_multiplier', 0.0)) > 0.0
         )
         env_spill_active = (
+            bool(getattr(self, '_screen_light_dynamic', False))
+            and getattr(self, '_bg_color_idx', 0) != 1
+            and bool(getattr(self, '_env_model_visible', False))
+            and bool(getattr(self, '_env_model_prims', []))
+            and float(getattr(self, '_screen_light_intensity', 0.0)) > 0.0
+        )
+        env_static_spill_active = (
             getattr(self, '_bg_color_idx', 0) != 1
             and bool(getattr(self, '_env_model_visible', False))
             and bool(getattr(self, '_env_model_prims', []))
@@ -5806,9 +6281,56 @@ class OpenXRViewerCore:
         )
         if glow_active or env_spill_active or dark_room_active:
             self._glow_color_counter = int(getattr(self, '_glow_color_counter', 0)) + 1
-            if self._glow_color_counter >= 15:
+            interval = max(1, int(getattr(self, '_screen_light_sample_interval', 15)))
+            if self._glow_color_counter >= interval:
                 self._glow_color_counter = 0
                 self._sample_glow_target_color(rgb, is_tensor)
+        elif env_static_spill_active:
+            self._glow_color_counter = 0
+
+    def _log_runtime_eye_difference_once(self, left_eye, right_eye):
+        if getattr(self, '_runtime_eye_diff_logged', False):
+            return
+        try:
+            import torch
+            if hasattr(left_eye, 'detach') and hasattr(right_eye, 'detach'):
+                left = left_eye.detach().float()
+                right = right_eye.detach().float()
+                if left.shape != right.shape:
+                    print(f"[OpenXRViewer] runtime eye diff unavailable: shape mismatch left={tuple(left.shape)} right={tuple(right.shape)}")
+                    self._runtime_eye_diff_logged = True
+                    return
+                if left.numel() == 0:
+                    return
+                diff = (left - right).abs()
+                mean_diff = float(diff.mean().item())
+                max_diff = float(diff.max().item())
+                scale = 255.0 if max(float(left.max().item()), float(right.max().item())) <= 1.0 else 1.0
+                print(
+                    f"[OpenXRViewer] runtime eye diff mean={mean_diff * scale:.3f}/255 "
+                    f"max={max_diff * scale:.3f}/255 shape={tuple(left.shape)}"
+                )
+                self._runtime_eye_diff_logged = True
+                return
+        except Exception as exc:
+            print(f"[OpenXRViewer] runtime eye diff unavailable: {type(exc).__name__}: {exc}")
+            self._runtime_eye_diff_logged = True
+            return
+
+        try:
+            left = self._runtime_eye_to_numpy(left_eye).astype(np.int16)
+            right = self._runtime_eye_to_numpy(right_eye).astype(np.int16)
+            if left.shape != right.shape:
+                print(f"[OpenXRViewer] runtime eye diff unavailable: shape mismatch left={left.shape} right={right.shape}")
+            else:
+                diff = np.abs(left - right)
+                print(
+                    f"[OpenXRViewer] runtime eye diff mean={float(diff.mean()):.3f}/255 "
+                    f"max={int(diff.max())}/255 shape={left.shape}"
+                )
+        except Exception as exc:
+            print(f"[OpenXRViewer] runtime eye diff unavailable: {type(exc).__name__}: {exc}")
+        self._runtime_eye_diff_logged = True
 
     def _runtime_eye_to_numpy(self, frame):
         import torch
@@ -6074,6 +6596,7 @@ class OpenXRViewerCore:
         right_hw = self._runtime_eye_shape_hw(runtime_result.right_eye)
         if left_hw != right_hw:
             raise RuntimeError(f"OpenXR runtime eye size mismatch: left={left_hw} right={right_hw}")
+        self._log_runtime_eye_difference_once(runtime_result.left_eye, runtime_result.right_eye)
         h, w = left_hw
         if self._use_d3d11 and self._d3d11_native_renderer is not None:
             try:
@@ -6086,6 +6609,7 @@ class OpenXRViewerCore:
                     self._texture_size = (w, h)
                     self.frame_size = (w, h)
                     self.screen_height = None
+                    self._maybe_sample_glow_target_color(runtime_result.left_eye, hasattr(runtime_result.left_eye, 'detach'))
                     return
             except Exception as e:
                 print(f"[OpenXRViewer] D3D11 runtime eye upload failed: {e}")
@@ -6109,9 +6633,31 @@ class OpenXRViewerCore:
         self._texture_size = (w, h)
         self.frame_size = (w, h)
         self.screen_height = None
+        self._maybe_sample_glow_target_color(runtime_result.left_eye, hasattr(runtime_result.left_eye, 'detach'))
         if self._d3d11_native_renderer is not None:
             self._d3d11_native_renderer.has_frame = False
 
+
+    def _screen_footprint_px(self, mvp, swapchain_size):
+        sc_w, sc_h = int(swapchain_size[0]), int(swapchain_size[1])
+        corners = np.array([
+            [-1.0, -1.0, 0.0, 1.0],
+            [1.0, -1.0, 0.0, 1.0],
+            [1.0, 1.0, 0.0, 1.0],
+            [-1.0, 1.0, 0.0, 1.0],
+        ], dtype=np.float32)
+        clip = (mvp @ corners.T).T
+        valid = np.abs(clip[:, 3]) > 1e-6
+        if not np.any(valid):
+            return None
+        ndc = clip[valid, :3] / clip[valid, 3:4]
+        px = (ndc[:, 0] * 0.5 + 0.5) * sc_w
+        py = (ndc[:, 1] * 0.5 + 0.5) * sc_h
+        min_x, max_x = float(np.min(px)), float(np.max(px))
+        min_y, max_y = float(np.min(py)), float(np.max(py))
+        footprint_w = max(0.0, min(max_x, sc_w) - max(min_x, 0.0))
+        footprint_h = max(0.0, min(max_y, sc_h) - max(min_y, 0.0))
+        return footprint_w, footprint_h
 
     def _log_screen_footprint_once(self, eye_index, mvp, swapchain_size):
         key = (
@@ -6127,24 +6673,11 @@ class OpenXRViewerCore:
         self._screen_footprint_logged.add(key)
         try:
             sc_w, sc_h = int(swapchain_size[0]), int(swapchain_size[1])
-            corners = np.array([
-                [-1.0, -1.0, 0.0, 1.0],
-                [1.0, -1.0, 0.0, 1.0],
-                [1.0, 1.0, 0.0, 1.0],
-                [-1.0, 1.0, 0.0, 1.0],
-            ], dtype=np.float32)
-            clip = (mvp @ corners.T).T
-            valid = np.abs(clip[:, 3]) > 1e-6
-            if not np.any(valid):
+            footprint_px = self._screen_footprint_px(mvp, swapchain_size)
+            if footprint_px is None:
                 footprint = "unknown"
             else:
-                ndc = clip[valid, :3] / clip[valid, 3:4]
-                px = (ndc[:, 0] * 0.5 + 0.5) * sc_w
-                py = (ndc[:, 1] * 0.5 + 0.5) * sc_h
-                min_x, max_x = float(np.min(px)), float(np.max(px))
-                min_y, max_y = float(np.min(py)), float(np.max(py))
-                footprint_w = max(0.0, min(max_x, sc_w) - max(min_x, 0.0))
-                footprint_h = max(0.0, min(max_y, sc_h) - max(min_y, 0.0))
+                footprint_w, footprint_h = footprint_px
                 footprint = f"{int(round(footprint_w))}x{int(round(footprint_h))}"
             tex_w, tex_h = self._texture_size or (0, 0)
             print(
@@ -6156,6 +6689,319 @@ class OpenXRViewerCore:
             )
         except Exception as exc:
             print(f"[OpenXRViewer] screen footprint unavailable: {type(exc).__name__}: {exc}", flush=True)
+
+    def _screen_quality_target_size(self, mvp, swapchain_size, source_size):
+        if not self._screen_quality_filter:
+            return None
+        footprint = self._screen_footprint_px(mvp, swapchain_size)
+        if footprint is None:
+            return None
+        src_w, src_h = int(source_size[0]), int(source_size[1])
+        if src_w <= 0 or src_h <= 0:
+            return None
+        scale = float(self._screen_quality_oversample)
+        target_w = int(math.ceil(max(16.0, footprint[0] * scale) / 16.0) * 16)
+        target_h = int(math.ceil(max(16.0, footprint[1] * scale) / 16.0) * 16)
+        target_w = min(src_w, max(16, target_w)) & ~1
+        target_h = min(src_h, max(16, target_h)) & ~1
+        return target_w, target_h
+
+    def _release_screen_quality_resources(self):
+        for name in ('_screen_ds_fbo', '_screen_rcas_fbo', '_screen_ds_tex', '_screen_rcas_tex'):
+            obj = getattr(self, name, None)
+            if obj is not None:
+                try:
+                    obj.release()
+                except Exception:
+                    pass
+                setattr(self, name, None)
+        self._screen_quality_size = None
+
+    def _ensure_screen_quality_resources(self, size):
+        if self._screen_quality_size == tuple(size) and self._screen_ds_tex is not None and self._screen_rcas_tex is not None:
+            return
+        self._release_screen_quality_resources()
+        w, h = int(size[0]), int(size[1])
+        self._screen_ds_tex = self.ctx.texture((w, h), 4, dtype='f1')
+        self._screen_ds_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
+        self._screen_rcas_tex = self.ctx.texture((w, h), 4, dtype='f1')
+        self._screen_rcas_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
+        self._screen_ds_fbo = self.ctx.framebuffer(color_attachments=[self._screen_ds_tex])
+        self._screen_rcas_fbo = self.ctx.framebuffer(color_attachments=[self._screen_rcas_tex])
+        self._screen_quality_size = (w, h)
+        if self._screen_quality_logged_size != (w, h):
+            print(f"[OpenXRViewer] screen quality filter active: {w}x{h}, RCAS={self._screen_quality_sharpness:.2f}")
+            self._screen_quality_logged_size = (w, h)
+
+    def _prepare_screen_quality_texture(self, source_tex, source_size, mvp, swapchain_size, source_label='color'):
+        if source_tex is None or source_size is None:
+            return None
+        target_size = self._screen_quality_target_size(mvp, swapchain_size, source_size)
+        if target_size is None:
+            return None
+        log_key = (source_label, target_size)
+        if log_key not in self._screen_quality_logged_sources:
+            print(f"[OpenXRViewer] screen quality source={source_label} target={target_size[0]}x{target_size[1]}")
+            self._screen_quality_logged_sources.add(log_key)
+        self._ensure_screen_quality_resources(target_size)
+        src_w, src_h = int(source_size[0]), int(source_size[1])
+        out_w, out_h = target_size
+
+        prev_viewport = self.ctx.viewport
+        prev_depth_mask = self.ctx.depth_mask
+        self.ctx.disable(moderngl.DEPTH_TEST)
+        self.ctx.disable(moderngl.BLEND)
+        self.ctx.depth_mask = False
+
+        self._screen_ds_fbo.use()
+        self.ctx.viewport = (0, 0, out_w, out_h)
+        source_tex.use(location=0)
+        self._screen_ds_prog['u_input_size'].value = (float(src_w), float(src_h))
+        self._screen_ds_vao.render(moderngl.TRIANGLE_STRIP)
+
+        self._screen_rcas_fbo.use()
+        self.ctx.viewport = (0, 0, out_w, out_h)
+        self._screen_ds_tex.use(location=0)
+        self._screen_rcas_prog['u_output_size'].value = (float(out_w), float(out_h))
+        self._screen_rcas_prog['u_sharpness'].value = float(self._screen_quality_sharpness)
+        self._screen_rcas_vao.render(moderngl.TRIANGLE_STRIP)
+
+        self.ctx.viewport = prev_viewport
+        self.ctx.depth_mask = prev_depth_mask
+        self.ctx.enable(moderngl.DEPTH_TEST)
+        return self._screen_rcas_tex
+
+    def _get_or_create_quad_fbo(self, eye_index, image_index, gl_tex, width, height):
+        array_size = int(self._quad_swapchain_array_size.get(eye_index, 1))
+        layer_index = int(eye_index) if array_size > 1 else 0
+        key = (int(eye_index), int(image_index), layer_index, array_size)
+        cached = self._quad_fbo_cache.get(key)
+        if cached and cached[2] == width and cached[3] == height:
+            return cached[0]
+        if cached:
+            try:
+                cached[0].release()
+            except Exception:
+                pass
+            try:
+                glDeleteFramebuffers(1, [cached[1]])
+            except Exception:
+                pass
+        while glGetError() != GL_NO_ERROR:
+            pass
+        raw_fbo = int(glGenFramebuffers(1))
+        err = glGetError()
+        if err != GL_NO_ERROR:
+            raise RuntimeError(f"Quad layer glGenFramebuffers failed: {err:#x}")
+        glBindFramebuffer(GL_FRAMEBUFFER, raw_fbo)
+        err = glGetError()
+        if err != GL_NO_ERROR:
+            raise RuntimeError(f"Quad layer glBindFramebuffer failed: {err:#x}")
+        if array_size > 1:
+            glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, gl_tex, 0, layer_index)
+        else:
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, gl_tex, 0)
+        err = glGetError()
+        if err != GL_NO_ERROR:
+            raise RuntimeError(
+                f"Quad layer framebuffer attach failed: {err:#x} "
+                f"array_size={array_size} layer={layer_index} tex={int(gl_tex)}"
+            )
+        status = glCheckFramebufferStatus(GL_FRAMEBUFFER)
+        glBindFramebuffer(GL_FRAMEBUFFER, 0)
+        if status != GL_FRAMEBUFFER_COMPLETE:
+            raise RuntimeError(f"Quad layer FBO incomplete: {status:#x}")
+        mgl_fbo = self.ctx.detect_framebuffer(raw_fbo)
+        self._quad_fbo_cache[key] = (mgl_fbo, raw_fbo, width, height)
+        return mgl_fbo
+
+    def _quad_layer_source_texture(self, eye_index=0):
+        if not self._runtime_direct_source:
+            return None, None, True
+        return self._runtime_eye_textures[eye_index], self._runtime_eye_texture_size, True
+
+    def _quad_layer_can_replace_projection_screen(self):
+        return (
+            self._xr_quad_layer_active
+            and self._runtime_direct_source
+            and not self._screen_curved
+            and all(tex is not None for tex in self._runtime_eye_textures)
+            and self._runtime_eye_texture_size is not None
+        )
+
+    def _update_quad_layer_swapchain(self, eye_index):
+        if not (self._xr_quad_layer_active and eye_index in self._quad_swapchains):
+            return False
+        source_tex, source_size, flip_y = self._quad_layer_source_texture(eye_index)
+        if source_tex is None or source_size is None:
+            return False
+        quad_w, quad_h = self._quad_swapchain_sizes[eye_index]
+        swapchain = self._quad_swapchains[eye_index]
+        img_index = xr.acquire_swapchain_image(swapchain, self._xr_sc_acquire_info)
+        xr.wait_swapchain_image(swapchain, self._xr_sc_wait_info)
+        released = False
+        try:
+            sc_image = self._quad_swapchain_images[eye_index][img_index]
+            mgl_fbo = self._get_or_create_quad_fbo(eye_index, img_index, sc_image.image, quad_w, quad_h)
+            prev_viewport = self.ctx.viewport
+            prev_depth_mask = self.ctx.depth_mask
+            mgl_fbo.use()
+            self.ctx.viewport = (0, 0, quad_w, quad_h)
+            self.ctx.disable(moderngl.DEPTH_TEST)
+            self.ctx.disable(moderngl.BLEND)
+            self.ctx.depth_mask = False
+            source_tex.use(location=0)
+            self._quad_copy_prog['u_flip_y'].value = 1 if flip_y else 0
+            self._quad_copy_vao.render(moderngl.TRIANGLE_STRIP)
+            self.ctx.viewport = prev_viewport
+            self.ctx.depth_mask = prev_depth_mask
+            self.ctx.enable(moderngl.DEPTH_TEST)
+            xr.release_swapchain_image(swapchain, self._xr_sc_release_info)
+            released = True
+            return True
+        except Exception as exc:
+            self._xr_quad_layer_active = False
+            self._xr_quad_layer_failed = True
+            print(f"[OpenXRViewer] Quad layer update failed: {type(exc).__name__}: {exc}")
+            return False
+        finally:
+            if not released:
+                try:
+                    xr.release_swapchain_image(swapchain, self._xr_sc_release_info)
+                except Exception:
+                    pass
+
+    def _update_quad_layer_swapchains(self):
+        if not self._quad_layer_can_replace_projection_screen():
+            return []
+        shared_swapchain = (
+            self._quad_swapchains.get(0) is not None
+            and self._quad_swapchains.get(0) is self._quad_swapchains.get(1)
+            and int(self._quad_swapchain_array_size.get(0, 1)) > 1
+        )
+        if not shared_swapchain:
+            updated = []
+            for eye_index in range(2):
+                if self._update_quad_layer_swapchain(eye_index):
+                    updated.append(eye_index)
+            return updated
+
+        source0, size0, flip0 = self._quad_layer_source_texture(0)
+        source1, size1, flip1 = self._quad_layer_source_texture(1)
+        if source0 is None or source1 is None or size0 is None or size1 is None:
+            return []
+        quad_w, quad_h = self._quad_swapchain_sizes[0]
+        swapchain = self._quad_swapchains[0]
+        img_index = xr.acquire_swapchain_image(swapchain, self._xr_sc_acquire_info)
+        xr.wait_swapchain_image(swapchain, self._xr_sc_wait_info)
+        released = False
+        try:
+            sc_image = self._quad_swapchain_images[0][img_index]
+            prev_viewport = self.ctx.viewport
+            prev_depth_mask = self.ctx.depth_mask
+            for eye_index, source_tex, flip_y in ((0, source0, flip0), (1, source1, flip1)):
+                mgl_fbo = self._get_or_create_quad_fbo(eye_index, img_index, sc_image.image, quad_w, quad_h)
+                mgl_fbo.use()
+                self.ctx.viewport = (0, 0, quad_w, quad_h)
+                self.ctx.disable(moderngl.DEPTH_TEST)
+                self.ctx.disable(moderngl.BLEND)
+                self.ctx.depth_mask = False
+                source_tex.use(location=0)
+                self._quad_copy_prog['u_flip_y'].value = 1 if flip_y else 0
+                self._quad_copy_vao.render(moderngl.TRIANGLE_STRIP)
+            self.ctx.viewport = prev_viewport
+            self.ctx.depth_mask = prev_depth_mask
+            self.ctx.enable(moderngl.DEPTH_TEST)
+            xr.release_swapchain_image(swapchain, self._xr_sc_release_info)
+            released = True
+            return [0, 1]
+        except Exception as exc:
+            self._xr_quad_layer_active = False
+            self._xr_quad_layer_failed = True
+            print(f"[OpenXRViewer] Quad stereo layer update failed: {type(exc).__name__}: {exc}")
+            return []
+        finally:
+            if not released:
+                try:
+                    xr.release_swapchain_image(swapchain, self._xr_sc_release_info)
+                except Exception:
+                    pass
+
+    def _screen_pose_quat_xyzw(self):
+        cy = math.cos(self.screen_yaw * 0.5)
+        sy = math.sin(self.screen_yaw * 0.5)
+        cp = math.cos(self.screen_pitch * 0.5)
+        sp = math.sin(self.screen_pitch * 0.5)
+        cr = math.cos(self.screen_roll * 0.5)
+        sr = math.sin(self.screen_roll * 0.5)
+        # Quaternion order matches R_yaw @ R_pitch @ R_roll used by _build_model_mat4.
+        qy = np.array([0.0, sy, 0.0, cy], dtype=np.float64)
+        qp = np.array([sp, 0.0, 0.0, cp], dtype=np.float64)
+        qr = np.array([0.0, 0.0, sr, cr], dtype=np.float64)
+
+        def mul(a, b):
+            ax, ay, az, aw = a
+            bx, by, bz, bw = b
+            return np.array([
+                aw * bx + ax * bw + ay * bz - az * by,
+                aw * by - ax * bz + ay * bw + az * bx,
+                aw * bz + ax * by - ay * bx + az * bw,
+                aw * bw - ax * bx - ay * by - az * bz,
+            ], dtype=np.float64)
+
+        q = mul(mul(qy, qp), qr)
+        q /= np.linalg.norm(q) + 1e-12
+        return float(q[0]), float(q[1]), float(q[2]), float(q[3])
+
+    def _make_quad_layer(self, eye_index):
+        if not (self._xr_quad_layer_active and eye_index in self._quad_swapchains):
+            return None
+        self._ensure_screen_dimensions()
+        qx, qy, qz, qw = self._screen_pose_quat_xyzw()
+        cp = math.cos(self.screen_pitch)
+        sp = math.sin(self.screen_pitch)
+        sy = math.sin(self.screen_yaw)
+        cy = math.cos(self.screen_yaw)
+        normal = np.array([cp * sy, -sp, cp * cy], dtype=np.float64)
+        offset = float(getattr(self, '_xr_quad_layer_debug_offset', 0.0))
+        pos = np.array([
+            float(self.screen_pan_x),
+            float(self.screen_pan_y),
+            float(-self.screen_distance),
+        ], dtype=np.float64)
+        if offset != 0.0:
+            pos = pos - normal * offset
+            if not self._xr_quad_layer_debug_logged:
+                print(f"[OpenXRViewer] Quad layer debug offset active: {offset:.3f}m toward viewer")
+                self._xr_quad_layer_debug_logged = True
+        return xr.CompositionLayerQuad(
+            space=self._xr_space,
+            eye_visibility=xr.EyeVisibility.LEFT if eye_index == 0 else xr.EyeVisibility.RIGHT,
+            sub_image=xr.SwapchainSubImage(
+                swapchain=self._quad_swapchains[eye_index],
+                image_rect=xr.Rect2Di(
+                    offset=xr.Offset2Di(x=0, y=0),
+                    extent=xr.Extent2Di(
+                        width=int(self._quad_swapchain_sizes[eye_index][0]),
+                        height=int(self._quad_swapchain_sizes[eye_index][1]),
+                    ),
+                ),
+                image_array_index=int(eye_index) if int(self._quad_swapchain_array_size.get(eye_index, 1)) > 1 else 0,
+            ),
+            pose=xr.Posef(
+                orientation=xr.Quaternionf(x=qx, y=qy, z=qz, w=qw),
+                position=xr.Vector3f(
+                    x=float(pos[0]),
+                    y=float(pos[1]),
+                    z=float(pos[2]),
+                ),
+            ),
+            size=xr.Extent2Df(
+                width=float(self.screen_width),
+                height=float(self.screen_height),
+            ),
+        )
+
     def _ensure_screen_dimensions(self):
         """Lazily derive screen_width/height from the frame aspect ratio.
 
@@ -7750,6 +8596,17 @@ class OpenXRViewerCore:
             # Draw the hit circle at beam_len distance
             HIT_OFFSET = 0.0
             hit_pos = ctrl_pos + fwd_w * (beam_len - HIT_OFFSET)
+            # Use smoothed keyboard cursor position when on keyboard
+            if hit_target == 'keyboard':
+                _sk = '_kb_smooth_l' if ctrl_name == 'left' else '_kb_smooth_r'
+                _smooth_pos = getattr(self, _sk, None)
+                if _smooth_pos is not None:
+                    _cp = math.cos(self._keyboard_pitch); _sp = math.sin(self._keyboard_pitch)
+                    _cy = math.cos(self._keyboard_yaw);   _sy = math.sin(self._keyboard_yaw)
+                    _kb_x = np.array([_cy, 0.0, -_sy], dtype='f8')
+                    _kb_y = np.array([_sy * _sp, _cp, _cy * _sp], dtype='f8')
+                    _kb_pos = np.array([self._keyboard_pan_x, self._keyboard_pan_y, -self._keyboard_distance], dtype='f8')
+                    hit_pos = (_kb_pos + _kb_x * float(_smooth_pos[0]) + _kb_y * float(_smooth_pos[1])).astype('f4')
             # Scale the circle with hit distance so its on-screen (angular) size
             # stays roughly constant: a fixed world-space radius shrinks with
             # perspective, which made the circle tiny once an environment model
@@ -7767,6 +8624,15 @@ class OpenXRViewerCore:
                     model[:3, 0] = (r_ax * radius).astype('f4')
                     model[:3, 1] = (u_ax * radius).astype('f4')
                     model[:3, 2] = screen_n.astype('f4')
+                elif hit_target == 'keyboard':
+                    _cp = math.cos(self._keyboard_pitch); _sp = math.sin(self._keyboard_pitch)
+                    _cy = math.cos(self._keyboard_yaw);   _sy = math.sin(self._keyboard_yaw)
+                    _kb_r = np.array([_cy, 0.0, -_sy], dtype='f4')
+                    _kb_u = np.array([_sy * _sp, _cp, _cy * _sp], dtype='f4')
+                    _kb_nv = np.array([_sy * _cp, -_sp, _cy * _cp], dtype='f4')
+                    model[:3, 0] = _kb_r * radius
+                    model[:3, 1] = _kb_u * radius
+                    model[:3, 2] = _kb_nv
                 else:
                     model[0, 0] = radius
                     model[1, 1] = radius
@@ -8607,15 +9473,13 @@ class OpenXRViewerCore:
 
         # Main screen
         mgl_fbo.use()
-        if self._runtime_direct_source:
-            self._runtime_eye_textures[eye_index].use(location=0)
-            self._runtime_depth_texture.use(location=1)
-        else:
+        eye_sign = -1.0 if eye_index == 0 else 1.0
+        draw_projection_screen = not self._quad_layer_can_replace_projection_screen()
+        if not draw_projection_screen:
+            pass
+        elif self._screen_curved and self._curved_prog is not None and not self._runtime_direct_source:
             self.color_tex.use(location=0)
             self.depth_tex.use(location=1)
-
-        eye_sign = -1.0 if eye_index == 0 else 1.0
-        if self._screen_curved and self._curved_prog is not None and not self._runtime_direct_source:
             params = (
                 self.screen_width,
                 self.screen_height,
@@ -8637,11 +9501,35 @@ class OpenXRViewerCore:
             self._curved_prog['u_convergence'].value = float(self.convergence)
             self._curved_prog['u_corner_radius'].value = self._corner_radius
             self._curved_vao.render(moderngl.TRIANGLE_STRIP, vertices=(48 + 1) * 2)
-        else:
+        elif draw_projection_screen:
             model = self._build_model_mat4()
             mvp = vp_mat @ model
             if self._runtime_direct_source:
                 self._log_screen_footprint_once(eye_index, mvp, (sc_w, sc_h))
+                source_tex = self._runtime_eye_textures[eye_index]
+                screen_tex = self._prepare_screen_quality_texture(
+                    source_tex,
+                    self._runtime_eye_texture_size or self._texture_size,
+                    mvp,
+                    (sc_w, sc_h),
+                    f'runtime_eye_{eye_index}',
+                ) or source_tex
+                mgl_fbo.use()
+                self.ctx.viewport = (0, 0, sc_w, sc_h)
+                screen_tex.use(location=0)
+                self._runtime_depth_texture.use(location=1)
+            else:
+                screen_tex = self._prepare_screen_quality_texture(
+                    self.color_tex,
+                    self._texture_size,
+                    mvp,
+                    (sc_w, sc_h),
+                    'color',
+                ) or self.color_tex
+                mgl_fbo.use()
+                self.ctx.viewport = (0, 0, sc_w, sc_h)
+                screen_tex.use(location=0)
+                self.depth_tex.use(location=1)
             self.prog['u_mvp'].write(mvp.T.tobytes())
             self.prog['u_roll'].value = 0.0 if self._runtime_direct_source else self.screen_roll
             self.prog['u_eye_offset'].value = 0.0 if self._runtime_direct_source else eye_sign * self.ipd_uv / 2.0
@@ -8705,10 +9593,10 @@ class OpenXRViewerCore:
         self.ctx.depth_mask = True
 
         # 10. FPS/status overlays -topmost UI, occlude laser beams
-        if self._fps_overlay_visible and self._overlay_tex is not None:
+        if self._hand_fps_visible and self._overlay_tex is not None:
             self.ctx.viewport = (0, 0, sc_w, sc_h)
             self._render_fps_overlay(eye_index, mgl_fbo, vp_mat)
-        if self._team_status_visible and self._team_status_tex is not None:
+        if self._team_fps_visible and self._team_status_tex is not None:
             self.ctx.viewport = (0, 0, sc_w, sc_h)
             self._render_team_status_overlay(eye_index, mgl_fbo, vp_mat)
 
@@ -9089,6 +9977,28 @@ class OpenXRViewerCore:
         u = 0.5 + loc_x / safe_w
         v = 0.5 + loc_y / safe_h
         return u, v
+
+    def _keyboard_plane_hit(self, ctrl_pos, fwd_w):
+        """Return (lx, ly) in keyboard local frame where the ray hits the keyboard plane, or (None, None)."""
+        cp = math.cos(self._keyboard_pitch); sp = math.sin(self._keyboard_pitch)
+        cy = math.cos(self._keyboard_yaw);   sy = math.sin(self._keyboard_yaw)
+        kb_x = np.array([ cy,      0.0,  -sy      ], dtype='f8')
+        kb_y = np.array([ sy * sp,  cp,   cy * sp ], dtype='f8')
+        kb_n = np.array([ sy * cp, -sp,   cy * cp ], dtype='f8')
+        kb_pos = np.array([self._keyboard_pan_x,
+                        self._keyboard_pan_y,
+                        -self._keyboard_distance], dtype='f8')
+        denom = float(np.dot(kb_n, fwd_w))
+        if abs(denom) < 1e-6:
+            return None, None
+        t = float(np.dot(kb_n, kb_pos - ctrl_pos)) / denom
+        if t < 0.05:
+            return None, None
+        hit  = ctrl_pos + fwd_w * t
+        diff = hit - kb_pos
+        lx = float(np.dot(diff, kb_x))
+        ly = float(np.dot(diff, kb_y))
+        return lx, ly
 
     def _keyboard_laser_hit(self, ctrl_pos, fwd_w):
         """Return (key_index, t) if the aim ray hits a key on the virtual keyboard, else (None, None).
@@ -9694,9 +10604,11 @@ class OpenXRViewerCore:
             lt = self._read_float_action(self._act_left_trigger,  "/user/hand/left")
             rt = self._read_float_action(self._act_right_trigger, "/user/hand/right")
 
-        for trig_now, trig_prev_attr, hover_attr, held_key_attr, held_mods_attr, aim_mat in [
-            (lt, '_kb_trig_prev_l', '_kb_hover_l', '_kb_held_key_l', '_kb_held_mods_l', self._aim_mat_l),
-            (rt, '_kb_trig_prev_r', '_kb_hover_r', '_kb_held_key_r', '_kb_held_mods_r', self._aim_mat_r),
+        # Hover debounce: require laser to stay on a new key for N frames before switching
+        HOVER_DEBOUNCE = 0
+        for trig_now, trig_prev_attr, hover_attr, held_key_attr, held_mods_attr, aim_mat, debounce_attr in [
+            (lt, '_kb_trig_prev_l', '_kb_hover_l', '_kb_held_key_l', '_kb_held_mods_l', self._aim_mat_l, '_kb_debounce_l'),
+            (rt, '_kb_trig_prev_r', '_kb_hover_r', '_kb_held_key_r', '_kb_held_mods_r', self._aim_mat_r, '_kb_debounce_r'),
         ]:
             trig_prev = getattr(self, trig_prev_attr)
             held_key  = getattr(self, held_key_attr)
@@ -9714,9 +10626,40 @@ class OpenXRViewerCore:
                 else:
                     cp = aim_mat[:3, 3].astype('f8')
                 cp = cp + fw * 0.11
-                idx, _ = self._keyboard_laser_hit(cp, fw)
+                lx_ly = self._keyboard_plane_hit(cp, fw)
+                raw_idx = None
+                if lx_ly[0] is not None:
+                    _sk = '_kb_smooth_l' if hover_attr.endswith('_l') else '_kb_smooth_r'
+                    _prev = getattr(self, _sk, None)
+                    if _prev is None:
+                        _smooth = np.array([lx_ly[0], lx_ly[1]], dtype='f8')
+                    else:
+                        _alpha = 0.3
+                        _smooth = _prev + (np.array([lx_ly[0], lx_ly[1]], dtype='f8') - _prev) * _alpha
+                    setattr(self, _sk, _smooth)
+                    _sx, _sy = float(_smooth[0]), float(_smooth[1])
+                    # Check smoothed position against key rects (full bounds, no snap)
+                    for _i, _key in enumerate(self._keyboard_keys):
+                        _x0, _y0, _x1, _y1 = _key.rect_local
+                        if _x0 <= _sx <= _x1 and _y0 <= _sy <= _y1:
+                            raw_idx = _i
+                            break
+                else:
+                    setattr(self, '_kb_smooth_l' if hover_attr.endswith('_l') else '_kb_smooth_r', None)
             else:
-                idx = None
+                raw_idx = None
+            # Debounce: only switch hover after HOVER_DEBOUNCE consecutive frames on the new key
+            prev_hover = getattr(self, hover_attr)
+            if raw_idx == prev_hover:
+                setattr(self, debounce_attr, 0)
+                idx = raw_idx
+            else:
+                count = getattr(self, debounce_attr, 0) + 1
+                setattr(self, debounce_attr, count)
+                if count >= HOVER_DEBOUNCE:
+                    idx = raw_idx
+                else:
+                    idx = prev_hover
             setattr(self, hover_attr, idx)
 
             # --Release held regular key when trigger drops or laser leaves the key --
@@ -10563,10 +11506,10 @@ class OpenXRViewerCore:
         # Rebuild keyboard geometry if width changed
         if (self._keyboard_visible and self._keyboard_tex is not None
                 and abs(self._keyboard_width - self._kb_last_build_width) > 0.001):
-            self._keyboard_height = (self._keyboard_width
-                                    * _KB_TEX_H / float(_KB_TEX_W))
+            self._sync_keyboard_size_from_width()
             self._build_keyboard_texture()
-            self._kb_last_build_width = self._keyboard_width
+            if not (grip_l or grip_r):
+                self._anchor_keyboard_below_screen()
 
         # Menu (left): short press ->toggle status/FPS panel
         menu_now = self._read_bool_action(self._act_menu_btn, "/user/hand/left")
@@ -10596,26 +11539,18 @@ class OpenXRViewerCore:
                 if a_now and not self._a_last:
                     self._a_press_t = time.perf_counter()
                     self._a_long_fired = False
+                    self._toggle_quad_layer_compare()
                 if a_now and not self._a_long_fired:
                     if time.perf_counter() - self._a_press_t >= A_LONG:
-                        self._toggle_team_status_panel()
+                        self._cycle_a_panel()
                         self._a_long_fired = True
-                if not a_now and self._a_last and not self._a_long_fired:
-                    self._screen_curved = not self._screen_curved
-                    self._curved_verts_params = None
-                    self._curved_border_verts_params = None
-                    self._border_alpha = 1.0
-                    self._border_idle_t = time.perf_counter()
-                    self._preset_name_overlay = 'Curved Screen' if self._screen_curved else 'Flat Screen'
-                    self._preset_osd_show_t = time.perf_counter()
-                    self._ab_was_held = False
                 B_LONG = 1.0
                 if b_now and not self._b_last:
                     self._b_press_t = time.perf_counter()
                     self._b_long_fired = False
                 if b_now and not self._b_long_fired:
                     if time.perf_counter() - self._b_press_t >= B_LONG:
-                        self._cycle_status_panel_mode()
+                        self._cycle_b_panel()
                         self._b_long_fired = True
                 if not b_now and self._b_last and not self._b_long_fired:
                     if not hasattr(self, '_bg_color_saved_for_b') or self._bg_color_saved_for_b is None:
@@ -11261,6 +12196,17 @@ class OpenXRViewerCore:
                         ctypes.cast(ctypes.pointer(proj_layer),
                                     ctypes.POINTER(xr.CompositionLayerBaseHeader))
                     )
+                    quad_layers = []
+                    if self._quad_layer_can_replace_projection_screen():
+                        for quad_eye_index in self._update_quad_layer_swapchains():
+                            quad_layer = self._make_quad_layer(quad_eye_index)
+                            if quad_layer is None:
+                                continue
+                            quad_layers.append(quad_layer)
+                            composition_layers.append(
+                                ctypes.cast(ctypes.pointer(quad_layer),
+                                            ctypes.POINTER(xr.CompositionLayerBaseHeader))
+                            )
 
             xr.end_frame(
                 self._xr_session,
@@ -11394,6 +12340,7 @@ class OpenXRViewerCore:
 
         self._release_runtime_eye_pbos()
         self._release_runtime_eye_textures()
+        self._release_screen_quality_resources()
 
         for tex in (
             self._overlay_tex,
@@ -11435,6 +12382,7 @@ class OpenXRViewerCore:
         self.color_tex = self.depth_tex = None
 
         for attr in (
+            '_screen_ds_vao', '_screen_rcas_vao', '_screen_ds_prog', '_screen_rcas_prog',
             '_curved_vao', '_curved_vbo', '_curved_prog',
             '_curved_border_vao', '_curved_border_vbo', '_curved_border_prog',
         ):

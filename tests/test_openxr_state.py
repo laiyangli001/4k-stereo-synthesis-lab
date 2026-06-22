@@ -70,7 +70,7 @@ def test_openxr_runtime_config_update_and_render_config():
     assert config.ipd == 0.065
     assert config.ipd_mm == 64.0
     assert config.stereo_scale == 1.2
-    assert config.depth_strength == 0.2
+    assert config.depth_strength == 2.0
     assert config.convergence == 0.7
     assert config.max_shift_ratio == 0.04
     assert config.screen_roll == 0.1

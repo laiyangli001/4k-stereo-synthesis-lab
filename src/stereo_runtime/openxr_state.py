@@ -88,7 +88,7 @@ class OpenXRStateController:
             ipd=state["ipd"],
             ipd_mm=runtime.stereo_config.ipd_mm,
             stereo_scale=runtime.stereo_config.stereo_scale,
-            depth_strength=0.1 * state["depth_ratio"],
+            depth_strength=state["depth_ratio"],
             convergence=state["convergence"],
             max_shift_ratio=runtime.stereo_config.max_shift_ratio,
             screen_roll=state["screen_roll"],

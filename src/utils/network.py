@@ -16,14 +16,24 @@ def get_local_ip():
 
 
 def is_cn_ip():
+    """Dual-probe detection: only returns False when *both* endpoints are reachable.
+    Exception → True (safe side, triggers HF mirror fallback)."""
+    google_ok = False
+    hf_ok = False
+
     try:
-        ip = requests.get("https://api.ipify.org").text.strip()
-        response = requests.get(f"http://ip-api.com/json/{ip}", timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        return data.get("country", "") == "China"
+        requests.get("https://www.google.com", timeout=5)
+        google_ok = True
     except Exception:
-        return False
+        google_ok = False
+
+    try:
+        requests.get("https://huggingface.co", timeout=5)
+        hf_ok = True
+    except Exception:
+        hf_ok = False
+
+    return not (google_ok and hf_ok)
 
 
 def configure_huggingface_endpoint():
