@@ -1409,6 +1409,10 @@ class OpenXRViewer(OpenXRViewerCore, OverlayMixin):
         model_mat = self._env_model_mat4()
         view_inv = _view_mat_inv(view_mat)
         cam_pos = view_inv[:3, 3].astype('f4')
+        # Use head center so both eyes get identical head-lamp lighting
+        head_pos = getattr(self, '_head_pos_w', None)
+        if head_pos is not None:
+            cam_pos = np.array(head_pos, dtype=np.float32)
 
         self._env_prog['u_mvp'].write(vp_mat.astype('f4').T.tobytes())
         self._env_prog['u_model'].write(model_mat.T.tobytes())
