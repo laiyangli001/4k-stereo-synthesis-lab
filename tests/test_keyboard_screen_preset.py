@@ -208,7 +208,7 @@ def test_curved_screen_uses_same_fragment_path_as_flat_screen():
     assert "screen_tex.use(location=0)" in curved_block
     assert "screen_depth_tex.use(location=1)" in curved_block
     assert "self._curved_prog['u_roll'].value = 0.0 if self._runtime_direct_source else self.screen_roll" in curved_block
-    assert "self._curved_prog['u_eye_offset'].value = 0.0 if self._runtime_direct_source else eye_sign * self.ipd_uv / 2.0" in curved_block
+    assert "self._curved_prog['u_eye_offset'].value = 0.0 if self._runtime_direct_source else eye_sign * screen_ipd_uv / 2.0" in curved_block
     assert "self._curved_prog['u_depth_strength'].value = 0.0 if self._runtime_direct_source else self.depth_strength * self.depth_ratio" in curved_block
     for uniform in ("u_resolution", "u_feather_enabled", "u_feather_width", "u_viewport"):
         assert f"self._curved_prog['{uniform}']" in curved_block
@@ -220,9 +220,18 @@ def test_openxr_screen_shader_uniforms_are_initialized_for_flat_and_curved_paths
     render_eye = render_eye.split("# Flat border is a foreground guide", 1)[0]
 
     assert "screen_source_size = (" in render_eye
+    assert "screen_ipd_uv = self.ipd_uv * runtime_rgb_depth_stereo_scale" in render_eye
     for program_name in ("self.prog", "self._curved_prog"):
         for uniform in ("u_resolution", "u_feather_enabled", "u_feather_width", "u_viewport"):
             assert f"{program_name}['{uniform}']" in render_eye
+
+
+def test_viewer_shader_uses_beta_subpixel_screen_edge_clip():
+    shader_text = (SRC / "viewer" / "viewer.py").read_text(encoding="utf-8")
+
+    assert "smoothstep(-0.001, 0.001, shifted_uv)" in shader_text
+    assert "smoothstep(1.001, 0.999, shifted_uv)" in shader_text
+    assert "smoothstep(0.0, 0.015, shifted_uv)" not in shader_text
 
 
 def test_curved_screen_grip_drag_uses_curved_uv_hit_point_not_flat_plane():

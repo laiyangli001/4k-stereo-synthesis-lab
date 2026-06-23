@@ -124,11 +124,24 @@ def _model_input_size(height: int, width: int, target: int, patch: int) -> tuple
     return _nearest_multiple(resized_h, patch), _nearest_multiple(resized_w, patch)
 
 
-def _normalize_depth(depth: torch.Tensor) -> torch.Tensor:
+def _normalize_depth(depth: torch.Tensor, subsample_cap: int = 6_144) -> torch.Tensor:
     depth = ensure_b1hw(depth).float()
     flat = depth.flatten(start_dim=2)
-    amin = flat.amin(dim=-1).view(depth.shape[0], 1, 1, 1)
-    amax = flat.amax(dim=-1).view(depth.shape[0], 1, 1, 1)
+    count = flat.shape[-1]
+    if count <= 1:
+        amin = flat.amin(dim=-1).view(depth.shape[0], 1, 1, 1)
+        amax = flat.amax(dim=-1).view(depth.shape[0], 1, 1, 1)
+    else:
+        sampled = flat
+        if count > subsample_cap:
+            step = (count + subsample_cap - 1) // subsample_cap
+            sampled = flat[..., ::step]
+        sample_count = sampled.shape[-1]
+        lo_idx = min(sample_count - 1, max(0, int(round(0.02 * (sample_count - 1)))))
+        hi_idx = min(sample_count - 1, max(0, int(round(0.98 * (sample_count - 1)))))
+        sorted_vals = torch.sort(sampled, dim=-1).values
+        amin = sorted_vals[..., lo_idx].view(depth.shape[0], 1, 1, 1)
+        amax = sorted_vals[..., hi_idx].view(depth.shape[0], 1, 1, 1)
     return ((depth - amin) / (amax - amin).clamp_min(1e-6)).clamp(0, 1)
 
 

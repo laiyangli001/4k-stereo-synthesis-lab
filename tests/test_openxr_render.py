@@ -58,7 +58,7 @@ def test_openxr_roll_rotates_parallax_direction():
     yy, xx = torch.meshgrid(y, x, indexing="ij")
     shift_y = (2.0 * shift_px.squeeze(1)) / max(rgb.shape[-2] - 1, 1)
     grid = torch.stack((xx.unsqueeze(0), yy.unsqueeze(0) + shift_y), dim=-1)
-    expected = F.grid_sample(rgb, grid, mode="bilinear", padding_mode="border", align_corners=True)
+    expected = F.grid_sample(rgb, grid, mode="bilinear", padding_mode="reflection", align_corners=True)
 
     assert torch.allclose(actual, expected, atol=1e-6, rtol=1e-6)
     assert not torch.equal(actual, render_openxr_eye(rgb, depth, eye_sign=1.0, config=OpenXRRenderConfig(screen_roll=0.0)))
@@ -78,7 +78,7 @@ def test_openxr_roll_accepts_arbitrary_angle():
     shift_x = (2.0 * shift_px.squeeze(1) * math.cos(roll)) / max(rgb.shape[-1] - 1, 1)
     shift_y = (2.0 * shift_px.squeeze(1) * math.sin(roll)) / max(rgb.shape[-2] - 1, 1)
     grid = torch.stack((xx.unsqueeze(0) + shift_x, yy.unsqueeze(0) + shift_y), dim=-1)
-    expected = F.grid_sample(rgb, grid, mode="bilinear", padding_mode="border", align_corners=True)
+    expected = F.grid_sample(rgb, grid, mode="bilinear", padding_mode="reflection", align_corners=True)
 
     assert torch.allclose(actual, expected, atol=1e-6, rtol=1e-6)
 

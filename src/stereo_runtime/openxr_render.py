@@ -22,7 +22,7 @@ class OpenXRRenderConfig:
     ipd_mm: float | None = 64.0
     stereo_scale: float = 0.5
     screen_roll: float = 0.0
-    padding_mode: PaddingMode = "border"
+    padding_mode: PaddingMode = "reflection"
 
 
 @dataclass(frozen=True)

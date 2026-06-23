@@ -31,14 +31,12 @@ class GUIHandlerMixin:
 
     def _upscaler_display_options(self):
         t = UI_MESSAGES[self.locale]
-        return [t.get("Auto", "Auto"), t.get("Off", "Off"), "FSR1"]
+        return [t.get("Auto", "Auto"), t.get("Off", "Off")]
 
     def _upscaler_to_display(self, value):
         value_l = str(value or "").strip().lower()
-        if value_l == "fsr1":
-            return "FSR1"
         if value_l in ("auto", "自动"):
-            return UI_MESSAGES[self.locale].get("Auto", "Auto")
+            return UI_MESSAGES[self.locale].get("Off", "Off")
         return UI_MESSAGES[self.locale].get("Off", "Off")
 
     def _target_fps_to_display(self, value):
@@ -429,7 +427,7 @@ class GUIHandlerMixin:
     def _sync_device_advanced_visibility(self, mode):
         advanced = bool(getattr(self, "advanced_device_cb", None) and self.advanced_device_cb.value)
         show_timing = advanced and mode in ["Local Viewer", "3D Monitor", "OpenXR Link"]
-        show_enhance = advanced and mode in ["Local Viewer", "3D Monitor"]
+        show_enhance = False
         self.row6b.visible = show_timing
         self.row6c.visible = show_enhance
         self.target_fps_label.visible = show_timing
@@ -604,9 +602,9 @@ class GUIHandlerMixin:
         self.target_fps_dd.value = self._target_fps_to_display(target_fps_value)
         self.upscaler_label.value = t.get("Upscaler:", "Upscaler:")
         self.upscaler_sharpness_label.value = t.get("Upscaler Sharpness:", "Sharpness:")
-        upscaler_value = self._upscaler_from_display(self.upscaler_dd.value)
         self.upscaler_dd.options = self._upscaler_display_options()
-        self.upscaler_dd.value = self._upscaler_to_display(upscaler_value)
+        self.upscaler_dd.value = self._upscaler_to_display("Off")
+        self.upscaler_sharpness_dd.value = "0.00"
         self.stereo_output_label.value = t["Stereo Output:"]
         self.theme_label.value = t["Theme:"]
         theme_display = ["System", "Blue", "Green", "Red", "Purple", "Orange", "Teal", "Pink", "Grey"]

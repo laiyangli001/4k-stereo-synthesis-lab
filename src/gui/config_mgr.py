@@ -63,8 +63,8 @@ class GUIConfigMixin:
         self.local_vsync_cb.value = cfg.get("VSync", DEFAULTS["VSync"])
         self.advanced_device_cb.value = False
         self.upscaler_dd.options = self._upscaler_display_options()
-        self.upscaler_dd.value = self._upscaler_to_display(cfg.get("Upscaler", DEFAULTS["Upscaler"]))
-        self.upscaler_sharpness_dd.value = f'{self._parse_float(cfg.get("Upscaler Sharpness", DEFAULTS["Upscaler Sharpness"]), DEFAULTS["Upscaler Sharpness"]):.2f}'
+        self.upscaler_dd.value = self._upscaler_to_display("Off")
+        self.upscaler_sharpness_dd.value = "0.00"
         target_fps = self._parse_int(cfg.get("Target FPS", DEFAULTS["Target FPS"]), DEFAULTS["Target FPS"])
         self.target_fps_dd.value = self._target_fps_to_display(target_fps)
         self.antialiasing_dd.value = str(cfg.get("Anti-aliasing", DEFAULTS["Anti-aliasing"]))
@@ -221,8 +221,8 @@ class GUIConfigMixin:
             "VSync": self.local_vsync_cb.value,
             "Target FPS": self._target_fps_from_display(self.target_fps_dd.value),
             "Processing Resolution": self._config.get("Processing Resolution", DEFAULTS["Processing Resolution"]),
-            "Upscaler": self._upscaler_from_display(self.upscaler_dd.value),
-            "Upscaler Sharpness": self._parse_float(self.upscaler_sharpness_dd.value, DEFAULTS["Upscaler Sharpness"]),
+            "Upscaler": "Off",
+            "Upscaler Sharpness": 0.0,
             "Stream Protocol": self.stream_proto_dd.value,
             "Streamer Port": self._parse_int(self.stream_port_tf.value, DEFAULTS["Streamer Port"]),
             "Stream Quality": self._parse_int(self.stream_quality_dd.value, DEFAULTS["Stream Quality"]),
@@ -366,11 +366,6 @@ class GUIConfigMixin:
 
     @staticmethod
     def _upscaler_from_display(value):
-        value_l = str(value or "").strip().lower()
-        if value_l == "fsr1":
-            return "FSR1"
-        if value_l in ("auto", "自动"):
-            return "Auto"
         return "Off"
 
     @staticmethod

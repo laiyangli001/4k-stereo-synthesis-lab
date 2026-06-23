@@ -42,6 +42,83 @@ def test_wxh_resolution_accepts_common_separators():
     assert compute_output_resolution("7680x4320", "full_sbs", 1, 2) == (3840, 4320)
 
 
+def test_auto_3d_monitor_fits_4k_input_to_1080p_output(monkeypatch):
+    sizes = {1: (3840, 2160), 2: (1920, 1080)}
+    monkeypatch.setattr(display_module, "get_monitor_size", lambda idx=None: sizes[idx])
+
+    assert compute_output_resolution("Auto", "Half-SBS", 1, 2, use_stereo_monitor=True) == (1920, 1080)
+
+
+def test_auto_3d_monitor_keeps_1080p_input_for_4k_output(monkeypatch):
+    sizes = {1: (1920, 1080), 2: (3840, 2160)}
+    monkeypatch.setattr(display_module, "get_monitor_size", lambda idx=None: sizes[idx])
+
+    assert compute_output_resolution("Auto", "Half-SBS", 1, 2, use_stereo_monitor=True) == (1920, 1080)
+
+
+def test_auto_3d_monitor_keeps_4k_input_for_4k_output(monkeypatch):
+    sizes = {1: (3840, 2160), 2: (3840, 2160)}
+    monkeypatch.setattr(display_module, "get_monitor_size", lambda idx=None: sizes[idx])
+
+    assert compute_output_resolution("Auto", "Half-SBS", 1, 2, use_stereo_monitor=True) == (3840, 2160)
+
+
+def test_auto_3d_monitor_fits_4k_input_to_2k_output(monkeypatch):
+    sizes = {1: (3840, 2160), 2: (2560, 1440)}
+    monkeypatch.setattr(display_module, "get_monitor_size", lambda idx=None: sizes[idx])
+
+    assert compute_output_resolution("Auto", "Half-SBS", 1, 2, use_stereo_monitor=True) == (2560, 1440)
+
+
+def test_auto_3d_monitor_keeps_2k_input_for_4k_output(monkeypatch):
+    sizes = {1: (2560, 1440), 2: (3840, 2160)}
+    monkeypatch.setattr(display_module, "get_monitor_size", lambda idx=None: sizes[idx])
+
+    assert compute_output_resolution("Auto", "Half-SBS", 1, 2, use_stereo_monitor=True) == (2560, 1440)
+
+
+def test_auto_3d_monitor_preserves_input_aspect_for_ultrawide_output(monkeypatch):
+    sizes = {1: (3840, 2160), 2: (3440, 1440)}
+    monkeypatch.setattr(display_module, "get_monitor_size", lambda idx=None: sizes[idx])
+
+    assert compute_output_resolution("Auto", "Half-SBS", 1, 2, use_stereo_monitor=True) == (2560, 1440)
+
+
+def test_auto_3d_monitor_preserves_input_aspect_for_16_10_output(monkeypatch):
+    sizes = {1: (3840, 2160), 2: (2560, 1600)}
+    monkeypatch.setattr(display_module, "get_monitor_size", lambda idx=None: sizes[idx])
+
+    assert compute_output_resolution("Auto", "Half-SBS", 1, 2, use_stereo_monitor=True) == (2560, 1440)
+
+
+def test_auto_3d_monitor_keeps_21_9_input_when_output_is_larger(monkeypatch):
+    sizes = {1: (3440, 1440), 2: (5120, 2160)}
+    monkeypatch.setattr(display_module, "get_monitor_size", lambda idx=None: sizes[idx])
+
+    assert compute_output_resolution("Auto", "Half-SBS", 1, 2, use_stereo_monitor=True) == (3440, 1440)
+
+
+def test_auto_3d_monitor_fits_21_9_input_to_16_9_output_without_stretch(monkeypatch):
+    sizes = {1: (3440, 1440), 2: (2560, 1440)}
+    monkeypatch.setattr(display_module, "get_monitor_size", lambda idx=None: sizes[idx])
+
+    assert compute_output_resolution("Auto", "Half-SBS", 1, 2, use_stereo_monitor=True) == (2560, 1072)
+
+
+def test_auto_3d_monitor_keeps_32_9_input_when_output_is_larger(monkeypatch):
+    sizes = {1: (5120, 1440), 2: (7680, 2160)}
+    monkeypatch.setattr(display_module, "get_monitor_size", lambda idx=None: sizes[idx])
+
+    assert compute_output_resolution("Auto", "Half-SBS", 1, 2, use_stereo_monitor=True) == (5120, 1440)
+
+
+def test_auto_3d_monitor_fits_32_9_input_to_16_9_output_without_stretch(monkeypatch):
+    sizes = {1: (5120, 1440), 2: (3840, 2160)}
+    monkeypatch.setattr(display_module, "get_monitor_size", lambda idx=None: sizes[idx])
+
+    assert compute_output_resolution("Auto", "Half-SBS", 1, 2, use_stereo_monitor=True) == (3840, 1080)
+
+
 def test_capture_preprocess_accepts_exact_width_height_target():
     frame_bgra = np.zeros((4, 8, 4), dtype=np.uint8)
     frame_bgra[..., 0] = 10

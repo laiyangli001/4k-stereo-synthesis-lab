@@ -67,6 +67,8 @@ def _layered_synthesis(rgb: torch.Tensor, depth: torch.Tensor, config: StereoCon
         convergence=config.convergence,
         ipd=config.ipd,
         max_shift_ratio=config.max_shift_ratio,
+        ipd_mm=config.ipd_mm,
+        stereo_scale=config.stereo_scale,
     )
     rgb = ensure_bchw(rgb, name="rgb").float()
     depth = postprocess_depth(

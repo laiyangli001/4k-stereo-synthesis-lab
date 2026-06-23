@@ -591,8 +591,10 @@ FRAGMENT_SHADER = """
             color = mix(color, filled, conf);
         }
 
-        // Subtle edge fade to hide artifacts
-        vec2 border = smoothstep(0.0, 0.015, shifted_uv) * smoothstep(1.0, 0.985, shifted_uv);
+        // Screen-edge alpha clip: keep the out-of-bounds safety net (alpha -> 0
+        // if parallax over-shoots into negative UV) but use a sub-pixel fade
+        // band so the screen edge does not become a visible soft border.
+        vec2 border = smoothstep(-0.001, 0.001, shifted_uv) * smoothstep(1.001, 0.999, shifted_uv);
         color.a = min(border.x, border.y);
         frag_color = color;
 
@@ -693,211 +695,6 @@ DEPTH_FRAGMENT = """
         // Apply optimized spectral colormap directly
         vec3 color = spectral_r_ultrafast(depth);
         
-        frag_color = vec4(color, 1.0);
-    }
-"""
-
-POSTPROCESS_FRAGMENT = """
-    #version 330
-    in vec2 uv;
-    out vec4 frag_color;
-    uniform sampler2D tex_scene;
-    uniform vec2 u_input_size;
-    uniform vec2 u_output_size;
-    uniform float u_sharpness;
-    uniform int u_do_easu;
-    uniform int u_do_rcas;
-
-    // AMD FidelityFX Super Resolution 1.0 EASU + RCAS formulas,
-    // ported to GLSL 330 scalar texture() sampling for this OpenGL viewer.
-    // Copyright (c) 2021 Advanced Micro Devices, Inc. MIT License.
-
-    float sat(float x) {
-        return clamp(x, 0.0, 1.0);
-    }
-
-    float rcp_safe(float x) {
-        return 1.0 / max(abs(x), 1e-6);
-    }
-
-    float luma2(vec3 c) {
-        return c.b * 0.5 + (c.r * 0.5 + c.g);
-    }
-
-    vec3 sample_scene(vec2 p) {
-        return texture(tex_scene, clamp(p, vec2(0.0), vec2(1.0))).rgb;
-    }
-
-    vec3 sample_texel(vec2 ip) {
-        vec2 texel = 1.0 / u_input_size;
-        return sample_scene((ip + vec2(0.5)) * texel);
-    }
-
-    void fsr_easu_set(inout vec2 dir, inout float len, vec2 pp, float biS, float biT,
-                      float biU, float biV, float lA, float lB, float lC, float lD, float lE) {
-        float w = 0.0;
-        if (biS > 0.5) w = (1.0 - pp.x) * (1.0 - pp.y);
-        if (biT > 0.5) w =        pp.x  * (1.0 - pp.y);
-        if (biU > 0.5) w = (1.0 - pp.x) *        pp.y;
-        if (biV > 0.5) w =        pp.x  *        pp.y;
-
-        float dc = lD - lC;
-        float cb = lC - lB;
-        float lenX = rcp_safe(max(abs(dc), abs(cb)));
-        float dirX = lD - lB;
-        dir.x += dirX * w;
-        lenX = sat(abs(dirX) * lenX);
-        lenX *= lenX;
-        len += lenX * w;
-
-        float ec = lE - lC;
-        float ca = lC - lA;
-        float lenY = rcp_safe(max(abs(ec), abs(ca)));
-        float dirY = lE - lA;
-        dir.y += dirY * w;
-        lenY = sat(abs(dirY) * lenY);
-        lenY *= lenY;
-        len += lenY * w;
-    }
-
-    void fsr_easu_tap(inout vec3 aC, inout float aW, vec2 off, vec2 dir, vec2 len,
-                      float lob, float clp, vec3 c) {
-        vec2 v;
-        v.x = off.x * dir.x + off.y * dir.y;
-        v.y = off.x * -dir.y + off.y * dir.x;
-        v *= len;
-        float d2 = v.x * v.x + v.y * v.y;
-        d2 = min(d2, clp);
-
-        float wB = (2.0 / 5.0) * d2 - 1.0;
-        float wA = lob * d2 - 1.0;
-        wB *= wB;
-        wA *= wA;
-        wB = (25.0 / 16.0) * wB - (25.0 / 16.0 - 1.0);
-        float w = wB * wA;
-        aC += c * w;
-        aW += w;
-    }
-
-    vec3 fsr_easu(vec2 p) {
-        vec2 pp = floor(p * u_output_size) * (u_input_size / u_output_size)
-                + (0.5 * u_input_size / u_output_size - 0.5);
-        vec2 fp = floor(pp);
-        pp -= fp;
-
-        vec3 b = sample_texel(fp + vec2( 0.0, -1.0));
-        vec3 c = sample_texel(fp + vec2( 1.0, -1.0));
-        vec3 i = sample_texel(fp + vec2(-1.0,  1.0));
-        vec3 j = sample_texel(fp + vec2( 0.0,  1.0));
-        vec3 f = sample_texel(fp + vec2( 0.0,  0.0));
-        vec3 e = sample_texel(fp + vec2(-1.0,  0.0));
-        vec3 k = sample_texel(fp + vec2( 1.0,  1.0));
-        vec3 l = sample_texel(fp + vec2( 2.0,  1.0));
-        vec3 h = sample_texel(fp + vec2( 2.0,  0.0));
-        vec3 g = sample_texel(fp + vec2( 1.0,  0.0));
-        vec3 o = sample_texel(fp + vec2( 1.0,  2.0));
-        vec3 n = sample_texel(fp + vec2( 0.0,  2.0));
-
-        float bL = luma2(b);
-        float cL = luma2(c);
-        float iL = luma2(i);
-        float jL = luma2(j);
-        float fL = luma2(f);
-        float eL = luma2(e);
-        float kL = luma2(k);
-        float lL = luma2(l);
-        float hL = luma2(h);
-        float gL = luma2(g);
-        float oL = luma2(o);
-        float nL = luma2(n);
-
-        vec2 dir = vec2(0.0);
-        float len = 0.0;
-        fsr_easu_set(dir, len, pp, 1.0, 0.0, 0.0, 0.0, bL, eL, fL, gL, jL);
-        fsr_easu_set(dir, len, pp, 0.0, 1.0, 0.0, 0.0, cL, fL, gL, hL, kL);
-        fsr_easu_set(dir, len, pp, 0.0, 0.0, 1.0, 0.0, fL, iL, jL, kL, nL);
-        fsr_easu_set(dir, len, pp, 0.0, 0.0, 0.0, 1.0, gL, jL, kL, lL, oL);
-
-        float dirR = dot(dir, dir);
-        bool zro = dirR < (1.0 / 32768.0);
-        dirR = inversesqrt(max(dirR, 1e-12));
-        if (zro) {
-            dirR = 1.0;
-            dir.x = 1.0;
-        }
-        dir *= dirR;
-
-        len = len * 0.5;
-        len *= len;
-        float stretch = dot(dir, dir) * rcp_safe(max(abs(dir.x), abs(dir.y)));
-        vec2 len2 = vec2(1.0 + (stretch - 1.0) * len, 1.0 - 0.5 * len);
-        float lob = 0.5 + ((1.0 / 4.0 - 0.04) - 0.5) * len;
-        float clp = rcp_safe(lob);
-
-        vec3 min4 = min(min(f, g), min(j, k));
-        vec3 max4 = max(max(f, g), max(j, k));
-        vec3 aC = vec3(0.0);
-        float aW = 0.0;
-        fsr_easu_tap(aC, aW, vec2( 0.0, -1.0) - pp, dir, len2, lob, clp, b);
-        fsr_easu_tap(aC, aW, vec2( 1.0, -1.0) - pp, dir, len2, lob, clp, c);
-        fsr_easu_tap(aC, aW, vec2(-1.0,  1.0) - pp, dir, len2, lob, clp, i);
-        fsr_easu_tap(aC, aW, vec2( 0.0,  1.0) - pp, dir, len2, lob, clp, j);
-        fsr_easu_tap(aC, aW, vec2( 0.0,  0.0) - pp, dir, len2, lob, clp, f);
-        fsr_easu_tap(aC, aW, vec2(-1.0,  0.0) - pp, dir, len2, lob, clp, e);
-        fsr_easu_tap(aC, aW, vec2( 1.0,  1.0) - pp, dir, len2, lob, clp, k);
-        fsr_easu_tap(aC, aW, vec2( 2.0,  1.0) - pp, dir, len2, lob, clp, l);
-        fsr_easu_tap(aC, aW, vec2( 2.0,  0.0) - pp, dir, len2, lob, clp, h);
-        fsr_easu_tap(aC, aW, vec2( 1.0,  0.0) - pp, dir, len2, lob, clp, g);
-        fsr_easu_tap(aC, aW, vec2( 1.0,  2.0) - pp, dir, len2, lob, clp, o);
-        fsr_easu_tap(aC, aW, vec2( 0.0,  2.0) - pp, dir, len2, lob, clp, n);
-        return min(max4, max(min4, aC * rcp_safe(aW)));
-    }
-
-    vec3 post_sample(vec2 p) {
-        return (u_do_easu == 1) ? fsr_easu(p) : sample_scene(p);
-    }
-
-    vec3 fsr_rcas(vec2 p) {
-        vec2 texel = 1.0 / u_output_size;
-        vec3 b = post_sample(p + vec2(0.0, -texel.y));
-        vec3 d = post_sample(p + vec2(-texel.x, 0.0));
-        vec3 e = post_sample(p);
-        vec3 f = post_sample(p + vec2(texel.x, 0.0));
-        vec3 h = post_sample(p + vec2(0.0, texel.y));
-
-        float bL = luma2(b);
-        float dL = luma2(d);
-        float eL = luma2(e);
-        float fL = luma2(f);
-        float hL = luma2(h);
-        float nz = 0.25 * bL + 0.25 * dL + 0.25 * fL + 0.25 * hL - eL;
-        float lMax = max(max(max(bL, dL), max(eL, fL)), hL);
-        float lMin = min(min(min(bL, dL), min(eL, fL)), hL);
-        nz = sat(abs(nz) * rcp_safe(lMax - lMin));
-        nz = -0.5 * nz + 1.0;
-
-        vec3 mn4 = min(min(b, d), min(f, h));
-        vec3 mx4 = max(max(b, d), max(f, h));
-        vec3 hitMin = min(mn4, e) / max(4.0 * mx4, vec3(1e-6));
-        vec3 hitMax = (vec3(1.0) - max(mx4, e)) / min(4.0 * mn4 - 4.0, vec3(-1e-6));
-        vec3 lobeRGB = max(-hitMin, hitMax);
-        float lobe = max(max(lobeRGB.r, lobeRGB.g), lobeRGB.b);
-        float rcasLimit = 0.25 - (1.0 / 16.0);
-
-        // FsrRcasCon uses stops, where 0 is maximum sharpness. The UI exposes
-        // 0..1 strength, so map it to a practical 2..0 stops range.
-        float sharpnessStops = mix(2.0, 0.0, sat(u_sharpness));
-        float con = exp2(-sharpnessStops);
-        lobe = max(-rcasLimit, min(lobe, 0.0)) * con * nz;
-        float rcpL = rcp_safe(4.0 * lobe + 1.0);
-        return clamp((lobe * b + lobe * d + lobe * h + lobe * f + e) * rcpL, 0.0, 1.0);
-    }
-
-    void main() {
-        vec3 color = post_sample(uv);
-        if (u_do_rcas == 1) {
-            color = fsr_rcas(uv);
-        }
         frag_color = vec4(color, 1.0);
     }
 """
@@ -1030,8 +827,8 @@ ANAGLYPH_FRAGMENT = """
 
         frag_color = vec4(left_color.r, right_color.g, right_color.b, 1.0);
 
-        vec2 border = smoothstep(0.0, 0.015, left_uv) * smoothstep(1.0, 0.985, left_uv);
-        vec2 border_r = smoothstep(0.0, 0.015, right_uv) * smoothstep(1.0, 0.985, right_uv);
+        vec2 border = smoothstep(-0.001, 0.001, left_uv) * smoothstep(1.001, 0.999, left_uv);
+        vec2 border_r = smoothstep(-0.001, 0.001, right_uv) * smoothstep(1.001, 0.999, right_uv);
         frag_color.a = min(min(border.x, border.y), min(border_r.x, border_r.y));
 
         vec2 fuv = (gl_FragCoord.xy - u_viewport.xy) / u_viewport.zw;
@@ -1182,7 +979,7 @@ INTERLEAVED_FRAGMENT = """
         else
             color = texture(tex_color, shifted_uv);
 
-        vec2 border = smoothstep(0.0, 0.015, shifted_uv) * smoothstep(1.0, 0.985, shifted_uv);
+        vec2 border = smoothstep(-0.001, 0.001, shifted_uv) * smoothstep(1.001, 0.999, shifted_uv);
         color.a = min(border.x, border.y);
         frag_color = color;
 
@@ -1325,7 +1122,7 @@ LEIA_FRAGMENT = """
         else
             color = texture(tex_color, shifted_uv);
 
-        vec2 border = smoothstep(0.0, 0.015, shifted_uv) * smoothstep(1.0, 0.985, shifted_uv);
+        vec2 border = smoothstep(-0.001, 0.001, shifted_uv) * smoothstep(1.001, 0.999, shifted_uv);
         color.a = min(border.x, border.y);
         frag_color = color;
 
@@ -1511,15 +1308,7 @@ class StereoWindow:
         self.fix_aspect = fix_aspect
         self.show_fps = show_fps
         self.local_vsync = local_vsync
-        self.upscaler = str(kwargs.get("upscaler", "Off") or "Off")
-        self.upscaler_sharpness = max(0.0, min(1.0, float(kwargs.get("upscaler_sharpness", 0.35))))
         self.last_postprocess_ms = 0.0
-        self._upscaler_failed = False
-        self._post_tex = None
-        self._post_fbo = None
-        self._post_size = None
-        self._post_prog = None
-        self._post_vao = None
         self._scene_render_size_override = None
         self.stream_mode = stream_mode
         self.window_size = self.frame_size
@@ -1696,7 +1485,6 @@ class StereoWindow:
         self.leia_vao = self.ctx.vertex_array(
             self.leia_prog, [(self.vbo, '2f 2f', 'in_position', 'in_uv')]
         )
-        self._init_postprocess_pipeline()
         self.overlay_renderer = OverlayTextureRenderer(self.ctx)
 
         # Initialize textures as None
@@ -1739,124 +1527,9 @@ class StereoWindow:
         self._cuda_integrated = False
 
     def __del__(self):
-        self._release_postprocess_resources()
         if hasattr(self, "overlay_renderer") and self.overlay_renderer is not None:
             self.overlay_renderer.release()
         self.cleanup_cuda()
-
-    def _init_postprocess_pipeline(self):
-        try:
-            self._post_prog = self.ctx.program(
-                vertex_shader=VERTEX_SHADER,
-                fragment_shader=POSTPROCESS_FRAGMENT
-            )
-            self._post_prog["tex_scene"].value = 0
-            self._post_vao = self.ctx.vertex_array(
-                self._post_prog, [(self.vbo, "2f 2f", "in_position", "in_uv")]
-            )
-        except Exception as e:
-            self._upscaler_failed = True
-            self.upscaler = "Off"
-            print(f"[StereoWindow] Upscaler disabled: {type(e).__name__}: {e}", flush=True)
-
-    def _release_postprocess_resources(self):
-        for obj in (getattr(self, "_post_fbo", None), getattr(self, "_post_tex", None),
-                    getattr(self, "_post_vao", None), getattr(self, "_post_prog", None)):
-            if obj is not None:
-                try:
-                    obj.release()
-                except Exception:
-                    pass
-        self._post_fbo = None
-        self._post_tex = None
-        self._post_vao = None
-        self._post_prog = None
-        self._post_size = None
-
-    def _postprocess_enabled(self):
-        upscaler = str(self.upscaler).strip().lower()
-        return (
-            self.stream_mode is None and
-            not self._upscaler_failed and
-            upscaler in ("fsr1", "auto") and
-            self._post_prog is not None and
-            self._post_vao is not None
-        )
-
-    def _postprocess_should_run(self, width, height):
-        if not self._postprocess_enabled():
-            return False
-        upscaler = str(self.upscaler).strip().lower()
-        if upscaler == "fsr1":
-            return True
-        target_w, target_h = self._compute_postprocess_scene_size(width, height)
-        needs_upscale = target_w < int(width) or target_h < int(height)
-        same_size = target_w == int(width) and target_h == int(height)
-        return needs_upscale or (same_size and self.upscaler_sharpness > 0.0)
-
-    def _ensure_postprocess_target(self, width, height):
-        width = max(1, int(width))
-        height = max(1, int(height))
-        if self._post_size == (width, height) and self._post_tex is not None and self._post_fbo is not None:
-            return True
-        for obj in (self._post_fbo, self._post_tex):
-            if obj is not None:
-                try:
-                    obj.release()
-                except Exception:
-                    pass
-        try:
-            self._post_tex = self.ctx.texture((width, height), 4, dtype="f1")
-            self._post_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
-            self._post_fbo = self.ctx.framebuffer(color_attachments=[self._post_tex])
-            self._post_size = (width, height)
-            return True
-        except Exception as e:
-            self._upscaler_failed = True
-            self.upscaler = "Off"
-            print(f"[StereoWindow] Upscaler target disabled: {type(e).__name__}: {e}", flush=True)
-            return False
-
-    def _begin_scene_target(self, width, height):
-        if not self._postprocess_should_run(width, height):
-            return False
-        target_w, target_h = self._compute_postprocess_scene_size(width, height)
-        if not self._ensure_postprocess_target(target_w, target_h):
-            self._scene_render_size_override = None
-            return False
-        self._scene_render_size_override = (target_w, target_h)
-        self._post_fbo.use()
-        return True
-
-    def _compute_postprocess_scene_size(self, width, height):
-        if not self._texture_size:
-            return int(width), int(height)
-        tex_w, tex_h = self._texture_size
-        content_w, content_h = tex_w, tex_h
-        if content_w <= 0 or content_h <= 0:
-            return int(width), int(height)
-        scale = min(float(width) / float(content_w), float(height) / float(content_h), 1.0)
-        return max(1, int(round(content_w * scale))), max(1, int(round(content_h * scale)))
-
-    def _end_scene_target_and_present(self, width, height):
-        if not self._postprocess_enabled() or self._post_tex is None:
-            self.last_postprocess_ms = 0.0
-            return
-        post_start = time.perf_counter()
-        self.ctx.screen.use()
-        self.ctx.viewport = (0, 0, int(width), int(height))
-        self.ctx.disable(moderngl.BLEND)
-        in_w, in_h = self._post_size or (width, height)
-        do_easu = int(in_w < width or in_h < height)
-        do_rcas = int(self.upscaler_sharpness > 0.0)
-        self._post_tex.use(location=0)
-        self._post_prog["u_input_size"].value = (float(in_w), float(in_h))
-        self._post_prog["u_output_size"].value = (float(width), float(height))
-        self._post_prog["u_sharpness"].value = float(self.upscaler_sharpness)
-        self._post_prog["u_do_easu"].value = do_easu
-        self._post_prog["u_do_rcas"].value = do_rcas
-        self._post_vao.render(moderngl.TRIANGLE_STRIP)
-        self.last_postprocess_ms = (time.perf_counter() - post_start) * 1000.0
 
     def _init_cuda_pbos(self, width, height):
         """Create PBOs and register them with CUDA. Disable CUDA on failure."""
@@ -3516,20 +3189,4 @@ class StereoWindow:
 
     def render(self):
         self.last_postprocess_ms = 0.0
-        win_w, win_h = glfw.get_framebuffer_size(self.window)
-        if not self._postprocess_should_run(win_w, win_h):
-            self._render_scene(False)
-            return
-
-        scene_target = self._begin_scene_target(win_w, win_h)
-        if not scene_target:
-            self._render_scene(False)
-            return
-        try:
-            self._render_scene(True)
-        finally:
-            self._scene_render_size_override = None
-        self._end_scene_target_and_present(win_w, win_h)
-        self._render_overlay()
-        if self.stream_mode is None:
-            glfw.poll_events()
+        self._render_scene(False)

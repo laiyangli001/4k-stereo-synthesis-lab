@@ -70,7 +70,7 @@ def warp_horizontal(rgb: torch.Tensor, shift_px: torch.Tensor, eye_sign: float) 
     grid_x = xx.unsqueeze(0) + shift_norm
     grid_y = yy.expand(b, h, w)
     grid = torch.stack((grid_x, grid_y), dim=-1)
-    return F.grid_sample(rgb, grid, mode="bilinear", padding_mode="border", align_corners=True)
+    return F.grid_sample(rgb, grid, mode="bilinear", padding_mode="reflection", align_corners=True)
 
 
 def synthesize_baseline(rgb: torch.Tensor, depth: torch.Tensor, params: ShiftParams) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:

@@ -41,16 +41,10 @@ def compute_output_resolution(setting_value, display_mode, input_monitor_index, 
     Auto are treated as the final packed display canvas, so Full-SBS uses half
     of the target width per eye and Full-TAB uses half of the target height.
 
-    When ``setting_value`` is Auto, the processing size is derived from a
-    monitor's native resolution.  Only the 3D Monitor output path actually
-    renders onto the stereo-output display, so only that path should size the
-    work to the stereo-output monitor.  For every other mode (OpenXR, plain
-    Viewer, streamers) the work must follow the CAPTURED (input) monitor --
-    otherwise a leftover ``Stereo Output`` index sizes the pipeline to a
-    different physical screen than the one being captured (e.g. capturing a
-    1080p screen but processing at the 4K stereo-output screen's resolution).
-    ``use_stereo_monitor`` gates this: pass False unless the 3D Monitor output
-    is active.
+    When ``setting_value`` is Auto, Local Viewer/OpenXR/streamers follow the
+    captured input monitor.  The 3D Monitor path considers both input and stereo
+    output displays and processes at the smaller native size, so a larger output
+    screen does not trigger an expensive pre-upscale before depth/stereo.
     """
     explicit_size = _parse_resolution_size(setting_value)
     if explicit_size is not None:
@@ -71,9 +65,22 @@ def compute_output_resolution(setting_value, display_mode, input_monitor_index, 
     except (TypeError, ValueError):
         pass
 
-    monitor_index = (stereo_monitor_index if use_stereo_monitor else None) or input_monitor_index
-    out_w, out_h = get_monitor_size(monitor_index)
-    return _packed_source_size(out_w, out_h, display_mode)
+    in_w, in_h = get_monitor_size(input_monitor_index)
+    if use_stereo_monitor and stereo_monitor_index:
+        out_w, out_h = get_monitor_size(stereo_monitor_index)
+        source_w, source_h = _fit_source_to_output(in_w, in_h, out_w, out_h)
+    else:
+        source_w, source_h = in_w, in_h
+    return _packed_source_size(source_w, source_h, display_mode)
+
+
+def _fit_source_to_output(input_width, input_height, output_width, output_height):
+    in_w = max(1, int(input_width))
+    in_h = max(1, int(input_height))
+    out_w = max(1, int(output_width))
+    out_h = max(1, int(output_height))
+    scale = min(1.0, float(out_w) / float(in_w), float(out_h) / float(in_h))
+    return _even_width(round(in_w * scale)), _even_height(round(in_h * scale))
 
 
 def _parse_resolution_size(setting_value):

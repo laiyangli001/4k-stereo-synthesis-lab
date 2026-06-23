@@ -1,4 +1,5 @@
 import ctypes
+import time
 
 import moderngl
 import numpy as np
@@ -28,6 +29,8 @@ try:
     from viewer.viewer import CUDART_GL
 except ImportError:
     CUDART_GL = None
+
+from .constants import _GLOW_GRID_COLS, _GLOW_GRID_ROWS
 
 
 class CoreFrameUploadMixin:
@@ -173,11 +176,11 @@ class CoreFrameUploadMixin:
                 )
                 stride = 8
                 grid = []
-                x_edges = (0, w // 3, (2 * w) // 3, w)
-                y_edges = (0, h // 2, h)
-                for row in range(2):
+                x_edges = tuple((w * i) // _GLOW_GRID_COLS for i in range(_GLOW_GRID_COLS + 1))
+                y_edges = tuple((h * i) // _GLOW_GRID_ROWS for i in range(_GLOW_GRID_ROWS + 1))
+                for row in range(_GLOW_GRID_ROWS):
                     y0, y1 = y_edges[row], y_edges[row + 1]
-                    for col in range(3):
+                    for col in range(_GLOW_GRID_COLS):
                         x0, x1 = x_edges[col], x_edges[col + 1]
                         if x1 <= x0 or y1 <= y0:
                             grid.append(self._glow_target_color)
@@ -226,11 +229,11 @@ class CoreFrameUploadMixin:
             )
             stride = 8
             grid = []
-            x_edges = (0, w // 3, (2 * w) // 3, w)
-            y_edges = (0, h // 2, h)
-            for row in range(2):
+            x_edges = tuple((w * i) // _GLOW_GRID_COLS for i in range(_GLOW_GRID_COLS + 1))
+            y_edges = tuple((h * i) // _GLOW_GRID_ROWS for i in range(_GLOW_GRID_ROWS + 1))
+            for row in range(_GLOW_GRID_ROWS):
                 y0, y1 = y_edges[row], y_edges[row + 1]
-                for col in range(3):
+                for col in range(_GLOW_GRID_COLS):
                     x0, x1 = x_edges[col], x_edges[col + 1]
                     if x1 <= x0 or y1 <= y0:
                         grid.append(self._glow_target_color)
@@ -246,6 +249,19 @@ class CoreFrameUploadMixin:
         """Upload RGB and depth to GL textures -GPU path when available, CPU fallback."""
         import torch
 
+        perf_enabled = bool(getattr(self, '_openxr_perf_log', False))
+        perf_t0 = time.perf_counter() if perf_enabled else 0.0
+        perf_last = perf_t0
+        perf_marks = []
+
+        def _mark_upload(label):
+            nonlocal perf_last
+            if not perf_enabled:
+                return
+            now = time.perf_counter()
+            perf_marks.append((label, (now - perf_last) * 1000.0))
+            perf_last = now
+
         self._runtime_direct_source = False
         is_tensor = hasattr(rgb, 'data_ptr')
 
@@ -258,13 +274,21 @@ class CoreFrameUploadMixin:
             depth_gpu = None
             depth_np = np.asarray(depth, dtype=np.float32)
             h, w = depth_np.shape[0], depth_np.shape[1]
+        if perf_enabled:
+            _mark_upload('shape')
 
         if self._use_d3d11 and self._d3d11_native_renderer is not None:
             try:
                 self._d3d11_native_renderer.update_frame(rgb, depth)
+                if perf_enabled:
+                    _mark_upload('d3d11_update_frame')
                 self.frame_size = (w, h)
                 self.screen_height = None
                 self._maybe_sample_glow_target_color(rgb, is_tensor)
+                if perf_enabled:
+                    _mark_upload('sample_glow')
+                if perf_enabled:
+                    self._log_upload_perf_if_slow(perf_t0, perf_marks, w, h, 'd3d11')
                 return
             except Exception as e:
                 print(f"[OpenXRViewer] D3D11 native frame upload failed: {e}")
@@ -279,6 +303,8 @@ class CoreFrameUploadMixin:
             self._init_textures(w, h)
             self.frame_size = (w, h)
             self.screen_height = None
+            if perf_enabled:
+                _mark_upload('init_textures')
 
         # Lazy GPU interop init (includes PBO registration to verify interop)
         if self._cuda_gl is None and CUDART_GL is not None and BACKEND in ("CUDA", "HIP"):
@@ -286,33 +312,51 @@ class CoreFrameUploadMixin:
                 self._cuda_gl = CUDART_GL()
                 self._init_cuda_pbos(w, h)   # create PBOs + register with HIP
                 print(f"[OpenXRViewer] GPU interop active ({BACKEND})")
+                if perf_enabled:
+                    _mark_upload('init_cuda_gl')
             except Exception as e:
                 print(f"[OpenXRViewer] GPU interop unavailable: {e}")
                 self._cuda_gl = False   # sentinel: don't retry
+                if perf_enabled:
+                    _mark_upload('init_cuda_gl_failed')
 
         gpu_ok = bool(self._cuda_gl) and is_tensor and BACKEND in ("CUDA", "HIP")
 
         if gpu_ok:
             if self._pbo_texture_size != (w, h):
                 self._init_cuda_pbos(w, h)
+                if perf_enabled:
+                    _mark_upload('resize_cuda_pbos')
 
             # Color: CHW tensor ->HWC contiguous uint8 on GPU, DMA into PBO
             rgb_gpu = rgb.permute(1, 2, 0).contiguous().clamp(0, 255).to(torch.uint8)
+            if perf_enabled:
+                _mark_upload('rgb_prepare_gpu')
             ptr = self._cuda_gl.map_resource(self._cuda_res_color)
             self._cuda_gl.memcpy_d2d(ptr, rgb_gpu.data_ptr(), rgb_gpu.nbytes)
             self._cuda_gl.unmap_resource(self._cuda_res_color)
+            if perf_enabled:
+                _mark_upload('rgb_cuda_copy')
             glBindBuffer(GL_PIXEL_UNPACK_BUFFER, self._pbo_color)
             glBindTexture(GL_TEXTURE_2D, self.color_tex.glo)
             glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, ctypes.c_void_p(0))
+            if perf_enabled:
+                _mark_upload('rgb_tex_sub_image')
             glGenerateMipmap(GL_TEXTURE_2D)
+            if perf_enabled:
+                _mark_upload('rgb_mipmap')
             glBindTexture(GL_TEXTURE_2D, 0)
 
             ptr = self._cuda_gl.map_resource(self._cuda_res_depth)
             self._cuda_gl.memcpy_d2d(ptr, depth_gpu.contiguous().data_ptr(), depth_gpu.nbytes)
             self._cuda_gl.unmap_resource(self._cuda_res_depth)
+            if perf_enabled:
+                _mark_upload('depth_cuda_copy')
             glBindBuffer(GL_PIXEL_UNPACK_BUFFER, self._pbo_depth)
             glBindTexture(GL_TEXTURE_2D, self.depth_tex.glo)
             glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RED, GL_FLOAT, ctypes.c_void_p(0))
+            if perf_enabled:
+                _mark_upload('depth_tex_sub_image')
             # No glGenerateMipmap for depth: keep DIBR sampling at full-res
             # to match viewer.py FullSBS numerics.
             glBindTexture(GL_TEXTURE_2D, 0)
@@ -326,63 +370,83 @@ class CoreFrameUploadMixin:
                 )
             else:
                 rgb_np = np.asarray(rgb, dtype=np.uint8)
+            if perf_enabled:
+                _mark_upload('rgb_to_cpu')
             if depth_np is None:
                 depth_np = depth_gpu.cpu().numpy()
+            if perf_enabled:
+                _mark_upload('depth_to_cpu')
             rgb_bytes = rgb_np.astype('uint8', copy=False).tobytes()
             depth_bytes = depth_np.tobytes()
+            if perf_enabled:
+                _mark_upload('bytes')
             cpu_pbo = getattr(self, '_cpu_pbo_color', None)
             if cpu_pbo is not None and self._cpu_pbo_size == (w, h):
                 glBindBuffer(GL_PIXEL_UNPACK_BUFFER, self._cpu_pbo_color)
                 glBufferSubData(GL_PIXEL_UNPACK_BUFFER, 0, len(rgb_bytes), rgb_bytes)
+                if perf_enabled:
+                    _mark_upload('cpu_rgb_buffer')
                 glBindTexture(GL_TEXTURE_2D, self.color_tex.glo)
                 glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, ctypes.c_void_p(0))
+                if perf_enabled:
+                    _mark_upload('cpu_rgb_tex')
                 glGenerateMipmap(GL_TEXTURE_2D)
+                if perf_enabled:
+                    _mark_upload('cpu_rgb_mipmap')
                 glBindTexture(GL_TEXTURE_2D, 0)
                 glBindBuffer(GL_PIXEL_UNPACK_BUFFER, self._cpu_pbo_depth)
                 glBufferSubData(GL_PIXEL_UNPACK_BUFFER, 0, len(depth_bytes), depth_bytes)
+                if perf_enabled:
+                    _mark_upload('cpu_depth_buffer')
                 glBindTexture(GL_TEXTURE_2D, self.depth_tex.glo)
                 glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RED, GL_FLOAT, ctypes.c_void_p(0))
+                if perf_enabled:
+                    _mark_upload('cpu_depth_tex')
                 glBindTexture(GL_TEXTURE_2D, 0)
                 glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0)
             else:
                 if cpu_pbo is None or self._cpu_pbo_size != (w, h):
                     self._init_cpu_pbos(w, h)
+                    if perf_enabled:
+                        _mark_upload('init_cpu_pbos')
                 self.color_tex.write(rgb_bytes)
+                if perf_enabled:
+                    _mark_upload('cpu_color_write')
                 glBindTexture(GL_TEXTURE_2D, self.color_tex.glo)
                 glGenerateMipmap(GL_TEXTURE_2D)
+                if perf_enabled:
+                    _mark_upload('cpu_color_mipmap')
                 glBindTexture(GL_TEXTURE_2D, 0)
                 self.depth_tex.write(depth_bytes)
+                if perf_enabled:
+                    _mark_upload('cpu_depth_write')
             # No glGenerateMipmap for depth: keep DIBR sampling at full-res
             # to match viewer.py FullSBS numerics.
 
         self._maybe_sample_glow_target_color(rgb, is_tensor)
+        if perf_enabled:
+            _mark_upload('sample_glow')
+        if perf_enabled:
+            self._log_upload_perf_if_slow(perf_t0, perf_marks, w, h, 'gpu' if gpu_ok else 'cpu')
+
+    def _log_upload_perf_if_slow(self, perf_t0, perf_marks, w, h, path):
+        total_ms = (time.perf_counter() - perf_t0) * 1000.0
+        if total_ms < 20.0:
+            return
+        parts = ' '.join(f'{label}={ms:.1f}' for label, ms in perf_marks if ms >= 0.05)
+        print(f"[OpenXRViewer] upload segments path={path} size={w}x{h} total_ms={total_ms:.1f} {parts}")
 
     def _maybe_sample_glow_target_color(self, rgb, is_tensor):
         """Sample frame color only when glow or cinema spill lighting consumes it."""
-        glow_active = (
-            float(getattr(self, '_glow_intensity', 0.0)) > 0.0
-            and float(getattr(self, '_glow_intensity_multiplier', 0.0)) > 0.0
-        )
-        env_spill_active = (
-            bool(getattr(self, '_screen_light_dynamic', False))
-            and getattr(self, '_bg_color_idx', 0) != 1
-            and bool(getattr(self, '_env_model_visible', False))
-            and bool(getattr(self, '_env_model_prims', []))
-            and float(getattr(self, '_screen_light_intensity', 0.0)) > 0.0
-        )
+        glow_active = False
+        env_spill_active = False
         env_static_spill_active = (
             getattr(self, '_bg_color_idx', 0) != 1
             and bool(getattr(self, '_env_model_visible', False))
             and bool(getattr(self, '_env_model_prims', []))
             and float(getattr(self, '_screen_light_intensity', 0.0)) > 0.0
         )
-        dark_room_active = (
-            getattr(self, '_bg_color_idx', 0) == 0
-            and bool(getattr(self, '_dark_room_prims', []))
-            and not bool(getattr(self, '_env_model_visible', False) and getattr(self, '_env_model_prims', []))
-            and float(getattr(self, '_screen_light_intensity', 0.0)) > 0.0
-        )
-        if glow_active or env_spill_active or dark_room_active:
+        if glow_active or env_spill_active:
             self._glow_color_counter = int(getattr(self, '_glow_color_counter', 0)) + 1
             interval = max(1, int(getattr(self, '_screen_light_sample_interval', 15)))
             if self._glow_color_counter >= interval:

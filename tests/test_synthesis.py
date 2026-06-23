@@ -77,6 +77,39 @@ def test_normal_sbs_eye_order_uses_left_then_right_views():
     assert torch.equal(result.sbs[..., :, :64], expected_left)
     assert torch.equal(result.sbs[..., :, 64:], expected_right)
 
+
+def test_layered_quality_uses_physical_ipd_with_stereo_scale():
+    rgb, depth = make_inputs(width=64, height=32)
+    config = StereoConfig(
+        backend="quality_4k",
+        layers=2,
+        output_format="half_sbs",
+        debug_output=True,
+        temporal=False,
+        fused=False,
+        depth_strength=1.0,
+        convergence=0.0,
+        ipd_mm=64.0,
+        stereo_scale=0.5,
+        max_shift_ratio=0.05,
+    )
+
+    result = synthesize_stereo(rgb, depth, config)
+
+    expected_shift = compute_shift_px(
+        depth,
+        rgb.shape[-1],
+        ShiftParams(
+            depth_strength=config.depth_strength,
+            convergence=config.convergence,
+            ipd=config.ipd,
+            max_shift_ratio=config.max_shift_ratio,
+            ipd_mm=config.ipd_mm,
+            stereo_scale=config.stereo_scale,
+        ),
+    )
+    assert torch.allclose(result.debug_info["shift_px"], expected_shift)
+
 def test_half_sbs_shape():
     rgb, depth = make_inputs()
     result = synthesize_stereo(rgb, depth, StereoConfig(backend="fast", output_format="half_sbs"))
@@ -678,7 +711,7 @@ def test_warp_horizontal_matches_cached_grid_formula():
     grid = make_base_grid(b, h, w, rgb.device, rgb.dtype).clone()
     shift_norm = (2.0 * shift_px.squeeze(1) / max(w - 1, 1)) * eye_sign
     grid[..., 0] = grid[..., 0] + shift_norm
-    expected = F.grid_sample(rgb, grid, mode="bilinear", padding_mode="border", align_corners=True)
+    expected = F.grid_sample(rgb, grid, mode="bilinear", padding_mode="reflection", align_corners=True)
     actual = warp_horizontal(rgb, shift_px, eye_sign=eye_sign)
     assert torch.allclose(actual, expected, atol=1e-6, rtol=1e-6)
 

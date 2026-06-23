@@ -250,6 +250,35 @@ def test_runtime_config_accepts_fast_plus_stereo_quality_variants():
         assert stereo_config_from_runtime(config).backend == "fast_plus"
 
 
+def test_runtime_fast_quality_disables_temporal_and_postprocess_overrides():
+    config = runtime_config_from_d2s_settings(
+        {
+            "Depth Model": "Distill-Any-Depth-Base",
+            "Stereo Preset": "cinema",
+            "Stereo Quality": "fast",
+            "Temporal": True,
+            "Temporal Strength": 0.7,
+            "Auto Scene Reset": True,
+            "Scene Reset Threshold": 0.22,
+            "Reset Cooldown Frames": 3,
+            "Foreground Scale": 0.5,
+            "Depth Antialias Strength": 2.0,
+        },
+        device="cuda",
+    )
+
+    stereo = stereo_config_from_runtime(config)
+
+    assert stereo.backend == "fast"
+    assert stereo.temporal is False
+    assert stereo.temporal_strength == 0.0
+    assert stereo.auto_reset_temporal is False
+    assert stereo.scene_reset_threshold == 0.0
+    assert stereo.reset_cooldown_frames == 0
+    assert stereo.foreground_scale == 0.0
+    assert stereo.depth_antialias_strength == 0.0
+
+
 def test_runtime_config_profile_sync_defaults_off_and_maps_setting():
     base = {"Depth Model": "Distill-Any-Depth-Base", "TensorRT": True}
 
@@ -278,4 +307,3 @@ def test_runtime_config_keeps_fixed_stereo_preset_separate_from_run_mode():
     stereo = stereo_config_from_runtime(config)
     assert stereo.backend == "quality_4k"
     assert stereo.temporal is True
-

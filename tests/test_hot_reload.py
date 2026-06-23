@@ -19,6 +19,7 @@ def make_config(**overrides):
         "ipd_mm": 64.0,
         "stereo_scale": 1.0,
         "max_shift_ratio": 0.03,
+        "temporal": True,
         "foreground_scale": 1.0,
         "depth_antialias_strength": 0.25,
         "edge_threshold": 0.1,
@@ -28,6 +29,7 @@ def make_config(**overrides):
         "anaglyph_method": "dubois",
         "fused": True,
         "temporal_strength": 0.5,
+        "auto_reset_temporal": True,
         "scene_reset_threshold": 0.2,
         "reset_cooldown_frames": 4,
         "stereo_preset": "cinema",
@@ -82,6 +84,11 @@ def test_runtime_stereo_overrides_maps_runtime_config():
 
     assert overrides["backend"] == "fast_plus"
     assert overrides["depth_strength"] == 1.0
+    assert overrides["temporal"] is True
+    assert overrides["temporal_strength"] == 0.5
+    assert overrides["auto_reset_temporal"] is True
+    assert overrides["scene_reset_threshold"] == 0.2
+    assert overrides["reset_cooldown_frames"] == 4
     assert overrides["cross_eyed"] is False
     assert overrides["fused"] is True
 
@@ -92,3 +99,26 @@ def test_hot_reload_bool_and_foreground_helpers():
     assert to_bool_hot_reload(None) is False
     assert clamp_foreground_scale_hot_reload(-5.0) == -0.9
     assert clamp_foreground_scale_hot_reload(10.0) == 5.0
+
+
+def test_hot_reload_fast_quality_disables_temporal_and_postprocess():
+    config = make_config(stereo_quality="fast", temporal_strength=0.7, foreground_scale=0.5, depth_antialias_strength=2.0)
+    settings = {
+        "Stereo Quality": "fast",
+        "Synthetic View": "fast",
+        "Temporal Strength": "0.7",
+        "Scene Reset Threshold": "0.22",
+        "Reset Cooldown Frames": "3",
+        "Foreground Scale": "0.5",
+        "Depth Antialias Strength": "2.0",
+    }
+
+    values = hot_reload_value_snapshot(settings, config)
+
+    assert values["temporal"] is False
+    assert values["temporal_strength"] == 0.0
+    assert values["auto_reset_temporal"] is False
+    assert values["scene_reset_threshold"] == 0.0
+    assert values["reset_cooldown_frames"] == 0
+    assert values["foreground_scale"] == 0.0
+    assert values["depth_antialias_strength"] == 0.0

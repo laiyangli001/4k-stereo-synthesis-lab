@@ -107,6 +107,11 @@ class ScreenEffectsMixin:
         uv_glow_width = glow_width / uv_scale
         uv_glow_extent = glow_margin / uv_scale
 
+        glow_tex = self._prepare_glow_downsample_texture(
+            getattr(self, 'color_tex', None),
+            getattr(self, '_texture_size', None),
+        )
+
         self.ctx.depth_mask = False
         self.ctx.enable(moderngl.BLEND)
         self.ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
@@ -114,7 +119,10 @@ class ScreenEffectsMixin:
         mvp = vp_mat @ model
         self._glow_prog['u_mvp'].write(mvp.T.astype('f4').tobytes())
         self._glow_prog['u_screen_half'].value = (self.screen_width / glow_w / 2.0, self.screen_height / glow_h / 2.0)
-        self._glow_prog['u_glow_color'].value = tuple(getattr(self, '_glow_color', (0.30, 0.55, 1.0)))
+        glow_color = tuple(getattr(self, '_glow_color', (0.30, 0.55, 1.0)))
+        self._glow_prog['u_glow_color'].value = glow_color
+        if glow_tex is not None:
+            glow_tex.use(location=0)
         self._glow_prog['u_glow_width'].value = uv_glow_width
         self._glow_prog['u_glow_extent'].value = uv_glow_extent
         self._glow_prog['u_glow_intensity'].value = intensity

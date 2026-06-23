@@ -188,7 +188,7 @@ class GUIBuilderMixin:
             self.antialiasing_label, self.stereo_preset_label, self.max_shift_label,
             self.scene_reset_label, self.edge_dilation_label, self.stereo_scale_label,
             self.acceleration_label, self.computing_device_label, self.capture_tool_label,
-            self.target_fps_label, self.upscaler_label, self.run_mode_label,
+            self.target_fps_label, self.run_mode_label,
             self.stereo_output_label, self.controller_label, self.lang_label,
             self.stream_url_label, self.stream_port_label,
             self.stream_proto_label, self.audio_label, self.crf_label,
@@ -196,7 +196,7 @@ class GUIBuilderMixin:
         right_labels = [
             self.ipd_label, self.stereo_quality_label, self.temporal_strength_label,
             self.reset_cooldown_label, self.edge_threshold_label, self.anaglyph_label,
-            self.upscaler_sharpness_label, self.display_mode_label, self.environment_label,
+            self.display_mode_label, self.environment_label,
             self.theme_label, self.stream_quality_label, self.stream_key_label,
             self.audio_delay_label,
         ]
@@ -409,14 +409,13 @@ class GUIBuilderMixin:
             ft.Container(width=S(15)), self.showfps_cb], spacing=1)
         self.row6b = ft.Row([self.target_fps_label, self.target_fps_dd,
             ft.Container(width=S(20)), self.local_vsync_cb], spacing=1)
-        self.upscaler_label = ft.Text("Upscaler:", size=FONT_SIZE, width=S(130))
-        self.upscaler_dd = CompactDropdown(options=["Off", "FSR1"], value="Off", width=S(90))
-        self.upscaler_sharpness_label = ft.Text("Sharpness:", size=FONT_SIZE, width=S(130))
-        self.upscaler_sharpness_dd = CompactDropdown(
-            options=["0.00", "0.25", "0.35", "0.50", "0.75", "1.00"],
-            value="0.35", width=S(74))
-        self.row6c = ft.Row([self.upscaler_label, self.upscaler_dd,
-            ft.Container(width=S(20)), self.upscaler_sharpness_label, self.upscaler_sharpness_dd], spacing=1)
+        self.upscaler_label = ft.Text("", size=FONT_SIZE, width=0, visible=False)
+        self.upscaler_dd = CompactDropdown(options=["Off"], value="Off", width=S(1))
+        self.upscaler_dd.visible = False
+        self.upscaler_sharpness_label = ft.Text("", size=FONT_SIZE, width=0, visible=False)
+        self.upscaler_sharpness_dd = CompactDropdown(options=["0.00"], value="0.00", width=S(1))
+        self.upscaler_sharpness_dd.visible = False
+        self.row6c = ft.Row([], spacing=1, visible=False)
         if OS_NAME == "Linux":
             self.capture_tool_label.visible = False
             self.capture_tool_dd.visible = False

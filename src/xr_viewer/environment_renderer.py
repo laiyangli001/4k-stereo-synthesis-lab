@@ -7,7 +7,21 @@ from .render import _view_mat_inv
 class EnvironmentRendererMixin:
     """Environment shader uniforms and GL primitive rendering."""
 
-    def _apply_cinema_light_uniforms(self):
+    def _screen_light_source_texture(self):
+        source_tex = getattr(self, 'color_tex', None)
+        source_size = getattr(self, '_texture_size', None)
+        if getattr(self, '_runtime_direct_source', False):
+            eye_index = int(getattr(self, '_current_eye_index', 0) or 0)
+            runtime_textures = getattr(self, '_runtime_eye_textures', []) or []
+            if 0 <= eye_index < len(runtime_textures) and runtime_textures[eye_index] is not None:
+                source_tex = runtime_textures[eye_index]
+                source_size = getattr(self, '_runtime_eye_texture_size', source_size)
+            elif runtime_textures and runtime_textures[0] is not None:
+                source_tex = runtime_textures[0]
+                source_size = getattr(self, '_runtime_eye_texture_size', source_size)
+        return source_tex, source_size
+
+    def _apply_cinema_light_uniforms(self, mgl_fbo=None):
         """Push current screen area-light uniforms to the environment shader."""
         if self.screen_height is None or self._screen_light_intensity <= 0.0:
             self._env_prog['u_screen_light_enabled'].value = 0
@@ -50,9 +64,7 @@ class EnvironmentRendererMixin:
         self._cl_uniform_frame = fc
         self._advance_glow_color(lerp=float(getattr(self, '_screen_light_lerp', 0.14)))
         sc = getattr(self, '_glow_color', (0.30, 0.55, 1.0))
-        spatial = getattr(self, '_screen_light_colors', tuple([sc] * 6))
-        if len(spatial) < 6:
-            spatial = tuple([sc] * 6)
+        source_tex, _source_size = self._screen_light_source_texture()
         intensity = float(self._screen_light_intensity)
         if getattr(self, '_active_environment', None) == 'Dark Room':
             intensity *= 0.9
@@ -63,10 +75,8 @@ class EnvironmentRendererMixin:
         self._env_prog['u_screen_light_up'].value = self._cl_up
         self._env_prog['u_screen_light_half_size'].value = self._cl_half
         self._env_prog['u_screen_light_color'].value = (float(sc[0]), float(sc[1]), float(sc[2]))
-        for idx, color in enumerate(spatial[:6]):
-            self._env_prog[f'u_screen_light_color_grid{idx}'].value = (
-                float(color[0]), float(color[1]), float(color[2])
-            )
+        if source_tex is not None:
+            source_tex.use(location=8)
         self._env_prog['u_screen_light_intensity'].value = intensity
 
 
@@ -153,7 +163,7 @@ class EnvironmentRendererMixin:
                 self._env_prog[f'u_fill_light_color{slot}'].value = (0.0, 0.0, 0.0)
                 self._env_prog[f'u_fill_light_range{slot}'].value = 1.0
 
-        self._apply_cinema_light_uniforms()
+        self._apply_cinema_light_uniforms(mgl_fbo)
 
         glFrontFace(GL_CCW)
 

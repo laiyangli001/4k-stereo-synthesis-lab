@@ -10,6 +10,7 @@ from typing import Any
 import torch
 
 from .adapter import StereoRuntimeConfig, depth_provider_config_from_runtime, stereo_config_from_runtime
+from .depth_postprocess import postprocess_depth
 from .depth_provider import DepthProfileResult, create_depth_provider
 from .openxr_render import OpenXRRenderConfig, render_openxr_stereo
 from .synthesis import StereoResult, synthesize_stereo
@@ -280,6 +281,8 @@ class StereoRuntime:
         self.stereo_config = stereo_config_from_runtime(config)
         self.depth_provider = depth_provider if depth_provider is not None else create_depth_provider(self.depth_config)
         self.temporal_state = temporal_state if temporal_state is not None else TemporalState()
+        self._openxr_depth_temporal: torch.Tensor | None = None
+        self._openxr_rgb_depth_dumped = False
         self._loaded = False
         self.last_timing: dict[str, float] = {}
         self.last_memory: dict[str, float] = {}
@@ -501,6 +504,7 @@ class StereoRuntime:
         pack_ms = 0.0
         pack_backend = "none"
         source_rgb = rgb_frame
+        raw_depth = depth
         if prewarp_eyes:
             render_start = time.perf_counter()
             openxr = render_openxr_stereo(rgb_frame, depth, openxr_config)
@@ -517,6 +521,8 @@ class StereoRuntime:
             output_format = "openxr_eye_views"
             render_backend = dict(openxr.debug_info)
         else:
+            depth = self._prepare_openxr_rgb_depth(depth)
+            self._maybe_dump_openxr_rgb_depth(source_rgb=source_rgb, raw_depth=raw_depth, prepared_depth=depth)
             left_eye = rgb_frame
             right_eye = rgb_frame
             output_format = "openxr_rgb_depth"
@@ -577,6 +583,58 @@ class StereoRuntime:
             timing=timing,
             provider_info=self.provider_report(),
         )
+
+    def _prepare_openxr_rgb_depth(self, depth: torch.Tensor) -> torch.Tensor:
+        depth = depth.detach().contiguous().float().clamp(0.0, 1.0)
+        depth = _openxr_rgb_depth_percentile_normalize(depth, percentile=_openxr_rgb_depth_percentile())
+        gamma = _openxr_rgb_depth_gamma()
+        if abs(gamma - 1.0) > 1e-4:
+            depth = depth.pow(gamma)
+        depth = postprocess_depth(
+            depth,
+            foreground_scale=float(getattr(self.stereo_config, "foreground_scale", 0.0)),
+            antialias_strength=float(getattr(self.stereo_config, "depth_antialias_strength", 0.0)),
+        )
+        return self._stabilize_openxr_rgb_depth(depth)
+
+    def _maybe_dump_openxr_rgb_depth(
+        self,
+        *,
+        source_rgb: torch.Tensor,
+        raw_depth: torch.Tensor,
+        prepared_depth: torch.Tensor,
+    ) -> None:
+        dump_dir = os.environ.get("D2S_OPENXR_RGB_DEPTH_DUMP_DIR", "").strip()
+        if not dump_dir or self._openxr_rgb_depth_dumped:
+            return
+        try:
+            from pathlib import Path
+
+            from .io import save_depth, save_rgb
+
+            out_dir = Path(dump_dir)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            save_rgb(source_rgb.detach().float().clamp(0.0, 1.0).cpu(), out_dir / "source_rgb.png")
+            save_depth(raw_depth.detach().float().clamp(0.0, 1.0).cpu(), out_dir / "raw_depth.png")
+            save_depth(prepared_depth.detach().float().clamp(0.0, 1.0).cpu(), out_dir / "prepared_depth.png")
+            print(f"[StereoRuntime] OpenXR rgb_depth dump saved: {out_dir}", flush=True)
+            self._openxr_rgb_depth_dumped = True
+        except Exception as exc:
+            print(f"[StereoRuntime] OpenXR rgb_depth dump failed: {type(exc).__name__}: {exc}", flush=True)
+
+    def _stabilize_openxr_rgb_depth(self, depth: torch.Tensor) -> torch.Tensor:
+        alpha = _openxr_rgb_depth_temporal_alpha()
+        depth = depth.detach().contiguous().float()
+        if alpha <= 0.0:
+            self._openxr_depth_temporal = None
+            return depth
+        prev = self._openxr_depth_temporal
+        if prev is None or prev.shape != depth.shape or prev.device != depth.device:
+            self._openxr_depth_temporal = depth
+            return depth
+        out = prev.mul(alpha).add(depth, alpha=(1.0 - alpha))
+        self._openxr_depth_temporal = out.detach()
+        return out
 
     def _predict_depth_profile(self, rgb_frame: torch.Tensor) -> DepthProfileResult:
         predict_profile = getattr(self.depth_provider, "predict_profile", None)
@@ -736,6 +794,48 @@ def _openxr_runtime_output_uint8_enabled() -> bool:
 
 def _openxr_prewarp_eyes_enabled() -> bool:
     return _env_flag("D2S_OPENXR_PREWARP_EYES", "0")
+
+
+def _openxr_rgb_depth_temporal_alpha() -> float:
+    raw = os.environ.get("D2S_OPENXR_RGB_DEPTH_TEMPORAL_ALPHA", "0.9")
+    try:
+        return max(0.0, min(0.98, float(raw)))
+    except Exception:
+        return 0.9
+
+
+def _openxr_rgb_depth_gamma() -> float:
+    raw = os.environ.get("D2S_OPENXR_RGB_DEPTH_GAMMA", "1.2")
+    try:
+        return max(0.1, min(4.0, float(raw)))
+    except Exception:
+        return 1.2
+
+
+def _openxr_rgb_depth_percentile() -> float:
+    raw = os.environ.get("D2S_OPENXR_RGB_DEPTH_PERCENTILE", "0")
+    try:
+        return max(0.0, min(20.0, float(raw)))
+    except Exception:
+        return 0.0
+
+
+def _openxr_rgb_depth_percentile_normalize(depth: torch.Tensor, *, percentile: float) -> torch.Tensor:
+    depth = depth.detach().contiguous().float().clamp(0.0, 1.0)
+    if percentile <= 0.0:
+        return depth
+    flat = depth.flatten(start_dim=2)
+    lo_q = max(0.0, min(1.0, float(percentile) / 100.0))
+    hi_q = 1.0 - lo_q
+    count = flat.shape[-1]
+    if count <= 1:
+        return depth
+    lo_idx = min(count - 1, max(0, int(round(lo_q * (count - 1)))))
+    hi_idx = min(count - 1, max(0, int(round(hi_q * (count - 1)))))
+    sorted_vals = torch.sort(flat, dim=-1).values
+    lo = sorted_vals[..., lo_idx].view(depth.shape[0], 1, 1, 1)
+    hi = sorted_vals[..., hi_idx].view(depth.shape[0], 1, 1, 1)
+    return ((depth - lo) / (hi - lo).clamp_min(1e-6)).clamp(0.0, 1.0)
 
 
 def _env_flag(name: str, default: object = "0") -> bool:

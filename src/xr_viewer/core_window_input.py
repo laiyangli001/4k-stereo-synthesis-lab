@@ -4,6 +4,11 @@ import time
 
 import glfw
 
+try:
+    import ctypes
+except Exception:
+    ctypes = None
+
 
 class CoreWindowInputMixin:
     """Hidden GLFW context setup plus desktop debug key handling."""
@@ -26,6 +31,7 @@ class CoreWindowInputMixin:
         # Keyboard controls -keep a reference so it isn't GC'd
         self._key_callback_ref = self._make_key_callback()
         glfw.set_key_callback(self.window, self._key_callback_ref)
+        self._frosted_hotkey_prev = {}
 
     def _toggle_team_status_panel(self):
         self._team_status_visible = not self._team_status_visible
@@ -61,6 +67,67 @@ class CoreWindowInputMixin:
             self._hand_fps_visible = True
             self._fps_overlay_visible = True
 
+    def _adjust_frosted_glow_keyboard(self, key, mods=0):
+        step = 0.05
+        if mods & glfw.MOD_SHIFT:
+            step = 0.15
+        blend = float(getattr(self, '_frosted_glow_blend', 1.35))
+        thickness = float(getattr(self, '_frosted_glow_thickness', 1.6))
+        if key == glfw.KEY_LEFT:
+            blend = max(0.0, blend - step)
+        elif key == glfw.KEY_RIGHT:
+            blend = min(2.5, blend + step)
+        elif key == glfw.KEY_DOWN:
+            thickness = max(0.5, thickness - step)
+        elif key == glfw.KEY_UP:
+            thickness = min(3.0, thickness + step)
+        else:
+            return False
+        self._frosted_glow_blend = blend
+        self._frosted_glow_thickness = thickness
+        self._preset_name_overlay = f'Frosted blend {blend:.2f} / thickness {thickness:.2f}'
+        self._preset_osd_show_t = time.perf_counter()
+        print(
+            f"[OpenXRViewer] Frosted glow: "
+            f"blend={blend:.2f} thickness={thickness:.2f}"
+        )
+        return True
+
+    def _adjust_frosted_glow_vk(self, vk):
+        vk_to_key = {
+            0x25: glfw.KEY_LEFT,
+            0x26: glfw.KEY_UP,
+            0x27: glfw.KEY_RIGHT,
+            0x28: glfw.KEY_DOWN,
+        }
+        key = vk_to_key.get(int(vk))
+        if key is None:
+            return False
+        return self._adjust_frosted_glow_keyboard(key, 0)
+
+    def _poll_frosted_glow_hotkeys(self):
+        if ctypes is None:
+            return
+        try:
+            user32 = ctypes.windll.user32
+        except Exception:
+            return
+        vk_to_key = {
+            0x25: glfw.KEY_LEFT,
+            0x26: glfw.KEY_UP,
+            0x27: glfw.KEY_RIGHT,
+            0x28: glfw.KEY_DOWN,
+        }
+        shift_down = bool(user32.GetAsyncKeyState(0x10) & 0x8000)
+        mods = glfw.MOD_SHIFT if shift_down else 0
+        prev = getattr(self, '_frosted_hotkey_prev', {})
+        for vk, key in vk_to_key.items():
+            down = bool(user32.GetAsyncKeyState(vk) & 0x8000)
+            if down and not bool(prev.get(vk, False)):
+                self._adjust_frosted_glow_keyboard(key, mods)
+            prev[vk] = down
+        self._frosted_hotkey_prev = prev
+
     def _make_key_callback(self):
         viewer = self
         def _cb(window, key, scancode, action, mods):
@@ -80,12 +147,10 @@ class CoreWindowInputMixin:
                 viewer._toggle_quad_layer_compare()
             elif key == glfw.KEY_R:
                 viewer._reset_screen_to_default(show_border=True)
+            elif key in (glfw.KEY_UP, glfw.KEY_DOWN, glfw.KEY_LEFT, glfw.KEY_RIGHT):
+                viewer._adjust_frosted_glow_keyboard(key, mods)
             elif screen_locked:
                 return
-            elif key == glfw.KEY_UP:    viewer.screen_pan_y += p
-            elif key == glfw.KEY_DOWN:  viewer.screen_pan_y -= p
-            elif key == glfw.KEY_LEFT:  viewer.screen_pan_x -= p
-            elif key == glfw.KEY_RIGHT: viewer.screen_pan_x += p
             elif key in (glfw.KEY_EQUAL, glfw.KEY_KP_ADD):
                 viewer._screen_ref_size += s; viewer.screen_height = None
             elif key in (glfw.KEY_MINUS, glfw.KEY_KP_SUBTRACT):

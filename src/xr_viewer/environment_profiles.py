@@ -196,13 +196,37 @@ class EnvironmentProfileMixin:
         for key, attr in (
             ('glow_intensity', '_glow_intensity'),
             ('glow_width', '_glow_width_m'),
+            ('glow_surround_margin', '_glow_surround_margin_m'),
             ('glow_intensity_multiplier', '_glow_intensity_multiplier'),
+            ('glow_shell_intensity_multiplier', '_glow_shell_intensity_multiplier'),
+            ('glow_shell_radius', '_glow_shell_radius_m'),
+            ('glow_shell_height', '_glow_shell_height_m'),
+            ('frosted_glow_intensity', '_frosted_glow_intensity'),
+            ('frosted_glow_alpha', '_frosted_glow_alpha'),
+            ('frosted_glow_threshold', '_frosted_glow_threshold'),
+            ('frosted_glow_lod', '_frosted_glow_lod'),
+            ('frosted_glow_margin', '_frosted_glow_margin_m'),
+            ('frosted_glow_blend', '_frosted_glow_blend'),
+            ('frosted_glow_thickness', '_frosted_glow_thickness'),
+            ('frosted_glow_inset', '_frosted_glow_inset'),
+            ('frosted_glow_diffuse', '_frosted_glow_diffuse'),
+            ('frosted_veil_intensity', '_frosted_veil_intensity'),
+            ('frosted_veil_alpha', '_frosted_veil_alpha'),
+            ('frosted_veil_lod', '_frosted_veil_lod'),
+            ('frosted_veil_threshold', '_frosted_veil_threshold'),
+            ('frosted_veil_scale', '_frosted_veil_scale'),
+            ('frosted_veil_beam_mix', '_frosted_veil_beam_mix'),
         ):
             if key in profile:
                 try:
                     setattr(self, attr, float(profile[key]))
                 except (TypeError, ValueError):
                     pass
+        glow_mode = profile.get('glow_mode')
+        if isinstance(glow_mode, str):
+            glow_mode = glow_mode.strip().lower()
+            if glow_mode in ('veil', 'frosted', 'surround', 'screen', 'off'):
+                self._glow_mode = glow_mode
 
         self._env_head_light_color = tuple(self._profile_vec3(
             profile, ('env_head_light_color', 'head_light_color'), self._env_head_light_color))
@@ -303,13 +327,36 @@ class EnvironmentProfileMixin:
         for key, attr in (
             ('glow_intensity', '_glow_intensity'),
             ('glow_width', '_glow_width_m'),
+            ('glow_surround_margin', '_glow_surround_margin_m'),
             ('glow_intensity_multiplier', '_glow_intensity_multiplier'),
+            ('glow_shell_intensity_multiplier', '_glow_shell_intensity_multiplier'),
+            ('glow_shell_radius', '_glow_shell_radius_m'),
+            ('glow_shell_height', '_glow_shell_height_m'),
+            ('frosted_glow_intensity', '_frosted_glow_intensity'),
+            ('frosted_glow_alpha', '_frosted_glow_alpha'),
+            ('frosted_glow_threshold', '_frosted_glow_threshold'),
+            ('frosted_glow_lod', '_frosted_glow_lod'),
+            ('frosted_glow_margin', '_frosted_glow_margin_m'),
+            ('frosted_glow_blend', '_frosted_glow_blend'),
+            ('frosted_glow_thickness', '_frosted_glow_thickness'),
+            ('frosted_glow_inset', '_frosted_glow_inset'),
+            ('frosted_glow_diffuse', '_frosted_glow_diffuse'),
+            ('frosted_veil_intensity', '_frosted_veil_intensity'),
+            ('frosted_veil_alpha', '_frosted_veil_alpha'),
+            ('frosted_veil_lod', '_frosted_veil_lod'),
+            ('frosted_veil_threshold', '_frosted_veil_threshold'),
+            ('frosted_veil_scale', '_frosted_veil_scale'),
+            ('frosted_veil_beam_mix', '_frosted_veil_beam_mix'),
         ):
             if key in preset:
                 try:
                     setattr(self, attr, float(preset[key]))
                 except (TypeError, ValueError):
                     pass
+        if isinstance(preset.get('glow_mode'), str):
+            mode = preset.get('glow_mode', '').strip().lower()
+            if mode in ('veil', 'frosted', 'surround', 'screen', 'off'):
+                self._glow_mode = mode
         if log:
             name = preset.get('name', f'Preset {getattr(self, "_lighting_preset_index", 0)}')
             print(f"[OpenXRViewer] Lighting preset: {name}")
@@ -448,6 +495,62 @@ class EnvironmentProfileMixin:
         return True
 
 
+    def _cycle_glow_mode_from_y(self):
+        """Default blank room only: frosted -> surround -> screen -> off."""
+        if self._environment_screen_locked():
+            return False
+        env_name = str(getattr(self, '_environment_model', '') or '').strip().lower()
+        if env_name not in ('default', 'none') or getattr(self, '_active_environment', None) is not None:
+            return False
+        modes = ('veil', 'frosted', 'surround', 'screen', 'off')
+        current = str(getattr(self, '_glow_mode', 'screen') or 'screen').strip().lower()
+        try:
+            idx = modes.index(current)
+        except ValueError:
+            idx = 1
+        mode = modes[(idx + 1) % len(modes)]
+        profile = getattr(self, '_env_profile', {}) if isinstance(getattr(self, '_env_profile', {}), dict) else {}
+        preset = None
+        presets = profile.get('lighting_presets') if isinstance(profile, dict) else None
+        if isinstance(presets, list):
+            for candidate in presets:
+                if not isinstance(candidate, dict):
+                    continue
+                candidate_mode = str(candidate.get('glow_mode', '') or '').strip().lower()
+                if candidate_mode == mode:
+                    preset = candidate
+                    break
+        if preset is None:
+            preset = profile
+        self._apply_lighting_preset(preset, log=False)
+        self._glow_mode = mode
+        if mode == 'off':
+            self._glow_intensity_multiplier = 0.0
+            self._glow_shell_intensity_multiplier = 0.0
+            label = 'Glow Off'
+        elif mode == 'veil':
+            self._glow_intensity_multiplier = float(getattr(self, '_glow_intensity_multiplier', 1.85) or 1.85)
+            self._glow_shell_intensity_multiplier = 0.0
+            label = 'Frosted Veil'
+        elif mode == 'frosted':
+            self._glow_intensity_multiplier = float(getattr(self, '_glow_intensity_multiplier', 1.85) or 1.85)
+            self._glow_shell_intensity_multiplier = 0.0
+            label = 'Frosted Glow'
+        elif mode == 'screen':
+            self._glow_intensity_multiplier = float(getattr(self, '_glow_intensity_multiplier', 1.85) or 1.85)
+            self._glow_shell_intensity_multiplier = 0.0
+            label = 'Screen Glow'
+        else:
+            self._glow_intensity_multiplier = 0.0
+            self._glow_shell_intensity_multiplier = float(getattr(self, '_glow_shell_intensity_multiplier', 1.85) or 1.85)
+            label = 'Surround Glow'
+        self._preset_name_overlay = label
+        self._preset_osd_show_t = time.perf_counter()
+        print(f"[OpenXRViewer] Glow mode: {mode}")
+        self._save_glow_to_builtin_profile()
+        return True
+
+
     def _cycle_view_pose(self):
         """Cycle through multi-seat view_poses in the active environment profile."""
         poses = getattr(self, '_view_pose_profiles', []) or []
@@ -501,7 +604,27 @@ class EnvironmentProfileMixin:
                     profile = loaded
             profile['glow_intensity'] = float(getattr(self, '_glow_intensity', 0.65))
             profile['glow_width'] = float(getattr(self, '_glow_width_m', 0.16))
+            profile['glow_surround_margin'] = float(getattr(self, '_glow_surround_margin_m', 14.0))
             profile['glow_intensity_multiplier'] = float(getattr(self, '_glow_intensity_multiplier', 0.0))
+            profile['glow_shell_intensity_multiplier'] = float(getattr(self, '_glow_shell_intensity_multiplier', 0.0))
+            profile['glow_shell_radius'] = float(getattr(self, '_glow_shell_radius_m', 18.0))
+            profile['glow_shell_height'] = float(getattr(self, '_glow_shell_height_m', 8.5))
+            profile['frosted_glow_intensity'] = float(getattr(self, '_frosted_glow_intensity', 2.2))
+            profile['frosted_glow_alpha'] = float(getattr(self, '_frosted_glow_alpha', 0.42))
+            profile['frosted_glow_threshold'] = float(getattr(self, '_frosted_glow_threshold', 0.46))
+            profile['frosted_glow_lod'] = float(getattr(self, '_frosted_glow_lod', 5.4))
+            profile['frosted_glow_margin'] = float(getattr(self, '_frosted_glow_margin_m', 3.6))
+            profile['frosted_glow_blend'] = float(getattr(self, '_frosted_glow_blend', 1.35))
+            profile['frosted_glow_thickness'] = float(getattr(self, '_frosted_glow_thickness', 1.6))
+            profile['frosted_glow_inset'] = float(getattr(self, '_frosted_glow_inset', 0.045))
+            profile['frosted_glow_diffuse'] = float(getattr(self, '_frosted_glow_diffuse', 0.85))
+            profile['frosted_veil_intensity'] = float(getattr(self, '_frosted_veil_intensity', 1.65))
+            profile['frosted_veil_alpha'] = float(getattr(self, '_frosted_veil_alpha', 0.58))
+            profile['frosted_veil_lod'] = float(getattr(self, '_frosted_veil_lod', 6.2))
+            profile['frosted_veil_threshold'] = float(getattr(self, '_frosted_veil_threshold', 0.22))
+            profile['frosted_veil_scale'] = float(getattr(self, '_frosted_veil_scale', 1.22))
+            profile['frosted_veil_beam_mix'] = float(getattr(self, '_frosted_veil_beam_mix', 0.22))
+            profile['glow_mode'] = str(getattr(self, '_glow_mode', 'screen') or 'screen')
             with open(builtin_path, 'w', encoding='utf-8') as f:
                 json.dump(profile, f, indent=2, ensure_ascii=False)
         except Exception as exc:

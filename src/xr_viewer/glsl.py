@@ -156,6 +156,32 @@ void main() {
 }
 """
 
+_GLOW_DOWNSAMPLE_FRAG = """
+#version 330
+in vec2 uv;
+out vec4 frag_color;
+uniform sampler2D tex_color;
+uniform vec2 u_input_size;
+
+vec3 sample_color(vec2 p) {
+    return texture(tex_color, clamp(p, vec2(0.0), vec2(1.0))).rgb;
+}
+
+void main() {
+    vec2 texel = 1.0 / max(u_input_size, vec2(1.0));
+    vec3 c = sample_color(uv) * 0.30;
+    c += sample_color(uv + texel * vec2(-2.0,  0.0)) * 0.09;
+    c += sample_color(uv + texel * vec2( 2.0,  0.0)) * 0.09;
+    c += sample_color(uv + texel * vec2( 0.0, -2.0)) * 0.09;
+    c += sample_color(uv + texel * vec2( 0.0,  2.0)) * 0.09;
+    c += sample_color(uv + texel * vec2(-1.5, -1.5)) * 0.085;
+    c += sample_color(uv + texel * vec2( 1.5, -1.5)) * 0.085;
+    c += sample_color(uv + texel * vec2(-1.5,  1.5)) * 0.085;
+    c += sample_color(uv + texel * vec2( 1.5,  1.5)) * 0.085;
+    frag_color = vec4(c, 1.0);
+}
+"""
+
 _CURVED_COPY_FRAG = """
 #version 330
 in vec2 uv;
@@ -434,12 +460,7 @@ uniform vec3 u_screen_light_right;
 uniform vec3 u_screen_light_up;
 uniform vec2 u_screen_light_half_size;
 uniform vec3 u_screen_light_color;
-uniform vec3 u_screen_light_color_grid0;
-uniform vec3 u_screen_light_color_grid1;
-uniform vec3 u_screen_light_color_grid2;
-uniform vec3 u_screen_light_color_grid3;
-uniform vec3 u_screen_light_color_grid4;
-uniform vec3 u_screen_light_color_grid5;
+uniform sampler2D u_screen_light_tex;
 uniform float u_screen_light_intensity;
 uniform float u_env_exposure;
 uniform float u_env_gamma;
@@ -661,16 +682,7 @@ void main() {
                     dot(S_to_P, u_screen_light_up) / max(u_screen_light_half_size.y, 0.001)
                 );
                 vec2 grid_uv = clamp(screen_p * 0.5 + 0.5, vec2(0.0), vec2(1.0));
-                float gx = grid_uv.x * 2.0;
-                float gy = grid_uv.y;
-                float ix = (gx < 1.0) ? 0.0 : 1.0;
-                float tx = smoothstep(0.0, 1.0, (ix < 0.5) ? gx : (gx - 1.0));
-                float ty = smoothstep(0.0, 1.0, gy);
-                vec3 top_a = (ix < 0.5) ? u_screen_light_color_grid0 : u_screen_light_color_grid1;
-                vec3 top_b = (ix < 0.5) ? u_screen_light_color_grid1 : u_screen_light_color_grid2;
-                vec3 bot_a = (ix < 0.5) ? u_screen_light_color_grid3 : u_screen_light_color_grid4;
-                vec3 bot_b = (ix < 0.5) ? u_screen_light_color_grid4 : u_screen_light_color_grid5;
-                vec3 screen_col = mix(mix(bot_a, bot_b, tx), mix(top_a, top_b, tx), ty);
+                vec3 screen_col = textureLod(u_screen_light_tex, vec2(grid_uv.x, 1.0 - grid_uv.y), 0.0).rgb;
                 screen_col = mix(screen_col, u_screen_light_color, 0.18);
                 float vertical_soft = 1.0 - 0.12 * smoothstep(0.35, 1.30, abs(screen_p.y));
                 vec3 E_s = screen_col
@@ -730,9 +742,20 @@ in vec2 uv;
 out vec4 frag_color;
 uniform vec2 u_screen_half;   // screen half-size in UV space
 uniform vec3 u_glow_color;
+uniform sampler2D u_glow_tex;
+uniform int u_glow_use_tex;
 uniform float u_glow_width;   // glow decay distance in UV space
 uniform float u_glow_extent;  // maximum outward glow distance in UV space
 uniform float u_glow_intensity;
+
+vec3 glow_grid_color(vec2 p) {
+    vec2 screen_uv = clamp((p - (vec2(0.5) - u_screen_half)) / max(u_screen_half * 2.0, vec2(0.001)), vec2(0.0), vec2(1.0));
+    vec3 grid_color = (u_glow_use_tex == 1)
+        ? textureLod(u_glow_tex, vec2(screen_uv.x, 1.0 - screen_uv.y), 0.0).rgb
+        : u_glow_color;
+    return mix(u_glow_color, grid_color, 0.86);
+}
+
 void main() {
     vec2 d = abs(uv - 0.5) - u_screen_half;
     vec2 edge = max(d, vec2(0.0));
@@ -752,6 +775,235 @@ void main() {
         discard;
     }
     glow = min(glow, 1.0);
-    frag_color = vec4(u_glow_color * glow, glow);
+    vec2 nearest_screen_uv = clamp(uv, vec2(0.5) - u_screen_half, vec2(0.5) + u_screen_half);
+    vec3 glow_color = glow_grid_color(nearest_screen_uv);
+    frag_color = vec4(glow_color * glow, glow);
+}
+"""
+
+_FROSTED_GLOW_VERT = """
+#version 330
+in vec3 in_position;
+in vec3 in_attr;
+out vec3 v_attr;
+uniform mat4 u_model;
+uniform mat4 u_vp;
+uniform float u_edge_inset;
+void main() {
+    v_attr = in_attr;
+    vec3 p = in_position;
+    float edge = floor(in_attr.z + 0.5);
+    float inset = clamp(u_edge_inset, 0.0, 0.35);
+    if (edge < 0.5) {
+        p.y -= inset;
+    } else if (edge < 1.5) {
+        p.y += inset;
+    } else if (edge < 2.5) {
+        p.x += inset;
+    } else {
+        p.x -= inset;
+    }
+    gl_Position = u_vp * u_model * vec4(p, 1.0);
+}
+"""
+
+_FROSTED_GLOW_FRAG = """
+#version 330
+in vec3 v_attr;
+out vec4 frag_color;
+uniform sampler2D u_screen_tex;
+uniform float u_lod;
+uniform float u_threshold;
+uniform float u_intensity;
+uniform float u_frost_alpha;
+uniform float u_noise_scale;
+uniform float u_time;
+uniform float u_beam_softness;
+uniform float u_frost_blend;
+uniform float u_beam_thickness;
+uniform float u_diffuse_scatter;
+
+float hash21(vec2 p) {
+    p = fract(p * vec2(123.34, 345.45));
+    p += dot(p, p + 34.345);
+    return fract(p.x * p.y);
+}
+
+vec3 sample_edge_area(sampler2D tex, vec2 center_uv, vec2 edge_dir, vec2 depth_dir, float lod, float frost_mix, float thickness) {
+    float along_radius = mix(0.035, 0.135, frost_mix) * thickness;
+    float depth_radius = mix(0.028, 0.115, frost_mix);
+    vec3 acc = vec3(0.0);
+    float sum_w = 0.0;
+    for (int i = -2; i <= 2; ++i) {
+        float a = float(i) / 2.0;
+        float aw = 1.0 - 0.18 * abs(a);
+        for (int j = 0; j <= 2; ++j) {
+            float d = float(j) / 2.0;
+            float dw = 1.0 - 0.22 * d;
+            vec2 uvp = center_uv + edge_dir * (a * along_radius) + depth_dir * (d * depth_radius);
+            float w = aw * dw;
+            acc += textureLod(tex, clamp(uvp, 0.0, 1.0), lod + 0.35 * float(j)).rgb * w;
+            sum_w += w;
+        }
+    }
+    return acc / max(sum_w, 1e-5);
+}
+
+void main() {
+    float along = clamp(v_attr.x, 0.0, 1.0);
+    float across = clamp(v_attr.y, 0.0, 1.0);
+    float edge = floor(v_attr.z + 0.5);
+    float thickness = clamp(u_beam_thickness, 0.5, 3.0);
+    float side_width = mix(2.40, 1.10, 1.0 / thickness);
+    float side_fade = pow(clamp(1.0 - pow(abs(across * 2.0 - 1.0), side_width), 0.0, 1.0), 0.34);
+    float reach = exp(-along * 1.55) * (1.0 - smoothstep(0.82, 1.0, along));
+    if (side_fade <= 0.001 || reach <= 0.001) {
+        discard;
+    }
+
+    vec2 screen_uv;
+    if (edge < 0.5) {
+        screen_uv = vec2(across, 1.0);
+    } else if (edge < 1.5) {
+        screen_uv = vec2(across, 0.0);
+    } else if (edge < 2.5) {
+        screen_uv = vec2(0.0, across);
+    } else {
+        screen_uv = vec2(1.0, across);
+    }
+
+    float frost_blend = clamp(u_frost_blend, 0.0, 2.5);
+    float side = (across - 0.5) * u_beam_softness * thickness * 1.65;
+    vec2 edge_dir = (edge < 1.5) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
+    vec2 depth_dir = (edge < 0.5) ? vec2(0.0, -1.0) : ((edge < 1.5) ? vec2(0.0, 1.0) : ((edge < 2.5) ? vec2(1.0, 0.0) : vec2(-1.0, 0.0)));
+    vec2 root_smear = edge_dir * side;
+    vec2 glass_smear = depth_dir * mix(0.035, 0.125, clamp(frost_blend / 2.5, 0.0, 1.0));
+    float frost_mix = clamp(frost_blend / 2.5, 0.0, 1.0);
+    vec3 area = sample_edge_area(u_screen_tex, screen_uv, edge_dir, depth_dir, u_lod, frost_mix, thickness);
+    vec3 c0 = area;
+    vec3 c1 = textureLod(u_screen_tex, clamp(screen_uv + root_smear, 0.0, 1.0), u_lod + 1.0).rgb;
+    vec3 c2 = textureLod(u_screen_tex, clamp(screen_uv - root_smear * 0.65, 0.0, 1.0), u_lod + 2.0).rgb;
+    vec3 c3 = textureLod(u_screen_tex, clamp(screen_uv + vec2(-root_smear.y, root_smear.x) * 0.75, 0.0, 1.0), u_lod + 2.5).rgb;
+    vec3 c4 = textureLod(u_screen_tex, clamp(screen_uv + glass_smear, 0.0, 1.0), u_lod + 3.2).rgb;
+    vec3 c5 = textureLod(u_screen_tex, clamp(screen_uv + (edge_dir * 0.11 + depth_dir * 0.07) * thickness, 0.0, 1.0), u_lod + 3.6).rgb;
+    vec3 c6 = textureLod(u_screen_tex, clamp(screen_uv - (edge_dir * 0.11 - depth_dir * 0.07) * thickness, 0.0, 1.0), u_lod + 3.6).rgb;
+    vec3 edge_blur = mix(
+        c0 * 0.50 + c1 * 0.32 + c2 * 0.18,
+        c0 * 0.28 + c1 * 0.17 + c2 * 0.16 + c3 * 0.13 + c4 * 0.11 + c5 * 0.075 + c6 * 0.075,
+        frost_mix
+    );
+    float scatter = clamp(u_diffuse_scatter, 0.0, 2.0);
+    vec3 diffuse = mix(edge_blur, vec3(dot(edge_blur, vec3(0.25, 0.55, 0.20))), 0.22 * scatter);
+    diffuse += max(edge_blur - vec3(0.18), vec3(0.0)) * 0.22 * scatter;
+    vec3 blur = mix(edge_blur, diffuse, clamp(scatter * 0.55, 0.0, 1.0));
+    float luma = dot(blur, vec3(0.2126, 0.7152, 0.0722));
+    float bright = smoothstep(u_threshold, 1.0, luma);
+    float n = hash21(floor((vec2(across, along) + vec2(u_time * 0.013, -u_time * 0.009)) * u_noise_scale));
+    float grain = mix(mix(0.72, 1.18, n), mix(0.92, 1.04, n), frost_mix);
+    float fog = side_fade * reach * grain;
+    float color_keep = mix(mix(0.24, 0.42, frost_mix), 1.0, bright);
+    vec3 color = blur * color_keep * u_intensity;
+    float glass = mix(1.0, 1.0 + side_fade * (0.35 + 0.20 * reach), clamp(scatter, 0.0, 1.0));
+    float alpha = fog * glass * mix(0.18 + 0.12 * frost_mix, 0.78, bright) * u_frost_alpha;
+    if (alpha <= 0.001) {
+        discard;
+    }
+    frag_color = vec4(color * alpha, min(alpha, 0.68));
+}
+"""
+
+_GLOW_SHELL_VERT = """
+#version 330
+in vec3 in_position;
+in vec2 in_uv;
+out vec2 uv;
+uniform mat4 u_vp;
+uniform vec3 u_center;
+uniform vec3 u_shell_scale;
+void main() {
+    uv = in_uv;
+    vec3 world = u_center + in_position * u_shell_scale;
+    gl_Position = u_vp * vec4(world, 1.0);
+}
+"""
+
+_GLOW_SHELL_FRAG = """
+#version 330
+in vec2 uv;
+out vec4 frag_color;
+uniform vec3 u_glow_color;
+uniform sampler2D u_glow_tex;
+uniform int u_glow_use_tex;
+uniform float u_glow_intensity;
+
+vec3 sample_border_color(vec2 p) {
+    if (u_glow_use_tex != 1) {
+        return u_glow_color;
+    }
+    float x = clamp(p.x, 0.0, 1.0);
+    float y = clamp(1.0 - p.y, 0.0, 1.0);
+    vec3 acc = vec3(0.0);
+    float wsum = 0.0;
+    for (int i = -3; i <= 3; ++i) {
+        float o = float(i) * 0.055;
+        float sx = clamp(x + o, 0.0, 1.0);
+        float w = 1.0 - 0.11 * abs(float(i));
+        acc += textureLod(u_glow_tex, vec2(sx, 0.045), 0.0).rgb * w;
+        acc += textureLod(u_glow_tex, vec2(sx, 0.955), 0.0).rgb * w;
+        wsum += w * 2.0;
+    }
+    float side_weight = pow(abs(x - 0.5) * 2.0, 1.7);
+    for (int j = -2; j <= 2; ++j) {
+        float o = float(j) * 0.095;
+        float sy = clamp(y + o, 0.0, 1.0);
+        float w = (1.0 - 0.16 * abs(float(j))) * side_weight;
+        acc += textureLod(u_glow_tex, vec2(0.045, sy), 0.0).rgb * w;
+        acc += textureLod(u_glow_tex, vec2(0.955, sy), 0.0).rgb * w;
+        wsum += w * 2.0;
+    }
+    vec3 border = acc / max(wsum, 0.001);
+    return mix(u_glow_color, border, 0.88);
+}
+
+vec3 sample_region_reflection(vec2 p) {
+    if (u_glow_use_tex != 1) {
+        return u_glow_color;
+    }
+    vec2 grid = vec2(16.0, 9.0);
+    vec2 q = (floor(clamp(p, vec2(0.0), vec2(0.999)) * grid) + vec2(0.5)) / grid;
+    q.y = 1.0 - q.y;
+    vec2 cell = 1.0 / grid;
+    vec3 acc = vec3(0.0);
+    float wsum = 0.0;
+    for (int y = -2; y <= 2; ++y) {
+        for (int x = -2; x <= 2; ++x) {
+            vec2 off = vec2(float(x), float(y));
+            float d = dot(off, off);
+            float w = exp(-d * 0.42);
+            vec2 sp = clamp(q + off * cell, vec2(0.0), vec2(1.0));
+            acc += textureLod(u_glow_tex, sp, 2.2).rgb * w;
+            wsum += w;
+        }
+    }
+    vec3 region = acc / max(wsum, 0.001);
+    return mix(u_glow_color, region, 0.82);
+}
+
+void main() {
+    float horiz = clamp(1.0 - abs(uv.x - 0.5) * 2.0, 0.0, 1.0);
+    float vertical = smoothstep(0.02, 0.24, uv.y) * (1.0 - smoothstep(0.80, 0.98, uv.y));
+    float front_focus = pow(horiz, 1.55);
+    float band = 0.58 + 0.42 * sin(uv.y * 3.14159265);
+    float wrap = 0.65 + 0.35 * smoothstep(0.18, 0.70, horiz);
+    float glow = front_focus * vertical * band * wrap * u_glow_intensity;
+    if (glow <= 0.0001) {
+        discard;
+    }
+    glow = min(glow, 1.0);
+    vec3 border_color = sample_border_color(uv);
+    vec3 region_color = sample_region_reflection(vec2(uv.x, 0.5 + (uv.y - 0.5) * 0.35));
+    float region_mix = 0.30 + 0.42 * smoothstep(0.12, 0.72, horiz);
+    vec3 shell_color = mix(border_color, region_color, region_mix);
+    frag_color = vec4(shell_color * glow, glow * 0.92);
 }
 """

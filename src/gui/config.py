@@ -122,7 +122,7 @@ DEFAULTS = {
     "Target FPS": 0,
     "Processing Resolution": "Auto",
     "Upscaler": "Off",
-    "Upscaler Sharpness": 0.35,
+    "Upscaler Sharpness": 0.0,
     "Stream Protocol": "HLS",
     "Streamer Port": DEFAULT_PORT,
     "Stream Quality": 100,

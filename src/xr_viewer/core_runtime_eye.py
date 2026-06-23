@@ -8,6 +8,8 @@ from OpenGL.GL import (
     glBufferData,
     glDeleteBuffers,
     glGenBuffers,
+    glGenerateMipmap,
+    glTexParameterf,
     glTexSubImage2D,
     GL_DYNAMIC_DRAW,
     GL_FLOAT,
@@ -15,6 +17,7 @@ from OpenGL.GL import (
     GL_RED,
     GL_RGB,
     GL_TEXTURE_2D,
+    GL_TEXTURE_LOD_BIAS,
     GL_UNSIGNED_BYTE,
 )
 from viewer.viewer import BACKEND
@@ -199,7 +202,11 @@ class CoreRuntimeEyeMixin:
         self._release_runtime_eye_textures()
         for idx in range(2):
             tex = self.ctx.texture((w, h), 3, dtype='f1')
-            tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
+            tex.filter = (moderngl.LINEAR_MIPMAP_LINEAR, moderngl.LINEAR)
+            tex.build_mipmaps()
+            glBindTexture(GL_TEXTURE_2D, tex.glo)
+            glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_LOD_BIAS, -0.35)
+            glBindTexture(GL_TEXTURE_2D, 0)
             self._runtime_eye_textures[idx] = tex
         self._runtime_depth_texture = self.ctx.texture((w, h), 1, dtype='f4')
         self._runtime_depth_texture.filter = (moderngl.LINEAR, moderngl.LINEAR)
@@ -297,6 +304,9 @@ class CoreRuntimeEyeMixin:
                     self._cuda_gl.memcpy_2d_to_array(array, eye.data_ptr(), w * 3, w * 3, h)
                 finally:
                     self._cuda_gl.unmap_resource(resource)
+                glBindTexture(GL_TEXTURE_2D, self._runtime_eye_textures[idx].glo)
+                glGenerateMipmap(GL_TEXTURE_2D)
+            glBindTexture(GL_TEXTURE_2D, 0)
             if not self._runtime_eye_texture_logged:
                 print(f"[OpenXRViewer] runtime_direct_opengl_texture active (CUDA/GL image) {w}x{h}")
                 self._runtime_eye_texture_logged = True
@@ -319,7 +329,8 @@ class CoreRuntimeEyeMixin:
             glBindBuffer(GL_PIXEL_UNPACK_BUFFER, self._runtime_eye_pbos[idx])
             glBindTexture(GL_TEXTURE_2D, self._runtime_eye_textures[idx].glo)
             glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, ctypes.c_void_p(0))
-            glBindTexture(GL_TEXTURE_2D, 0)
+            glGenerateMipmap(GL_TEXTURE_2D)
+        glBindTexture(GL_TEXTURE_2D, 0)
         glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0)
         if not self._runtime_eye_gpu_logged:
             print(f"[OpenXRViewer] runtime_direct_opengl_pbo active ({BACKEND}) {w}x{h}")
@@ -374,6 +385,10 @@ class CoreRuntimeEyeMixin:
             right = self._runtime_eye_to_numpy(runtime_result.right_eye)
             self._runtime_eye_textures[0].write(np.ascontiguousarray(left[:, :, :3]).tobytes())
             self._runtime_eye_textures[1].write(np.ascontiguousarray(right[:, :, :3]).tobytes())
+            for tex in self._runtime_eye_textures:
+                glBindTexture(GL_TEXTURE_2D, tex.glo)
+                glGenerateMipmap(GL_TEXTURE_2D)
+            glBindTexture(GL_TEXTURE_2D, 0)
             if not self._runtime_eye_cpu_logged:
                 print(f"[OpenXRViewer] runtime_direct_cpu_gl active {w}x{h}")
                 self._runtime_eye_cpu_logged = True
@@ -392,6 +407,7 @@ class CoreRuntimeEyeMixin:
             self.convergence = float(debug_info["openxr_convergence"])
         if "openxr_ipd" in debug_info:
             self.ipd_uv = max(0.0, float(debug_info["openxr_ipd"]))
+        self._runtime_rgb_depth_stereo_scale = max(0.0, float(debug_info.get("openxr_stereo_scale", 1.0)))
 
     def _normalize_rgb_depth_runtime_source(self, rgb, depth):
         import torch

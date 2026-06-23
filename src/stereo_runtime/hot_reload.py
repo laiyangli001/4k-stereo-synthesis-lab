@@ -24,6 +24,11 @@ def runtime_stereo_overrides(runtime) -> dict:
         "ipd_mm": config.ipd_mm,
         "stereo_scale": config.stereo_scale,
         "max_shift_ratio": config.max_shift_ratio,
+        "temporal": config.temporal,
+        "temporal_strength": config.temporal_strength,
+        "auto_reset_temporal": config.auto_reset_temporal,
+        "scene_reset_threshold": config.scene_reset_threshold,
+        "reset_cooldown_frames": config.reset_cooldown_frames,
         "foreground_scale": config.foreground_scale,
         "depth_antialias_strength": config.depth_antialias_strength,
         "edge_threshold": config.edge_threshold,
@@ -47,6 +52,12 @@ def clamp_foreground_scale_hot_reload(value) -> float:
     return max(-0.9, min(5.0, float(value)))
 
 
+def _is_fast_quality(settings_dict: dict, config) -> bool:
+    raw = settings_dict.get("Stereo Quality", settings_dict.get("Synthetic View", getattr(config, "stereo_quality", "")))
+    key = str(raw).strip().lower().replace("-", "_").replace("+", "_plus").replace(" ", "_")
+    return key == "fast"
+
+
 def hot_reload_value_snapshot(settings_dict: dict, config) -> dict:
     ipd_raw = settings_dict.get(
         "IPD mm",
@@ -55,7 +66,7 @@ def hot_reload_value_snapshot(settings_dict: dict, config) -> dict:
     ipd_mm = float(ipd_raw)
     if ipd_mm <= 1.0:
         ipd_mm *= 1000.0
-    return {
+    values = {
         "depth_strength": float(settings_dict.get("Depth Strength", config.depth_strength)),
         "convergence": float(settings_dict.get("Convergence", config.convergence)),
         "ipd": ipd_mm / 1000.0,
@@ -93,6 +104,19 @@ def hot_reload_value_snapshot(settings_dict: dict, config) -> dict:
         "anaglyph_method": str(settings_dict.get("Anaglyph Method", config.anaglyph_method)),
         "cross_eyed": to_bool_hot_reload(settings_dict.get("Cross Eyed", config.cross_eyed)),
     }
+    if _is_fast_quality(settings_dict, config):
+        values.update(
+            {
+                "temporal": False,
+                "temporal_strength": 0.0,
+                "auto_reset_temporal": False,
+                "scene_reset_threshold": 0.0,
+                "reset_cooldown_frames": 0,
+                "foreground_scale": 0.0,
+                "depth_antialias_strength": 0.0,
+            }
+        )
+    return values
 
 
 class StereoHotReloader:

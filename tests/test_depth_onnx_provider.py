@@ -14,6 +14,7 @@ from stereo_runtime.depth_provider import (
     TorchDepthProvider,
     create_depth_provider,
     estimate_depth,
+    _normalize_depth,
 )
 from stereo_runtime.depth_onnx_provider import DistillPreprocessor, ModelOnnxPreprocessor, _preprocess_distill_rgb, estimate_depth_onnx_cuda
 from stereo_runtime.providers.nvidia.tensorrt_ort import estimate_depth_nvidia_chain
@@ -34,6 +35,24 @@ class FakeTorchProvider:
 
     def predict(self, rgb):
         return torch.zeros(rgb.shape[0], 1, rgb.shape[-2], rgb.shape[-1])
+
+
+def test_normalize_depth_uses_beta_percentile_bounds():
+    values = torch.full((100,), 0.5)
+    values[0] = 0.0
+    values[1] = 0.1
+    values[2] = 0.2
+    values[97] = 0.8
+    values[98] = 0.9
+    values[99] = 1.0
+    values = values.view(1, 1, 10, 10)
+
+    normalized = _normalize_depth(values)
+
+    mid = normalized[0, 0, 5, 0]
+    assert 0.45 < float(mid) < 0.55
+    assert float(normalized.min()) == 0.0
+    assert float(normalized.max()) == 1.0
 
 
 def test_nvidia_provider_falls_back_when_onnx_missing(monkeypatch, tmp_path):

@@ -56,7 +56,7 @@ except ImportError:
     OPENXR_AVAILABLE = False
     print("[OpenXRViewer] pyopenxr not installed. Run: pip install pyopenxr")
 
-from .constants import KB_CURSOR_PRIORITY_BIAS, KB_CURSOR_RELEASE_GRACE, _BG_COLORS, _CURVED_HALF_ANGLE_RAD, _VIVE_TB_Y
+from .constants import KB_CURSOR_PRIORITY_BIAS, KB_CURSOR_RELEASE_GRACE, _BG_COLORS, _CURVED_HALF_ANGLE_RAD, _GLOW_GRID_COUNT, _VIVE_TB_Y
 from .glsl import (
     _BEAM_FRAG,
     _BEAM_VERT,
@@ -67,7 +67,12 @@ from .glsl import (
     _CURVED_VERT,
     _ENV_FRAG,
     _ENV_VERT,
+    _GLOW_DOWNSAMPLE_FRAG,
     _GLOW_FRAG,
+    _FROSTED_GLOW_FRAG,
+    _FROSTED_GLOW_VERT,
+    _GLOW_SHELL_FRAG,
+    _GLOW_SHELL_VERT,
     _GROUND_FRAG,
     _OVERLAY_FRAG,
     _QUAD_COPY_FRAG,
@@ -217,6 +222,9 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
         self._runtime_eye_cuda_resources = [None, None]
         self._runtime_eye_pbo_size = None
         self._runtime_eye_pbo_nbytes = 0
+        self._openxr_perf_log = str(
+            kwargs.get('openxr_perf_log', os.environ.get('D2S_OPENXR_PERF_LOG', '0')) or '0'
+        ).strip().lower() in ('1', 'true', 'yes', 'on')
 
         self._screen_grab_local_l = None
         self._screen_grab_local_r = None
@@ -290,12 +298,32 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
         self._last_persisted_depth_ratio = float(depth_ratio)
         self._glow_intensity = float(kwargs.get('glow_intensity', 0.65))
         self._glow_width_m = float(kwargs.get('glow_width', 0.16))
+        self._glow_surround_margin_m = float(kwargs.get('glow_surround_margin', 14.0))
         self._glow_intensity_multiplier = float(kwargs.get('glow_intensity_multiplier', 0.0))
+        self._glow_shell_intensity_multiplier = float(kwargs.get('glow_shell_intensity_multiplier', 0.0))
+        self._glow_shell_radius_m = float(kwargs.get('glow_shell_radius', 18.0))
+        self._glow_shell_height_m = float(kwargs.get('glow_shell_height', 8.5))
+        self._frosted_glow_intensity = float(kwargs.get('frosted_glow_intensity', 2.2))
+        self._frosted_glow_alpha = float(kwargs.get('frosted_glow_alpha', 0.42))
+        self._frosted_glow_threshold = float(kwargs.get('frosted_glow_threshold', 0.46))
+        self._frosted_glow_lod = float(kwargs.get('frosted_glow_lod', 5.4))
+        self._frosted_glow_margin_m = float(kwargs.get('frosted_glow_margin', 3.6))
+        self._frosted_glow_blend = float(kwargs.get('frosted_glow_blend', 1.35))
+        self._frosted_glow_thickness = float(kwargs.get('frosted_glow_thickness', 1.6))
+        self._frosted_glow_inset = float(kwargs.get('frosted_glow_inset', 0.045))
+        self._frosted_glow_diffuse = float(kwargs.get('frosted_glow_diffuse', 0.85))
+        self._frosted_veil_intensity = float(kwargs.get('frosted_veil_intensity', 1.65))
+        self._frosted_veil_alpha = float(kwargs.get('frosted_veil_alpha', 0.58))
+        self._frosted_veil_lod = float(kwargs.get('frosted_veil_lod', 6.2))
+        self._frosted_veil_threshold = float(kwargs.get('frosted_veil_threshold', 0.22))
+        self._frosted_veil_scale = float(kwargs.get('frosted_veil_scale', 1.22))
+        self._frosted_veil_beam_mix = float(kwargs.get('frosted_veil_beam_mix', 0.22))
+        self._glow_mode = str(kwargs.get('glow_mode', 'screen')).strip().lower() or 'screen'
         self._glow_ref_screen = float(kwargs.get('glow_ref_screen', 2.4))
         self._glow_color = tuple(kwargs.get('glow_color', (0.30, 0.55, 1.0)))
         self._glow_target_color = self._glow_color
         self._glow_color_counter = 0
-        self._screen_light_colors = tuple([self._glow_color] * 6)
+        self._screen_light_colors = tuple([self._glow_color] * _GLOW_GRID_COUNT)
         self._screen_light_target_colors = self._screen_light_colors
         self._screen_light_intensity = float(kwargs.get('screen_light_intensity', 3.5))
         self._screen_light_dynamic = bool(kwargs.get('screen_light_dynamic', False))
@@ -552,6 +580,8 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
         self._y_last         = False  # Y-button previous frame state
         self._y_press_t      = 0.0   # perf_counter when Y was pressed
         self._y_long_fired   = False # True once long-press action fired this hold
+        self._y_glow_press_handled = False
+        self._glow_cycle_state = 1
         self._x_last         = False  # X-button previous frame state (toggle keyboard)
         # Head pose (world) cached each frame from xr.locate_views -used as the orbit
         # pivot for the left thumbstick and as the anchor when the keyboard is summoned.
@@ -953,14 +983,19 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
         self._texture_size = None
         self._screen_ds_prog = None
         self._screen_rcas_prog = None
+        self._glow_ds_prog = None
         self._quad_copy_prog = None
         self._screen_ds_vao = None
         self._screen_rcas_vao = None
+        self._glow_ds_vao = None
         self._quad_copy_vao = None
         self._screen_ds_tex = None
         self._screen_rcas_tex = None
+        self._glow_ds_tex = None
         self._screen_ds_fbo = None
         self._screen_rcas_fbo = None
+        self._glow_ds_fbo = None
+        self._glow_ds_size = None
         self._screen_quality_size = None
         self._screen_quality_logged_size = None
         self._screen_quality_logged_sources = set()
@@ -1000,6 +1035,11 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
             fragment_shader=_SCREEN_RCAS_FRAG,
         )
         self._screen_rcas_prog['tex_scene'].value = 0
+        self._glow_ds_prog = self.ctx.program(
+            vertex_shader=_SCREEN_QUALITY_VERT,
+            fragment_shader=_GLOW_DOWNSAMPLE_FRAG,
+        )
+        self._glow_ds_prog['tex_color'].value = 0
         self._quad_copy_prog = self.ctx.program(
             vertex_shader=_SCREEN_QUALITY_VERT,
             fragment_shader=_QUAD_COPY_FRAG,
@@ -1010,6 +1050,9 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
         )
         self._screen_rcas_vao = self.ctx.vertex_array(
             self._screen_rcas_prog, [(vbo, '2f 2f', 'in_position', 'in_uv')]
+        )
+        self._glow_ds_vao = self.ctx.vertex_array(
+            self._glow_ds_prog, [(vbo, '2f 2f', 'in_position', 'in_uv')]
         )
         self._quad_copy_vao = self.ctx.vertex_array(
             self._quad_copy_prog, [(vbo, '2f 2f', 'in_position', 'in_uv')]
@@ -1040,9 +1083,64 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
             vertex_shader=_WORLD_VERT,
             fragment_shader=_GLOW_FRAG,
         )
+        self._glow_prog['u_glow_tex'].value = 0
+        self._glow_prog['u_glow_use_tex'].value = 0
         vbo_glow = self.ctx.buffer(vertices.tobytes())
         self._glow_vao = self.ctx.vertex_array(
             self._glow_prog, [(vbo_glow, '2f 2f', 'in_position', 'in_uv')]
+        )
+
+        self._frosted_glow_prog = self.ctx.program(
+            vertex_shader=_FROSTED_GLOW_VERT,
+            fragment_shader=_FROSTED_GLOW_FRAG,
+        )
+        self._frosted_glow_prog['u_screen_tex'].value = 0
+        frosted_vertices = np.array([
+            # top edge, local y=+1, beam extends toward viewer in +z
+            -1.0, 1.0, 0.00, 0.0, 0.0, 0.0,
+             1.0, 1.0, 0.00, 0.0, 1.0, 0.0,
+            -1.0, 1.0, 1.00, 1.0, 0.0, 0.0,
+             1.0, 1.0, 1.00, 1.0, 1.0, 0.0,
+            # bottom edge
+            -1.0, -1.0, 0.00, 0.0, 0.0, 1.0,
+             1.0, -1.0, 0.00, 0.0, 1.0, 1.0,
+            -1.0, -1.0, 1.00, 1.0, 0.0, 1.0,
+             1.0, -1.0, 1.00, 1.0, 1.0, 1.0,
+            # left edge
+            -1.0, -1.0, 0.00, 0.0, 0.0, 2.0,
+            -1.0,  1.0, 0.00, 0.0, 1.0, 2.0,
+            -1.0, -1.0, 1.00, 1.0, 0.0, 2.0,
+            -1.0,  1.0, 1.00, 1.0, 1.0, 2.0,
+            # right edge
+             1.0, -1.0, 0.00, 0.0, 0.0, 3.0,
+             1.0,  1.0, 0.00, 0.0, 1.0, 3.0,
+             1.0, -1.0, 1.00, 1.0, 0.0, 3.0,
+             1.0,  1.0, 1.00, 1.0, 1.0, 3.0,
+        ], dtype='f4')
+        vbo_frosted = self.ctx.buffer(frosted_vertices.tobytes())
+        self._frosted_glow_vao = self.ctx.vertex_array(
+            self._frosted_glow_prog, [(vbo_frosted, '3f 3f', 'in_position', 'in_attr')]
+        )
+
+        self._glow_shell_prog = self.ctx.program(
+            vertex_shader=_GLOW_SHELL_VERT,
+            fragment_shader=_GLOW_SHELL_FRAG,
+        )
+        self._glow_shell_prog['u_glow_tex'].value = 0
+        self._glow_shell_prog['u_glow_use_tex'].value = 0
+        shell_segments = 96
+        shell_vertices = []
+        for i in range(shell_segments + 1):
+            u = i / float(shell_segments)
+            theta = (u - 0.5) * math.pi
+            x = math.sin(theta)
+            z = -math.cos(theta)
+            shell_vertices.extend((x, 1.0, z, u, 1.0))
+            shell_vertices.extend((x, -1.0, z, u, 0.0))
+        vbo_glow_shell = self.ctx.buffer(np.array(shell_vertices, dtype='f4').tobytes())
+        self._glow_shell_vao = self.ctx.vertex_array(
+            self._glow_shell_prog,
+            [(vbo_glow_shell, '3f 2f', 'in_position', 'in_uv')],
         )
 
         # Soft shadow quad (dark gradient beneath the screen)
@@ -1286,8 +1384,7 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
         self._env_prog['u_screen_light_up'].value = (0.0, 1.0, 0.0)
         self._env_prog['u_screen_light_half_size'].value = (1.2, 0.675)
         self._env_prog['u_screen_light_color'].value = (0.3, 0.6, 1.0)
-        for idx in range(6):
-            self._env_prog[f'u_screen_light_color_grid{idx}'].value = (0.3, 0.6, 1.0)
+        self._env_prog['u_screen_light_tex'].value = 8
         self._env_prog['u_screen_light_intensity'].value = 2.0
 
         self._ctrl_tex_cache = {}
@@ -1935,6 +2032,18 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
             proj_mat = proj_mat.copy()
             proj_mat[1, :] = -proj_mat[1, :]  # flip clip-space Y ->GL renders upside-down
         sc_w, sc_h = self._swapchain_sizes[eye_index]
+        perf_enabled = bool(getattr(self, '_openxr_perf_log', False))
+        perf_t0 = time.perf_counter() if perf_enabled else 0.0
+        perf_last = perf_t0
+        perf_marks = []
+
+        def _mark_perf(label):
+            nonlocal perf_last
+            if not perf_enabled:
+                return
+            now = time.perf_counter()
+            perf_marks.append((label, (now - perf_last) * 1000.0))
+            perf_last = now
 
         # The swapchain is GL_SRGB8_ALPHA8, but the desktop capture texture is already
         # gamma-encoded.  Disabling GL_FRAMEBUFFER_SRGB prevents AMD (and compliant
@@ -1950,16 +2059,24 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
         bg_a = 1.0
         bg_r, bg_g, bg_b = _BG_COLORS[self._bg_color_idx]
         mgl_fbo.clear(bg_r, bg_g, bg_b, bg_a, depth=1.0)
+        if perf_enabled:
+            _mark_perf('clear')
 
         if not self._screen_visible:
+            if perf_enabled:
+                _mark_perf('hidden')
             self.ctx.screen.use()
             return
 
         if self._runtime_direct_source:
             if self._runtime_eye_textures[eye_index] is None:
+                if perf_enabled:
+                    _mark_perf('no_source')
                 self.ctx.screen.use()
                 return
         elif self.color_tex is None or self.depth_tex is None:
+            if perf_enabled:
+                _mark_perf('no_source')
             self.ctx.screen.use()
             return
 
@@ -1967,6 +2084,7 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
         # matrix against this rather than recomputing proj @ view each time.
         vp_mat = proj_mat @ view_mat
         self._current_view_mat = view_mat
+        self._current_eye_index = eye_index
         # Ensure screen dimensions are resolved BEFORE the environment model
         # renders -- it samples screen_width/height for the cinema reflection
         # light.  screen_height is reset to None on every new source frame and
@@ -1980,19 +2098,29 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
             self._render_env_model(mgl_fbo, vp_mat, view_mat)
             mgl_fbo.use()
             glClear(GL_DEPTH_BUFFER_BIT)
+        if perf_enabled:
+            _mark_perf('env')
 
         # Optional screen effects behind the desktop quad (normal viewer only).
         self._render_screen_background_effects(mgl_fbo, vp_mat)
+        if perf_enabled:
+            _mark_perf('bgfx')
 
         # Curved border is currently a full enlarged arc, so it must stay behind
         # the desktop image. The flat border shader discards its centre and is
         # drawn later so fullscreen content cannot hide it.
         if self._screen_curved:
             self._render_border(mgl_fbo, vp_mat)
+        if perf_enabled:
+            _mark_perf('pre_border')
 
         # Main screen
         mgl_fbo.use()
         eye_sign = -1.0 if eye_index == 0 else 1.0
+        runtime_rgb_depth_stereo_scale = (
+            1.0 if self._runtime_direct_source else float(getattr(self, '_runtime_rgb_depth_stereo_scale', 1.0))
+        )
+        screen_ipd_uv = self.ipd_uv * runtime_rgb_depth_stereo_scale
         model = self._build_model_mat4()
         mvp = vp_mat @ model
         if self._runtime_direct_source:
@@ -2015,6 +2143,8 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
                 'color',
             ) or self.color_tex
             screen_depth_tex = self.depth_tex
+        if perf_enabled:
+            _mark_perf('quality')
         mgl_fbo.use()
         self.ctx.viewport = (0, 0, sc_w, sc_h)
         self.ctx.enable(moderngl.DEPTH_TEST)
@@ -2050,12 +2180,13 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
                 self._curved_vbo.write(arc_verts.tobytes())
                 self._curved_verts_params = params
             self._curved_prog['u_mvp'].write(vp_mat.T.tobytes())
+            runtime_rgb_depth = not self._runtime_direct_source
             self._curved_prog['u_resolution'].value = (float(screen_source_size[0]), float(screen_source_size[1]))
-            self._curved_prog['u_feather_enabled'].value = 0
-            self._curved_prog['u_feather_width'].value = 0.0
+            self._curved_prog['u_feather_enabled'].value = 1 if runtime_rgb_depth else 0
+            self._curved_prog['u_feather_width'].value = 0.02 if runtime_rgb_depth else 0.0
             self._curved_prog['u_viewport'].value = (0.0, 0.0, float(sc_w), float(sc_h))
             self._curved_prog['u_roll'].value = 0.0 if self._runtime_direct_source else self.screen_roll
-            self._curved_prog['u_eye_offset'].value = 0.0 if self._runtime_direct_source else eye_sign * self.ipd_uv / 2.0
+            self._curved_prog['u_eye_offset'].value = 0.0 if self._runtime_direct_source else eye_sign * screen_ipd_uv / 2.0
             self._curved_prog['u_depth_strength'].value = 0.0 if self._runtime_direct_source else self.depth_strength * self.depth_ratio
             self._curved_prog['u_convergence'].value = float(self.convergence)
             self._curved_prog['u_corner_radius'].value = self._corner_radius
@@ -2067,29 +2198,38 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
             screen_tex.use(location=0)
             screen_depth_tex.use(location=1)
             self.prog['u_mvp'].write(mvp.T.tobytes())
+            runtime_rgb_depth = not self._runtime_direct_source
             self.prog['u_resolution'].value = (float(screen_source_size[0]), float(screen_source_size[1]))
-            self.prog['u_feather_enabled'].value = 0
-            self.prog['u_feather_width'].value = 0.0
+            self.prog['u_feather_enabled'].value = 1 if runtime_rgb_depth else 0
+            self.prog['u_feather_width'].value = 0.02 if runtime_rgb_depth else 0.0
             self.prog['u_viewport'].value = (0.0, 0.0, float(sc_w), float(sc_h))
             self.prog['u_roll'].value = 0.0 if self._runtime_direct_source else self.screen_roll
-            self.prog['u_eye_offset'].value = 0.0 if self._runtime_direct_source else eye_sign * self.ipd_uv / 2.0
+            self.prog['u_eye_offset'].value = 0.0 if self._runtime_direct_source else eye_sign * screen_ipd_uv / 2.0
             self.prog['u_depth_strength'].value = 0.0 if self._runtime_direct_source else self.depth_strength * self.depth_ratio
             self.prog['u_convergence'].value = float(self.convergence)
             self.prog['u_corner_radius'].value = self._corner_radius
             self.quad_vao.render(moderngl.TRIANGLE_STRIP)
+        if perf_enabled:
+            _mark_perf('screen')
 
         # Flat border is a foreground guide; render it after the desktop quad
         # so fullscreen content cannot cover it. Curved border is rendered
         # behind the screen because its current shader covers the full arc.
         if not self._screen_curved:
             self._render_border(mgl_fbo, vp_mat)
+        if perf_enabled:
+            _mark_perf('border')
 
         # Optional screen effects on/around the desktop quad (normal viewer only).
         self._render_screen_foreground_effects(mgl_fbo, vp_mat)
+        if perf_enabled:
+            _mark_perf('fgfx')
         # 3. Keyboard
         if self._keyboard_visible and self._keyboard_tex is not None:
             self.ctx.viewport = (0, 0, sc_w, sc_h)
             self._render_keyboard(mgl_fbo, vp_mat)
+        if perf_enabled:
+            _mark_perf('keyboard')
 
         # 5. Depth OSD (floating panel, always checked; method handles its own alpha)
         if self._depth_osd_tex is not None:
@@ -2158,8 +2298,30 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
         if self._team_status_visible and self._team_help_visible and self._team_help_tex is not None:
             self.ctx.viewport = (0, 0, sc_w, sc_h)
             self._render_team_help_panel(mgl_fbo, vp_mat)
+        if perf_enabled:
+            _mark_perf('osd')
 
         self.ctx.screen.use()
+        if perf_enabled:
+            _mark_perf('screen_use')
+        if perf_enabled and eye_index == 1:
+            total_ms = (time.perf_counter() - perf_t0) * 1000.0
+            now = time.perf_counter()
+            last_log = float(getattr(self, '_xr_render_perf_last_log', 0.0) or 0.0)
+            slow = total_ms >= 18.0
+            if slow or (now - last_log) >= 2.0:
+                self._xr_render_perf_last_log = now
+                parts = ' '.join(f'{label}={ms:.1f}' for label, ms in perf_marks if ms >= 0.05)
+                print(
+                    '[OpenXRViewer] render segments '
+                    f'eye={eye_index} total_ms={total_ms:.1f} '
+                    f'fps={float(getattr(self, "actual_fps", 0.0)):.1f} '
+                    f'env={getattr(self, "_environment_model", None)} '
+                    f'glow={getattr(self, "_glow_mode", None)} '
+                    f'curved={bool(getattr(self, "_screen_curved", False))} '
+                    f'runtime_direct={bool(getattr(self, "_runtime_direct_source", False))} '
+                    f'swapchain={sc_w}x{sc_h} {parts}'
+                )
     
     # OpenXR event loop
     def _laser_screen_hit_uv(self, ctrl_pos, fwd_w):
@@ -3444,7 +3606,7 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
                 # Left grip + left stick ->screen yaw/pitch rotation around
                 # its own local axes.  Only the stronger axis is processed to
                 # avoid diagonal tilt (Euler-angle coupling).
-                if (not screen_locked) and (abs(lx) > DEAD or abs(ly) > DEAD):
+                if (not screen_locked) and laser_l_on_screen and (abs(lx) > DEAD or abs(ly) > DEAD):
                     rot_speed = self._rot_speed * dt
                     if abs(lx) > abs(ly):
                         self._yaw_offset -= lx * rot_speed
@@ -3557,11 +3719,11 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
                     self._keyboard_pitch  += ry * self._rot_speed * dt
             else:
                 # Left grip + right stick X ->screen yaw rotation
-                if (not screen_locked) and laser_on_screen and abs(rx) > DEAD:
+                if (not screen_locked) and laser_l_on_screen and abs(rx) > DEAD:
                     self._yaw_offset -= rx * self._rot_speed * dt
                     self.screen_yaw  -= rx * self._rot_speed * dt
                 # Left grip + right stick Y ->screen pitch rotation
-                if (not screen_locked) and laser_on_screen and abs(ry) > DEAD:
+                if (not screen_locked) and laser_l_on_screen and abs(ry) > DEAD:
                     self._pitch_offset += ry * self._rot_speed * dt
                     self.screen_pitch  += ry * self._rot_speed * dt
         # Re-sync grab offsets after stick fine-tuning.  Grip-to-move is paused
@@ -3597,15 +3759,18 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
             if not (grip_l or grip_r):
                 self._anchor_keyboard_below_screen()
 
-        # Menu (left): short press ->toggle status/FPS panel
-        menu_now = self._read_bool_action(self._act_menu_btn, "/user/hand/left")
+        # Menu (either hand): short press ->cycle screen FPS/help panels
+        menu_now = (
+            self._read_bool_action(self._act_menu_btn, "/user/hand/left")
+            or self._read_bool_action(self._act_menu_btn, "/user/hand/right")
+        )
         MENU_LONG = 0.6  # seconds -long press reserved for calibration combo
         if menu_now and not self._menu_pressed_last:
             self._menu_press_t = time.perf_counter()
             self._menu_long_fired = False
         if not menu_now and self._menu_pressed_last:
             if not self._menu_long_fired and (time.perf_counter() - self._menu_press_t) < MENU_LONG:
-                self._toggle_team_status_panel()
+                self._cycle_a_panel()
         self._menu_pressed_last = menu_now
 
         # A / B (right):
@@ -3661,21 +3826,28 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
         self._a_last = a_now
         self._b_last = b_now
 
-        # Y (left): short press applies default screen preset; long press cycles presets.
-        Y_LONG = 0.6
+        # Y (left): short press applies default screen preset; hold 1s cycles presets; left grip + Y click cycles glow mode.
+        Y_LONG = 1.0
         y_now = self._read_bool_action(self._act_y_btn, "/user/hand/left")
         if y_now and not self._y_last:
             self._y_press_t    = time.perf_counter()
             self._y_long_fired = False
-        if y_now and not self._y_long_fired:
-            if time.perf_counter() - self._y_press_t >= Y_LONG:
+            self._y_glow_press_handled = False
+            if grip_l:
+                cycle_glow = getattr(self, '_cycle_glow_mode_from_y', None)
+                if callable(cycle_glow) and cycle_glow():
+                    self._y_glow_press_handled = True
+                    self._y_long_fired = True
+        if y_now:
+            held_y = time.perf_counter() - self._y_press_t
+            if not self._y_long_fired and held_y >= Y_LONG:
                 if screen_locked and self._env_uses_view_pose_cycle():
                     if not self._cycle_view_pose():
                         self._cycle_screen_preset()
                 else:
                     self._cycle_screen_preset()
                 self._y_long_fired = True
-        if not y_now and self._y_last and not self._y_long_fired:
+        if not y_now and self._y_last and not self._y_long_fired and not self._y_glow_press_handled:
             if screen_locked:
                 self._reset_seating_vertical()
             elif not self._apply_preset(getattr(self, '_default_screen_preset_index', 5)):
@@ -3868,6 +4040,7 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
             self._publish_runtime_config()
 
             glfw.poll_events()
+            self._poll_frosted_glow_hotkeys()
             if self._preview_only_mode:
                 self._refresh_headset_wait_inference_timeout(now)
                 if not self._env_model_init_done:
@@ -3889,14 +4062,33 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
                 time.sleep(0.01)
                 continue
 
+            loop_perf_enabled = bool(getattr(self, '_openxr_perf_log', False))
+            loop_t0 = time.perf_counter() if loop_perf_enabled else 0.0
+            loop_last = loop_t0
+            loop_marks = []
+
+            def _loop_mark(label):
+                nonlocal loop_last
+                if not loop_perf_enabled:
+                    return
+                t_mark = time.perf_counter()
+                loop_marks.append((label, (t_mark - loop_last) * 1000.0))
+                loop_last = t_mark
+
             # Keep source freshness updated even while the runtime is not yet
             # asking us to render. Otherwise a READY session that delays
             # should_render can be misclassified as a source stall.
             self._poll_source_frame(upload=False)
+            if loop_perf_enabled:
+                _loop_mark('poll_no_upload')
 
             # Wait for the runtime to signal frame timing.
             frame_state = xr.wait_frame(self._xr_session, self._xr_frame_wait_info)
+            if loop_perf_enabled:
+                _loop_mark('wait_frame')
             xr.begin_frame(self._xr_session, self._xr_frame_begin_info)
+            if loop_perf_enabled:
+                _loop_mark('begin_frame')
 
             # sync_actions must happen before xr.locate_space for action spaces.
             # Do it here so _update_aim_poses gets fresh locations this frame.
@@ -3905,10 +4097,14 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
                     xr.sync_actions(self._xr_session, self._xr_actions_sync_info)
                 except Exception:
                     pass
+            if loop_perf_enabled:
+                _loop_mark('sync_actions')
 
             # Locate controller spaces (now valid after sync_actions)
             self._update_aim_poses(frame_state.predicted_display_time)
             self._update_grip_poses(frame_state.predicted_display_time)
+            if loop_perf_enabled:
+                _loop_mark('controller_pose')
 
             # Skip smoothing + input polling when no controllers are tracked,
             # but keep locating poses so we detect reconnection immediately.
@@ -3924,6 +4120,8 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
                 self._smooth_controller_poses()
                 self._update_trackpad_button_emu()
                 self._poll_controller_input(dt)
+                if loop_perf_enabled:
+                    _loop_mark('controller_input')
             else:
                 # No controllers -clear cursor/grab state so downstream code
                 # (grip-to-move, trigger handling) sees no laser on screen.
@@ -3934,6 +4132,8 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
                 self._cursor_ctrl = None
                 self._cursor_smooth_uv = None
                 self._grabbed = False
+                if loop_perf_enabled:
+                    _loop_mark('controller_missing')
 
             composition_layers = []
             session_idle_timeout = self._track_session_idle_render(frame_state.should_render, now)
@@ -3993,6 +4193,8 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
             if frame_state.should_render:
                 # Drain depth_q non-blocking -keep only the newest frame
                 self._poll_source_frame(upload=True)
+                if loop_perf_enabled:
+                    _loop_mark('poll_upload')
 
                 # Head-tracking pose for this frame
                 try:
@@ -4006,6 +4208,8 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
                     )
                 except Exception:
                     views = [None, None]
+                if loop_perf_enabled:
+                    _loop_mark('locate_views')
 
                 if self._apply_profile_view_pose_to_xr_space(views):
                     try:
@@ -4021,6 +4225,8 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
                         views = [None, None]
                     self._update_aim_poses(frame_state.predicted_display_time)
                     self._update_grip_poses(frame_state.predicted_display_time)
+                    if loop_perf_enabled:
+                        _loop_mark('view_pose_adjust')
 
                 # Cache head pose for the next frame's input handlers (left-stick
                 # orbit pivot + keyboard anchoring). One-frame stale is imperceptible
@@ -4089,12 +4295,15 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
                                         mvp,
                                     )
                                 else:
+                                    runtime_rgb_depth_stereo_scale = float(
+                                        getattr(self, '_runtime_rgb_depth_stereo_scale', 1.0)
+                                    )
                                     self._d3d11_native_renderer.render_eye(
                                         sc_image.texture,
                                         sc_w,
                                         sc_h,
                                         eye_index,
-                                        self.ipd_uv,
+                                        self.ipd_uv * max(0.0, runtime_rgb_depth_stereo_scale),
                                         self.depth_strength * self.depth_ratio,
                                         float(self.convergence),
                                         mvp,
@@ -4291,6 +4500,8 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
                         ))
 
                 if eye_layer_views:
+                    if loop_perf_enabled:
+                        _loop_mark('render_eyes')
                     proj_layer = xr.CompositionLayerProjection(
                         space=self._xr_space,
                         views=eye_layer_views,
@@ -4310,6 +4521,11 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
                                 ctypes.cast(ctypes.pointer(quad_layer),
                                             ctypes.POINTER(xr.CompositionLayerBaseHeader))
                             )
+                    if loop_perf_enabled:
+                        _loop_mark('layers')
+                else:
+                    if loop_perf_enabled:
+                        _loop_mark('render_no_layers')
 
             xr.end_frame(
                 self._xr_session,
@@ -4319,6 +4535,25 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
                     layers=composition_layers,
                 ),
             )
+            if loop_perf_enabled:
+                _loop_mark('end_frame')
+            if loop_perf_enabled:
+                loop_total_ms = (time.perf_counter() - loop_t0) * 1000.0
+                loop_log_now = time.perf_counter()
+                loop_last_log = float(getattr(self, '_xr_loop_perf_last_log', 0.0) or 0.0)
+                if loop_total_ms >= 25.0 or (loop_log_now - loop_last_log) >= 2.0:
+                    self._xr_loop_perf_last_log = loop_log_now
+                    loop_parts = ' '.join(f'{label}={ms:.1f}' for label, ms in loop_marks if ms >= 0.05)
+                    print(
+                        '[OpenXRViewer] loop segments '
+                        f'total_ms={loop_total_ms:.1f} '
+                        f'fps={float(getattr(self, "actual_fps", 0.0)):.1f} '
+                        f'should_render={bool(getattr(frame_state, "should_render", False))} '
+                        f'runtime_direct={bool(getattr(self, "_runtime_direct_source", False))} '
+                        f'fresh={bool(self._has_fresh_source_frame(time.perf_counter()))} '
+                        f'renderable={bool(self._has_renderable_source_frame())} '
+                        f'{loop_parts}'
+                    )
 
             if session_idle_timeout:
                 if not self._hard_idle_active:

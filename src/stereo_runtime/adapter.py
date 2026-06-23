@@ -386,6 +386,22 @@ def stereo_config_from_runtime(config: StereoRuntimeConfig) -> "StereoConfig":
     if config.stereo_quality == "hq_4k" and layers < 3:
         layers = 3
 
+    temporal = config.temporal
+    temporal_strength = config.temporal_strength
+    auto_reset_temporal = config.auto_reset_temporal
+    scene_reset_threshold = config.scene_reset_threshold
+    reset_cooldown_frames = config.reset_cooldown_frames
+    foreground_scale = config.foreground_scale
+    depth_antialias_strength = config.depth_antialias_strength
+    if config.stereo_quality == "fast":
+        temporal = False
+        temporal_strength = 0.0
+        auto_reset_temporal = False
+        scene_reset_threshold = 0.0
+        reset_cooldown_frames = 0
+        foreground_scale = 0.0
+        depth_antialias_strength = 0.0
+
     return stereo_config_for_preset(
         preset,
         output_format=config.output_format,
@@ -395,19 +411,19 @@ def stereo_config_from_runtime(config: StereoRuntimeConfig) -> "StereoConfig":
             "occlusion": config.occlusion,
             "symmetric": config.symmetric,
             "hole_fill": config.hole_fill,
-            "temporal": config.temporal,
+            "temporal": temporal,
             "depth_strength": config.depth_strength,
             "convergence": config.convergence,
             "ipd": config.ipd,
             "max_shift_ratio": config.max_shift_ratio,
             "ipd_mm": config.ipd_mm,
             "stereo_scale": config.stereo_scale,
-            "temporal_strength": config.temporal_strength,
-            "auto_reset_temporal": config.auto_reset_temporal,
-            "scene_reset_threshold": config.scene_reset_threshold,
-            "reset_cooldown_frames": config.reset_cooldown_frames,
-            "foreground_scale": config.foreground_scale,
-            "depth_antialias_strength": config.depth_antialias_strength,
+            "temporal_strength": temporal_strength,
+            "auto_reset_temporal": auto_reset_temporal,
+            "scene_reset_threshold": scene_reset_threshold,
+            "reset_cooldown_frames": reset_cooldown_frames,
+            "foreground_scale": foreground_scale,
+            "depth_antialias_strength": depth_antialias_strength,
             "edge_threshold": config.edge_threshold,
             "edge_dilation": config.edge_dilation,
             "screen_edge_mask_suppression": config.screen_edge_mask_suppression,

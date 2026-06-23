@@ -1,5 +1,7 @@
 # Desktop2Stereo OpenXR viewer: glow color smoothing helpers.
 
+from .constants import _GLOW_GRID_COUNT
+
 
 class CoreGlowMixin:
     """Shared glow and screen light color smoothing."""
@@ -13,8 +15,13 @@ class CoreGlowMixin:
             float(c[1]) + lerp * (float(t[1]) - float(c[1])),
             float(c[2]) + lerp * (float(t[2]) - float(c[2])),
         )
-        colors = getattr(self, '_screen_light_colors', tuple([self._glow_color] * 6))
-        targets = getattr(self, '_screen_light_target_colors', colors)
+        fallback = tuple([self._glow_color] * _GLOW_GRID_COUNT)
+        colors = tuple(getattr(self, '_screen_light_colors', fallback) or fallback)
+        targets = tuple(getattr(self, '_screen_light_target_colors', colors) or colors)
+        if len(colors) != _GLOW_GRID_COUNT:
+            colors = tuple([self._glow_color] * _GLOW_GRID_COUNT)
+        if len(targets) != _GLOW_GRID_COUNT:
+            targets = colors
         self._screen_light_colors = tuple(
             (
                 float(c0[0]) + lerp * (float(t0[0]) - float(c0[0])),

@@ -74,7 +74,14 @@ class CoreScreenQualityMixin:
         return target_w, target_h
 
     def _release_screen_quality_resources(self):
-        for name in ('_screen_ds_fbo', '_screen_rcas_fbo', '_screen_ds_tex', '_screen_rcas_tex'):
+        for name in (
+            '_screen_ds_fbo',
+            '_screen_rcas_fbo',
+            '_screen_ds_tex',
+            '_screen_rcas_tex',
+            '_glow_ds_fbo',
+            '_glow_ds_tex',
+        ):
             obj = getattr(self, name, None)
             if obj is not None:
                 try:
@@ -83,6 +90,7 @@ class CoreScreenQualityMixin:
                     pass
                 setattr(self, name, None)
         self._screen_quality_size = None
+        self._glow_ds_size = None
 
     def _ensure_screen_quality_resources(self, size):
         if self._screen_quality_size == tuple(size) and self._screen_ds_tex is not None and self._screen_rcas_tex is not None:
@@ -137,3 +145,61 @@ class CoreScreenQualityMixin:
         self.ctx.depth_mask = prev_depth_mask
         self.ctx.enable(moderngl.DEPTH_TEST)
         return self._screen_rcas_tex
+
+    def _ensure_glow_downsample_resources(self, size):
+        if self._glow_ds_size == tuple(size) and self._glow_ds_tex is not None and self._glow_ds_fbo is not None:
+            return
+        for name in ('_glow_ds_fbo', '_glow_ds_tex'):
+            obj = getattr(self, name, None)
+            if obj is not None:
+                try:
+                    obj.release()
+                except Exception:
+                    pass
+                setattr(self, name, None)
+        w, h = int(size[0]), int(size[1])
+        self._glow_ds_tex = self.ctx.texture((w, h), 4, dtype='f1')
+        self._glow_ds_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
+        self._glow_ds_fbo = self.ctx.framebuffer(color_attachments=[self._glow_ds_tex])
+        self._glow_ds_size = (w, h)
+
+    def _prepare_glow_downsample_texture(self, source_tex, source_size):
+        if source_tex is None or source_size is None:
+            return None
+        src_w, src_h = int(source_size[0]), int(source_size[1])
+        if src_w <= 0 or src_h <= 0:
+            return None
+        out_w = max(32, min(192, src_w // 20))
+        out_h = max(18, min(108, src_h // 20))
+        out_w = max(2, out_w & ~1)
+        out_h = max(2, out_h & ~1)
+        self._ensure_glow_downsample_resources((out_w, out_h))
+        cache_key = (
+            int(getattr(self, '_frame_count', 0)),
+            int(getattr(self, '_current_eye_index', 0) or 0),
+            int(getattr(source_tex, 'glo', 0) or 0),
+            src_w,
+            src_h,
+            out_w,
+            out_h,
+        )
+        if getattr(self, '_glow_ds_cache_key', None) == cache_key:
+            return self._glow_ds_tex
+
+        prev_viewport = self.ctx.viewport
+        prev_depth_mask = self.ctx.depth_mask
+        self.ctx.disable(moderngl.DEPTH_TEST)
+        self.ctx.disable(moderngl.BLEND)
+        self.ctx.depth_mask = False
+
+        self._glow_ds_fbo.use()
+        self.ctx.viewport = (0, 0, out_w, out_h)
+        source_tex.use(location=0)
+        self._glow_ds_prog['u_input_size'].value = (float(src_w), float(src_h))
+        self._glow_ds_vao.render(moderngl.TRIANGLE_STRIP)
+        self._glow_ds_cache_key = cache_key
+
+        self.ctx.viewport = prev_viewport
+        self.ctx.depth_mask = prev_depth_mask
+        self.ctx.enable(moderngl.DEPTH_TEST)
+        return self._glow_ds_tex
