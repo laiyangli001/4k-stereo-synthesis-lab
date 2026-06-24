@@ -37,9 +37,11 @@ def test_stereo_presets_map_to_expected_modes():
     assert cinema.backend == "quality_4k"
     assert cinema.temporal is True
     assert cinema.auto_reset_temporal is True
-    assert cinema.ipd_mm == 64.0
+    assert cinema.ipd_mm == StereoConfig().ipd_mm
     assert cinema.stereo_scale < 1.0
-    assert cinema.convergence == 0.25
+    for config in (cinema, game, still, debug):
+        assert config.convergence == 0.0
+        assert config.foreground_scale == 0.0
 
     assert game.backend == "fast_plus"
     assert game.hole_fill == "fast"
@@ -59,9 +61,9 @@ def test_preset_output_format_and_overrides():
     config = stereo_config_for_preset("cinema", output_format="full_sbs", overrides={"depth_strength": 2.25})
     assert config.output_format == "full_sbs"
     assert config.depth_strength == 2.25
-    physical = stereo_config_for_preset("cinema", overrides={"ipd_mm": 63.0, "stereo_scale": 0.6})
-    assert physical.ipd_mm == 63.0
-    assert physical.stereo_scale == 0.6
+    runtime_override = stereo_config_for_preset("cinema", overrides={"ipd_mm": 63.0, "stereo_scale": 0.35})
+    assert runtime_override.ipd_mm == 63.0
+    assert runtime_override.stereo_scale == 0.35
 
     with pytest.raises(ValueError, match="unknown config override"):
         stereo_config_for_preset("cinema", overrides={"not_a_field": 1})
@@ -75,6 +77,8 @@ def test_openxr_presets_map_shared_stereo_params():
     assert openxr.screen_roll == 0.5
     assert openxr.depth_strength < cinema.depth_strength
     assert openxr.max_shift_ratio <= cinema.max_shift_ratio
+    for config in (openxr, cinema, openxr_config_for_preset("still_image_hq"), openxr_config_for_preset("debug_export")):
+        assert config.convergence == 0.0
 
 
 def test_auto_mode_classifier_priority():

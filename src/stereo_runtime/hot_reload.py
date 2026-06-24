@@ -65,7 +65,7 @@ def _is_fast_quality(settings_dict: dict, config) -> bool:
 def hot_reload_value_snapshot(settings_dict: dict, config) -> dict:
     ipd_raw = settings_dict.get(
         "IPD mm",
-        settings_dict.get("IPD (mm)", settings_dict.get("IPD", config.ipd_mm or 64.0)),
+        settings_dict.get("IPD (mm)", settings_dict.get("IPD", config.ipd_mm or 32.0)),
     )
     ipd_mm = float(ipd_raw)
     if ipd_mm <= 1.0:

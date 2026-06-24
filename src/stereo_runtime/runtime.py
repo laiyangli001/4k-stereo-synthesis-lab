@@ -682,7 +682,7 @@ class StereoRuntime:
         if ipd_mm is None:
             effective_ipd_m = max(0.0, float(getattr(stereo_config, "ipd", 0.064)))
         else:
-            effective_ipd_m = max(0.0, float(ipd_mm)) / 1000.0 * max(0.0, float(getattr(stereo_config, "stereo_scale", 0.5)))
+            effective_ipd_m = max(0.0, float(ipd_mm)) / 1000.0 * max(0.0, float(getattr(stereo_config, "stereo_scale", 0.4)))
         try:
             return make_fast_plus_fused_half_sbs_uint8(
                 rgb_frame,

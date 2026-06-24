@@ -54,8 +54,8 @@ class StereoRuntimeConfig:
     convergence: float = 0.0
     ipd: float = 0.064
     max_shift_ratio: float = 0.05
-    ipd_mm: float | None = 64.0
-    stereo_scale: float = 0.5
+    ipd_mm: float | None = 32.0
+    stereo_scale: float = 0.4
     layers: int = 2
     occlusion: bool = True
     symmetric: bool = True
@@ -219,7 +219,7 @@ def runtime_config_from_d2s_settings(
         ipd=ipd_mm / 1000.0,
         max_shift_ratio=float(settings.get("Max Shift Ratio", 0.05)),
         ipd_mm=ipd_mm,
-        stereo_scale=float(settings.get("Stereo Scale", settings.get("Stereo Strength Scale", 0.5))),
+        stereo_scale=float(settings.get("Stereo Scale", settings.get("Stereo Strength Scale", 0.4))),
         temporal=_to_bool(settings.get("Temporal", True)),
         temporal_strength=float(settings.get("Temporal Strength", 0.75)),
         auto_reset_temporal=_to_bool(settings.get("Auto Scene Reset", settings.get("Auto Reset Temporal", True))),
@@ -242,7 +242,7 @@ def runtime_config_from_d2s_settings(
 
 
 def _normalize_ipd_mm(settings: dict[str, Any]) -> float:
-    raw = settings.get("IPD mm", settings.get("IPD (mm)", settings.get("IPD", 0.064)))
+    raw = settings.get("IPD mm", settings.get("IPD (mm)", settings.get("IPD", 0.032)))
     value = float(raw)
     # Legacy Desktop2Stereo settings stored IPD in meters, e.g. 0.064.
     if value <= 1.0:

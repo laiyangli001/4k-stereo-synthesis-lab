@@ -36,7 +36,8 @@ def test_gui_stereo_preset_uses_dropdown_value_for_load_and_save():
     text = _file_text("config_mgr.py")
     assert 'self.stereo_preset_dd.value = self._preset_to_display(' in text
     assert 'cfg.get("Stereo Preset", DEFAULTS["Stereo Preset"])' in text
-    assert '"Stereo Preset": self._display_to_preset(self.stereo_preset_dd.value),' in text
+    assert 'stereo_preset = self._display_to_preset(self.stereo_preset_dd.value)' in text
+    assert '"Stereo Preset": stereo_preset,' in text
     assert '"Stereo Preset": DEFAULTS["Stereo Preset"],' not in text
 
 
@@ -83,14 +84,15 @@ def test_gui_status_translation_keys_are_safe_for_language_switch():
     assert 'key="Stereo parameters saved"' not in all_text
 
 
-def test_gui_scene_preset_does_not_overwrite_reset_controls():
+def test_gui_scene_preset_loads_complete_advanced_stereo_controls():
     text = _file_text("handlers.py")
     apply_start = text.index("def _apply_stereo_preset_values")
     block = text[apply_start:]
-    assert "self.scene_reset_dd.value" not in block
-    assert "self.reset_cooldown_dd.value" not in block
-    assert '"scene_reset_threshold"' not in block
-    assert '"reset_cooldown_frames"' not in block
+    assert "self.scene_reset_dd.value" in block
+    assert "self.reset_cooldown_dd.value" in block
+    assert '"scene_reset_threshold"' in _file_text("config_mgr.py")
+    assert '"reset_cooldown_frames"' in _file_text("config_mgr.py")
+    assert "self.stereo_scale_dd.value" in block
     assert "on_select=self.on_stereo_preset_change" in _file_text("builders.py")
 
 
@@ -105,17 +107,24 @@ def test_advanced_stereo_is_not_persisted_and_starts_collapsed():
     assert 'cfg.get("Advanced Stereo"' not in all_text
 
 
-def test_hole_fill_mode_is_visible_without_advanced_stereo():
+def test_hole_fill_mode_is_visible_next_to_stereo_mode_without_advanced_stereo():
     builders_text = _file_text("builders.py")
-    assert 'hole_fill_mode_row = ft.Row([self.hole_fill_mode_label, self.hole_fill_mode_dd]' in builders_text
+    row_start = builders_text.index("stereo_row0 = ft.Row([")
+    row_end = builders_text.index("], spacing=1)", row_start)
+    stereo_row = builders_text[row_start:row_end]
+    assert "self.stereo_preset_label" in stereo_row
+    assert "self.stereo_preset_dd" in stereo_row
+    assert "self.hole_fill_mode_label" in stereo_row
+    assert "self.hole_fill_mode_dd" in stereo_row
+    assert stereo_row.index("self.stereo_preset_dd") < stereo_row.index("self.hole_fill_mode_label")
     depth_start = builders_text.index("depth_group = ft.Container(")
     depth_end = builders_text.index("device_group = ft.Container(", depth_start)
     depth_block = builders_text[depth_start:depth_end]
-    assert "hole_fill_mode_row" in depth_block
+    assert "stereo_row0" in depth_block
+    assert "hole_fill_mode_row" not in builders_text
     advanced_start = builders_text.index("self._advanced_stereo_rows = [")
     advanced_end = builders_text.index("]", advanced_start)
     advanced_block = builders_text[advanced_start:advanced_end]
-    assert "hole_fill_mode_row" not in advanced_block
     assert "self.hole_fill_mode_label" not in advanced_block
     assert "self.hole_fill_mode_dd" not in advanced_block
 
@@ -167,23 +176,24 @@ def test_gui_stop_uses_stop_request_file_before_force_kill():
     assert graceful_index < kill_index
 
 
-def test_stereo_quality_dropdown_uses_localized_levels_but_saves_runtime_values():
+def test_stereo_quality_is_hidden_and_derived_from_stereo_mode():
     all_text = _all_text()
     handlers_text = _file_text("handlers.py")
+    builders_text = _file_text("builders.py")
+    config_mgr_text = _file_text("config_mgr.py")
     localization_text = _localization_source().read_text(encoding="utf-8")
     assert '"fast": "Lowest"' in localization_text
     assert '"fast_plus": "Medium"' in localization_text
     assert '"quality_4k": "High"' in localization_text
     assert '"hq_4k": "Highest"' in localization_text
-    assert '"fast": "最低"' in localization_text
-    assert '"fast_plus": "中等"' in localization_text
-    assert '"quality_4k": "较高"' in localization_text
-    assert '"hq_4k": "最高"' in localization_text
-    assert "options=self._stereo_quality_options()" in all_text
-    assert "stereo_quality_key = self._display_to_stereo_quality(self.stereo_quality_dd.value)" in handlers_text
-    assert "self.stereo_quality_dd.options = self._stereo_quality_options()" in handlers_text
-    assert '"Stereo Quality": self._display_to_stereo_quality(self.stereo_quality_dd.value)' in _file_text("config_mgr.py")
-    assert '"Synthetic View": self._display_to_stereo_quality(self.stereo_quality_dd.value)' in _file_text("config_mgr.py")
+    assert "self.stereo_quality_dd.visible = False" in builders_text
+    assert "self.stereo_quality_label.visible = False" in handlers_text
+    assert "def _stereo_quality_for_preset" in config_mgr_text
+    assert '"Stereo Quality": stereo_quality' in config_mgr_text
+    assert '"Synthetic View": stereo_quality' in config_mgr_text
+    assert '"Stereo Quality": self._display_to_stereo_quality(self.stereo_quality_dd.value)' not in config_mgr_text
+    assert '"Synthetic View": self._display_to_stereo_quality(self.stereo_quality_dd.value)' not in config_mgr_text
+    assert '(self.stereo_quality_dd, "tooltip_stereo_quality")' not in all_text
 
 
 def test_depth_safety_gui_controls_removed():
@@ -212,9 +222,10 @@ def test_stereo_scale_control_is_next_to_ipd():
     builders_text = _file_text("builders.py")
     assert 'self.ipd_dd = CompactDropdown(options=[str(i) for i in range(50, 71)]' in builders_text
     assert 'self.stereo_scale_label = ft.Text("Stereo Scale:"' in builders_text
-    assert 'self.stereo_scale_dd = CompactDropdown(options=[f"{i / 10:.1f}" for i in range(0, 11)]' in builders_text
+    assert 'self.stereo_scale_dd = CompactDropdown(options=[f"{i / 10:.1f}" for i in range(0, 5)]' in builders_text
+    assert 'value="0.4", width=S(130), on_select=self.on_stereo_hot_param_change)' in builders_text
     row_start = builders_text.index('row3 = ft.Row([')
-    row_end = builders_text.index('# Row 5: Stereo runtime mode and quality', row_start)
+    row_end = builders_text.index('# Row 5: Stereo runtime mode. Backend quality is derived from this preset.', row_start)
     row = builders_text[row_start:row_end]
     assert 'self.ipd_dd' in row
     assert 'self.stereo_scale_label' in row
@@ -222,15 +233,17 @@ def test_stereo_scale_control_is_next_to_ipd():
     assert row.index('self.ipd_dd') < row.index('self.stereo_scale_label') < row.index('self.stereo_scale_dd')
 
 
-def test_stereo_preset_auto_option_removed():
+def test_stereo_preset_exposes_four_mode_choices_without_auto_or_debug():
     all_text = _all_text()
     config_text = _config_source().read_text(encoding="utf-8")
     builders_text = _file_text("builders.py")
     assert '"Stereo Preset": "cinema"' in config_text
-    assert 'options=["Cinema", "Game / Low Latency", "Image  / High Quality", "Debug / Export"]' in builders_text
+    assert 'options=["Traditional / Fastest", "Cinema", "Game / Low Latency", "Image  / High Quality"]' in builders_text
+    assert '"traditional_fastest"' in _file_text("config_mgr.py")
     assert 'options=["Auto", "Cinema"' not in all_text
     assert '"Auto": "auto"' not in all_text
     assert '"自动": "auto"' not in all_text
+    assert '"Debug / Export"]' not in builders_text
 
 
 def test_ipd_display_maps_to_calibrated_runtime_value():
@@ -253,11 +266,11 @@ def test_ipd_display_maps_to_calibrated_runtime_value():
     ]
     module = ast.Module(body=[ast.ClassDef(name="GUIConfigMixin", bases=[], keywords=[], body=selected, decorator_list=[])], type_ignores=[])
     ast.fix_missing_locations(module)
-    namespace = {"DEFAULTS": {"IPD": 0.030}}
+    namespace = {"DEFAULTS": {"IPD": 0.032}}
     exec(compile(module, "config_mgr.py", "exec"), namespace)
     mixin = namespace["GUIConfigMixin"]
 
-    assert mixin._runtime_ipd_to_display_mm(0.030) == 60
+    assert mixin._runtime_ipd_to_display_mm(0.032) == 64
     assert mixin._runtime_ipd_to_display_mm(0.064) == 64
     assert mixin._display_ipd_mm_to_runtime_m("60") == 0.030
     assert mixin._display_ipd_mm_to_runtime_m("64") == 0.032
@@ -267,9 +280,44 @@ def test_ipd_display_maps_to_calibrated_runtime_value():
 def test_stereo_scale_has_tooltips():
     all_text = _all_text()
     localization_text = _localization_source().read_text(encoding="utf-8")
-    assert '"tooltip_stereo_scale": "Stereo strength multiplier applied after IPD calibration' in localization_text
-    assert '"tooltip_stereo_scale": "IPD 标定后的立体强度倍率' in localization_text
+    assert '"tooltip_ipd": "Binocular IPD, displayed in mm' in localization_text
+    assert '"tooltip_ipd": "双眼瞳距，单位 mm' in localization_text
+    assert '"tooltip_stereo_scale": "Stereo strength multiplier; lower values reduce parallax' in localization_text
+    assert '"tooltip_stereo_scale": "立体强度倍率；数值越低视差越小' in localization_text
     assert '(self.stereo_scale_dd, "tooltip_stereo_scale")' in all_text
+
+
+def test_convergence_and_foreground_scale_tooltips_explain_tuning():
+    all_text = _all_text()
+    localization_text = _localization_source().read_text(encoding="utf-8")
+    assert '"tooltip_convergence": "Zero-parallax screen plane. Raise it in 0.05 steps' in localization_text
+    assert '"tooltip_convergence": "零视差屏幕平面。前景太突出或出现重影时，每次提高 0.05' in localization_text
+    assert 'positive values strengthen near/far separation' in localization_text
+    assert 'negative values compress depth toward the middle' in localization_text
+    assert '正值增强近远层次' in localization_text
+    assert '负值把深度压向中间' in localization_text
+    assert '(self.convergence_dd, "tooltip_convergence")' in all_text
+    assert '(self.foreground_scale_dd, "tooltip_foreground_scale")' in all_text
+
+
+def test_depth_strength_and_antialiasing_tooltips_explain_tuning():
+    localization_text = _localization_source().read_text(encoding="utf-8")
+    assert 'Use Standard / 2.5 as the baseline' in localization_text
+    assert 'foreground objects show ghosts' in localization_text
+    assert 'Depth-map smoothing level' in localization_text
+    assert 'soften fine geometry' in localization_text
+    assert '建议以标准档 2.5 为基准' in localization_text
+    assert '前景重影、边缘撕裂或观看不舒服时下调' in localization_text
+    assert '深度图平滑级别' in localization_text
+    assert '游戏和实时观看保持较低' in localization_text
+
+
+def test_convergence_dropdown_uses_five_percent_steps():
+    builders_text = _file_text("builders.py")
+    handlers_text = _file_text("handlers.py")
+    assert 'conv_options = [f"{i / 100:.2f}" for i in range(-50, 101, 5)]' in builders_text
+    assert 'options=[v for v in conv_options], value="0.00"' in builders_text
+    assert 'self.convergence_dd.value = f"{values[\'convergence\']:.2f}"' in handlers_text
 
 
 def test_stereo_scale_label_is_localized():
@@ -277,7 +325,25 @@ def test_stereo_scale_label_is_localized():
     localization_text = _localization_source().read_text(encoding="utf-8")
     assert '"Stereo Scale:": "Stereo Scale:"' in localization_text
     assert '"Stereo Scale:": "立体缩放:"' in localization_text
+    assert '"Convergence:": "会聚位置:"' in localization_text
+    assert '"Convergence:": "会聚点:"' not in localization_text
     assert 'self.stereo_scale_label.value = t["Stereo Scale:"]' in handlers_text
+
+
+def test_cn_ipd_and_antialiasing_labels_are_user_facing():
+    localization_text = _localization_source().read_text(encoding="utf-8")
+    assert '"IPD (m):": "IPD (mm):"' in localization_text
+    assert '"IPD (m):": "双眼瞳距:"' in localization_text
+    assert '"Anti-aliasing:": "Anti-aliasing:"' in localization_text
+    assert '"Anti-aliasing:": "抗锯齿值:"' in localization_text
+    assert '"Depth Resolution:": "深度细节:"' in localization_text
+    assert '"tooltip_depth_res": "深度细节档位。建议使用最大 518' in localization_text
+    assert '最好的立体细节' in localization_text
+    assert '数值降低可减少推理耗时和显存占用' in localization_text
+    assert '"瞳距 (mm):"' not in localization_text
+    assert '"抗锯齿:"' not in localization_text
+    assert '"深度分辨率:"' not in localization_text
+    assert '"深度图分辨率"' not in localization_text
 
 
 def test_stereo_quality_options_are_localized():
@@ -320,15 +386,21 @@ def test_mask_feather_radius_gui_control_is_localized_and_hot_reloadable():
     assert '"tooltip_mask_feather"' in localization_text
 
 
-def test_reset_defaults_restore_current_stereo_edge_defaults():
+def test_reset_defaults_restore_cinema_stereo_defaults():
     config_text = _config_source().read_text(encoding="utf-8")
     process_text = _file_text("process.py")
 
-    assert '"Depth Antialias Strength": 2.0' in config_text
+    assert '"Stereo Preset": "cinema"' in config_text
+    assert '"Depth Strength": 2.5' in config_text
+    assert '"Depth Quick": "Standard"' in config_text
+    assert '"IPD": 0.032' in config_text
+    assert '"Foreground Scale": 0.0' in config_text
+    assert '"Convergence": 0.0' in config_text
+    assert '"Stereo Scale": 0.4' in config_text
+    assert '"Anti-aliasing": 1' in config_text
+    assert '"Depth Antialias Strength": 1.0' in config_text
     assert '"Mask Feather Radius": 3' in config_text
-    assert '"Hole Fill Mode": "soft_low_ghost"' in config_text
-    assert '"Hole Fill Radius": 3' in config_text
-    assert '"Hole Fill Strength": 1.0' in config_text
+    assert '"Hole Fill Mode": "balanced"' in config_text
     assert "dynamic_defaults = DEFAULTS.copy()" in process_text
     assert "self.apply_config(dynamic_defaults, keep_optional=False)" in process_text
 
@@ -340,15 +412,59 @@ def test_hole_fill_mode_gui_control_is_localized_and_hot_reloadable():
     handlers_text = _file_text("handlers.py")
     localization_text = _localization_source().read_text(encoding="utf-8")
 
-    assert '"Hole Fill Mode": "soft_low_ghost"' in config_text
+    assert '"Hole Fill Mode": "balanced"' in config_text
     assert 'self.hole_fill_mode_label = ft.Text("Hole Fill Mode:"' in builders_text
-    assert 'options=["Balanced", "Soft / Low Ghost", "Sharp Test"]' in builders_text
+    assert 'options=self._hole_fill_mode_options()' in builders_text
+    assert 'value=self._hole_fill_mode_to_display("balanced")' in builders_text
     assert 'self.hole_fill_mode_dd.value = self._hole_fill_mode_to_display(cfg.get("Hole Fill Mode", DEFAULTS["Hole Fill Mode"]))' in config_mgr_text
     assert '"Hole Fill Mode": self._display_to_hole_fill_mode(self.hole_fill_mode_dd.value)' in config_mgr_text
     assert 'self.hole_fill_mode_label.value = t["Hole Fill Mode:"]' in handlers_text
     assert '(self.hole_fill_mode_dd, "tooltip_hole_fill_mode")' in handlers_text
     assert 'HOLE_FILL_MODE_KEYS = ("balanced", "soft_low_ghost", "sharp_test")' in localization_text
+    assert '"Balanced / Standard": "均衡 / 标准"' in localization_text
+    assert '"Sharp / High Detail": "锐利 / 高细节"' in localization_text
     assert '"Hole Fill Mode:": "补洞模式:"' in localization_text
+
+
+def test_hole_fill_mode_labels_are_balanced_and_legacy_compatible():
+    import ast
+
+    source = _localization_source().read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    wanted = {
+        "DEFAULT_LOCALE",
+        "MESSAGE_CATALOGS",
+        "LOCALE_ALIASES",
+        "SUPPORTED_LOCALES",
+        "HOLE_FILL_MODE_KEYS",
+        "HOLE_FILL_MODE_LABELS",
+        "HOLE_FILL_MODE_LEGACY_LABELS",
+        "normalize_locale",
+        "get_messages",
+        "hole_fill_mode_options",
+        "hole_fill_mode_to_display",
+        "display_to_hole_fill_mode",
+    }
+    selected = [
+        node
+        for node in tree.body
+        if isinstance(node, (ast.Assign, ast.FunctionDef))
+        and ((isinstance(node, ast.Assign) and any(getattr(target, "id", None) in wanted for target in node.targets)) or getattr(node, "name", None) in wanted)
+    ]
+    module = ast.Module(body=selected, type_ignores=[])
+    ast.fix_missing_locations(module)
+    from types import MappingProxyType
+
+    namespace = {"MappingProxyType": MappingProxyType}
+    exec(compile(module, str(_localization_source()), "exec"), namespace)
+
+    assert namespace["hole_fill_mode_options"]("EN") == ["Balanced / Standard", "Soft / Low Ghost", "Sharp / High Detail"]
+    assert namespace["hole_fill_mode_options"]("CN") == ["均衡 / 标准", "柔和 / 低重影", "锐利 / 高细节"]
+    assert namespace["display_to_hole_fill_mode"]("Balanced / Standard") == "balanced"
+    assert namespace["display_to_hole_fill_mode"]("均衡 / 标准") == "balanced"
+    assert namespace["display_to_hole_fill_mode"]("Balanced") == "balanced"
+    assert namespace["display_to_hole_fill_mode"]("锐利测试") == "sharp_test"
+    assert namespace["display_to_hole_fill_mode"]("Sharp Test") == "sharp_test"
 
 
 def test_model_backbone_size_dropdown_has_own_tooltip():

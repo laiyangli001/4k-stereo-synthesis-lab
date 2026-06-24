@@ -42,8 +42,8 @@ def test_openxr_viewer_shader_regression_can_compare_resolution_modes():
 
 def test_openxr_viewer_shader_regression_exposes_stereo_scale_delta():
     rgb, depth = make_visual_regression_inputs(width=96, height=54)
-    current = OpenXRViewerShaderParams(stereo_scale=0.5, use_stereo_scale=True)
-    beta = OpenXRViewerShaderParams(stereo_scale=0.5, use_stereo_scale=False)
+    current = OpenXRViewerShaderParams(stereo_scale=0.35, use_stereo_scale=True)
+    beta = OpenXRViewerShaderParams(stereo_scale=0.35, use_stereo_scale=False)
 
     cur_eye = render_viewer_shader_eye_cpu(rgb, depth, eye_sign=1.0, params=current)
     beta_eye = render_viewer_shader_eye_cpu(rgb, depth, eye_sign=1.0, params=beta)

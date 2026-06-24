@@ -14,7 +14,7 @@ from .output import ensure_b1hw, ensure_bchw
 @dataclass(frozen=True)
 class OpenXRViewerShaderParams:
     ipd: float = 0.064
-    stereo_scale: float = 0.5
+    stereo_scale: float = 0.4
     depth_ratio: float = 2.0
     shader_depth_strength: float = 0.1
     convergence: float = 0.0

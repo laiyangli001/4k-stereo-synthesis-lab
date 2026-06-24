@@ -35,8 +35,8 @@ class StereoConfig:
     convergence: float = 0.0
     ipd: float = 0.064
     max_shift_ratio: float = 0.05
-    ipd_mm: float | None = 64.0
-    stereo_scale: float = 0.5
+    ipd_mm: float | None = 32.0
+    stereo_scale: float = 0.4
     temporal_strength: float = 0.85
     auto_reset_temporal: bool = False
     scene_reset_threshold: float = 0.22

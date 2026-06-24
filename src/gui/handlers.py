@@ -51,9 +51,10 @@ class GUIHandlerMixin:
     def _preset_to_display(self, value):
         mapping = {
             "auto": "Cinema", "cinema": "Cinema",
+            "traditional_fastest": "Traditional / Fastest",
             "game_low_latency": "Game / Low Latency",
             "still_image_hq": "Image  / High Quality",
-            "debug_export": "Debug / Export",
+            "debug_export": "Cinema",
         }
         key = mapping.get(str(value or "cinema").strip().lower(), "Cinema")
         return UI_MESSAGES[self.locale].get(key, key) if hasattr(self, "locale") else key
@@ -565,12 +566,14 @@ class GUIHandlerMixin:
         self.stereo_scale_label.value = t["Stereo Scale:"]
         self.stereo_preset_label.value = t["Stereo Mode:"]
         preset_key = self._display_to_preset(self.stereo_preset_dd.value)
-        self.stereo_preset_dd.options = [t["Cinema"], t["Game / Low Latency"], t["Image  / High Quality"], t["Debug / Export"]]
+        self.stereo_preset_dd.options = [t["Traditional / Fastest"], t["Cinema"], t["Game / Low Latency"], t["Image  / High Quality"]]
         self.stereo_preset_dd.value = self._preset_to_display(preset_key)
         self.stereo_quality_label.value = t["Synthetic View:"]
-        stereo_quality_key = self._display_to_stereo_quality(self.stereo_quality_dd.value)
+        self.stereo_quality_label.visible = False
         self.stereo_quality_dd.options = self._stereo_quality_options()
-        self.stereo_quality_dd.value = self._stereo_quality_to_display(stereo_quality_key)
+        self.stereo_quality_dd.value = self._stereo_quality_to_display(
+            self._stereo_quality_for_preset(preset_key))
+        self.stereo_quality_dd.visible = False
         self.max_shift_label.value = t["Max Shift Ratio:"]
         self.temporal_strength_label.value = t["Temporal Strength:"]
         self.scene_reset_label.value = t["Scene Threshold:"]
@@ -676,7 +679,6 @@ class GUIHandlerMixin:
             (self.depth_strength_dd, "tooltip_depth_strength"),
             (self.depth_quick_dd, "tooltip_depth_quick"),
             (self.stereo_preset_dd, "tooltip_stereo_preset"),
-            (self.stereo_quality_dd, "tooltip_stereo_quality"),
             (self.max_shift_dd, "tooltip_max_shift"),
             (self.temporal_strength_dd, "tooltip_temporal_strength"),
             (self.scene_reset_dd, "tooltip_scene_reset"),
@@ -923,21 +925,23 @@ class GUIHandlerMixin:
         self.stereo_quality_dd.value = self._stereo_quality_to_display(values["quality"])
         self.depth_strength_dd.value = f"{values['depth_strength']:.1f}"
         self.depth_quick_dd.value = self._depth_quick_to_display(values["depth_quick"])
-        self.convergence_dd.value = f"{values['convergence']:.2f}".rstrip("0").rstrip(".")
+        self.convergence_dd.value = f"{values['convergence']:.2f}"
         self.max_shift_dd.value = f"{values['max_shift_ratio']:.2f}"
         self.stereo_scale_dd.value = f"{values['stereo_scale']:.1f}"
         self.temporal_strength_dd.value = f"{values['temporal_strength']:.2f}"
+        self.scene_reset_dd.value = f"{values['scene_reset_threshold']:.2f}"
+        self.reset_cooldown_dd.value = str(values["reset_cooldown_frames"])
         self.foreground_scale_dd.value = f"{values['foreground_scale']:.1f}"
         self.antialiasing_dd.value = str(values["antialiasing"])
         self.edge_dilation_dd.value = str(values["edge_dilation"])
         self.mask_feather_dd.value = str(values["mask_feather_radius"])
         self.hole_fill_mode_dd.value = self._hole_fill_mode_to_display(values["hole_fill_mode"])
         self.edge_threshold_dd.value = f"{values['edge_threshold']:.2f}"
-        self.cross_eyed_cb.value = False
+        self.cross_eyed_cb.value = bool(values.get("cross_eyed", False))
         for ctrl in (
             self.stereo_quality_dd, self.depth_strength_dd, self.depth_quick_dd,
-            self.convergence_dd, self.max_shift_dd, self.temporal_strength_dd,
-            self.foreground_scale_dd, self.antialiasing_dd, self.edge_dilation_dd,
+            self.convergence_dd, self.max_shift_dd, self.stereo_scale_dd, self.temporal_strength_dd,
+            self.scene_reset_dd, self.reset_cooldown_dd, self.foreground_scale_dd, self.antialiasing_dd, self.edge_dilation_dd,
             self.mask_feather_dd, self.edge_threshold_dd, self.hole_fill_mode_dd, self.cross_eyed_cb,
         ):
             self._safe_update(ctrl)

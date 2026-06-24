@@ -313,15 +313,15 @@ Model List:
     resolutions:
     - 1536
 Depth Model: Distill-Any-Depth-Base
-Depth Strength: 3.5
-Depth Quick: Enhanced
+Depth Strength: 2.5
+Depth Quick: Standard
 Depth Resolution: 518
 Anti-aliasing: 1
 Depth Antialias Strength: 1.0
-Foreground Scale: 0.5
+Foreground Scale: 0.0
 IPD: 0.032
-Convergence: 0.25
-Stereo Scale: 0.3
+Convergence: 0.0
+Stereo Scale: 0.4
 Stereo Preset: cinema
 Stereo Quality: quality_4k
 Max Shift Ratio: 0.03
@@ -332,7 +332,7 @@ Scene Reset Threshold: 0.22
 Reset Cooldown Frames: 3
 Edge Dilation: 2
 Mask Feather Radius: 3
-Hole Fill Mode: soft_low_ghost
+Hole Fill Mode: balanced
 Hole Fill Radius: 3
 Hole Fill Strength: 1.0
 Edge Threshold: 0.04

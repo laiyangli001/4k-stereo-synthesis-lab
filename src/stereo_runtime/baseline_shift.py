@@ -14,8 +14,8 @@ class ShiftParams:
     convergence: float = 0.0
     ipd: float = 0.064
     max_shift_ratio: float = 0.05
-    ipd_mm: float | None = 64.0
-    stereo_scale: float = 0.5
+    ipd_mm: float | None = 32.0
+    stereo_scale: float = 0.4
 
 
 _GRID_CACHE: dict[tuple[int, int, int, str, torch.dtype], torch.Tensor] = {}

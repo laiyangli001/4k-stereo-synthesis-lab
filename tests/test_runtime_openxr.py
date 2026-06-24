@@ -67,15 +67,15 @@ def test_openxr_rgb_depth_debug_info_carries_stereo_scale_and_max_shift():
 
     result = runtime.process_openxr_frame(
         rgb,
-        OpenXRRenderConfig(ipd=0.064, stereo_scale=0.5, depth_strength=2.0, max_shift_ratio=0.0),
+        OpenXRRenderConfig(ipd=0.064, stereo_scale=0.35, depth_strength=2.0, max_shift_ratio=0.0),
     )
 
     assert result.debug_info["openxr_ipd"] == 0.064
-    assert result.debug_info["openxr_stereo_scale"] == 0.5
+    assert result.debug_info["openxr_stereo_scale"] == 0.35
     assert result.debug_info["openxr_max_shift_ratio"] == 0.0
 
 
-def test_openxr_rgb_depth_viewer_keeps_physical_ipd_and_stores_stereo_scale():
+def test_openxr_rgb_depth_viewer_keeps_ipd_separate_from_stereo_scale():
     source = (ROOT / "src" / "xr_viewer" / "core_runtime_eye.py").read_text(encoding="utf-8")
 
     assert 'self.ipd_uv = max(0.0, float(debug_info["openxr_ipd"]))' in source

@@ -31,16 +31,16 @@ def make_inputs(width=64, height=32):
     return rgb, depth
 
 
-def test_shift_params_use_physical_ipd_with_stereo_scale():
+def test_shift_params_use_runtime_ipd_mm_with_stereo_scale():
     depth = torch.ones(1, 1, 1, 1)
-    physical = compute_shift_px(depth, 1000, ShiftParams(depth_strength=1.0, convergence=0.0, ipd_mm=64.0, stereo_scale=0.5, max_shift_ratio=0.05))
-    legacy_equivalent = compute_shift_px(depth, 1000, ShiftParams(depth_strength=1.0, convergence=0.0, ipd=0.032, ipd_mm=None, max_shift_ratio=0.05))
-    assert torch.allclose(physical, legacy_equivalent)
+    runtime_ipd_scaled = compute_shift_px(depth, 1000, ShiftParams(depth_strength=1.0, convergence=0.0, ipd_mm=32.0, stereo_scale=0.35, max_shift_ratio=0.05))
+    direct_effective_baseline = compute_shift_px(depth, 1000, ShiftParams(depth_strength=1.0, convergence=0.0, ipd=0.0112, ipd_mm=None, max_shift_ratio=0.05))
+    assert torch.allclose(runtime_ipd_scaled, direct_effective_baseline)
 
 
 def test_convergence_zeroes_shift_at_screen_plane():
     depth = torch.full((1, 1, 2, 2), 0.45)
-    shift = compute_shift_px(depth, 3840, ShiftParams(convergence=0.45, ipd_mm=64.0, stereo_scale=0.5))
+    shift = compute_shift_px(depth, 3840, ShiftParams(convergence=0.45, ipd_mm=32.0, stereo_scale=0.35))
     assert torch.count_nonzero(shift) == 0
 
 def test_normal_sbs_eye_order_uses_left_then_right_views():
@@ -52,8 +52,8 @@ def test_normal_sbs_eye_order_uses_left_then_right_views():
         fused=False,
         depth_strength=2.0,
         convergence=0.0,
-        ipd_mm=64.0,
-        stereo_scale=0.5,
+        ipd_mm=32.0,
+        stereo_scale=0.35,
         max_shift_ratio=0.05,
     )
     result = synthesize_stereo(rgb, depth, config)
@@ -78,7 +78,7 @@ def test_normal_sbs_eye_order_uses_left_then_right_views():
     assert torch.equal(result.sbs[..., :, 64:], expected_right)
 
 
-def test_layered_quality_uses_physical_ipd_with_stereo_scale():
+def test_layered_quality_uses_runtime_ipd_mm_with_stereo_scale():
     rgb, depth = make_inputs(width=64, height=32)
     config = StereoConfig(
         backend="quality_4k",
@@ -89,8 +89,8 @@ def test_layered_quality_uses_physical_ipd_with_stereo_scale():
         fused=False,
         depth_strength=1.0,
         convergence=0.0,
-        ipd_mm=64.0,
-        stereo_scale=0.5,
+        ipd_mm=32.0,
+        stereo_scale=0.35,
         max_shift_ratio=0.05,
     )
 
@@ -121,7 +121,7 @@ def test_zero_stereo_scale_bypasses_all_binocular_difference(backend):
         fused=False,
         depth_strength=10.0,
         convergence=0.0,
-        ipd_mm=64.0,
+        ipd_mm=32.0,
         stereo_scale=0.0,
         max_shift_ratio=0.10,
         debug_output=True,

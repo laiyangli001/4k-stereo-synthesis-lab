@@ -8,8 +8,8 @@ from stereo_runtime.openxr_state import OpenXRStateController
 def make_runtime():
     return SimpleNamespace(
         stereo_config=SimpleNamespace(
-            ipd_mm=64.0,
-            stereo_scale=1.2,
+            ipd_mm=32.0,
+            stereo_scale=0.4,
             max_shift_ratio=0.04,
         )
     )
@@ -68,15 +68,15 @@ def test_openxr_runtime_config_update_and_render_config():
         ipd=0.065,
         depth_ratio=2.0,
         convergence=0.7,
-        stereo_scale=0.75,
+        stereo_scale=0.35,
         max_shift_ratio=0.055,
         screen_roll=0.1,
     )
     config = state.current_render_config(make_runtime())
 
     assert config.ipd == 0.065
-    assert config.ipd_mm == 64.0
-    assert config.stereo_scale == 0.75
+    assert config.ipd_mm == 32.0
+    assert config.stereo_scale == 0.35
     assert config.depth_strength == 2.0
     assert config.convergence == 0.7
     assert config.max_shift_ratio == 0.055
@@ -93,7 +93,7 @@ def test_openxr_runtime_config_falls_back_to_runtime_stereo_config():
 
     config = state.current_render_config(make_runtime())
 
-    assert config.stereo_scale == 1.2
+    assert config.stereo_scale == 0.4
     assert config.max_shift_ratio == 0.04
 
 
@@ -103,11 +103,11 @@ def test_openxr_runtime_config_can_initialize_stereo_scale_and_max_shift():
         ipd=0.064,
         depth_ratio=1.0,
         convergence=0.5,
-        stereo_scale=0.5,
+        stereo_scale=0.35,
         max_shift_ratio=0.05,
     )
 
     config = state.current_render_config(make_runtime())
 
-    assert config.stereo_scale == 0.5
+    assert config.stereo_scale == 0.35
     assert config.max_shift_ratio == 0.05

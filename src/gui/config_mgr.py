@@ -71,10 +71,10 @@ class GUIConfigMixin:
         self.foreground_scale_dd.value = str(self._clamp_foreground_scale(
             cfg.get("Foreground Scale", DEFAULTS["Foreground Scale"])))
         self.convergence_dd.value = str(cfg.get("Convergence", DEFAULTS["Convergence"]))
-        self.stereo_preset_dd.value = self._preset_to_display(
-            cfg.get("Stereo Preset", DEFAULTS["Stereo Preset"]))
+        stereo_preset = self._display_to_preset(cfg.get("Stereo Preset", DEFAULTS["Stereo Preset"]))
+        self.stereo_preset_dd.value = self._preset_to_display(stereo_preset)
         self.stereo_quality_dd.value = self._stereo_quality_to_display(
-            cfg.get("Stereo Quality", cfg.get("Synthetic View", DEFAULTS["Stereo Quality"])))
+            self._stereo_quality_for_preset(stereo_preset))
         self.max_shift_dd.value = f'{self._parse_float(cfg.get("Max Shift Ratio", DEFAULTS["Max Shift Ratio"]), DEFAULTS["Max Shift Ratio"]):.2f}'
         self.temporal_strength_dd.value = f'{self._parse_float(cfg.get("Temporal Strength", DEFAULTS["Temporal Strength"]), DEFAULTS["Temporal Strength"]):.2f}'
         self.edge_dilation_dd.value = str(cfg.get("Edge Dilation", DEFAULTS["Edge Dilation"]))
@@ -185,14 +185,17 @@ class GUIConfigMixin:
         accelerator_values, recompile_values = self._platform_accelerator_values()
         fp16_value = False if "MPS" in (self.device_dd.value or "") else bool(self.fp16_cb.value)
 
+        stereo_preset = self._display_to_preset(self.stereo_preset_dd.value)
+        stereo_quality = self._stereo_quality_for_preset(stereo_preset)
+
         self._config.update({
             "Capture Mode": self.capture_mode_key,
             "Monitor Index": monitor_idx,
             "Window Title": self.selected_window_name if self.capture_mode_key == "Window" else "",
             "Show FPS": self.showfps_cb.value,
-            "Stereo Preset": self._display_to_preset(self.stereo_preset_dd.value),
-            "Stereo Quality": self._display_to_stereo_quality(self.stereo_quality_dd.value),
-            "Synthetic View": self._display_to_stereo_quality(self.stereo_quality_dd.value),
+            "Stereo Preset": stereo_preset,
+            "Stereo Quality": stereo_quality,
+            "Synthetic View": stereo_quality,
             "IPD": self._display_ipd_mm_to_runtime_m(self.ipd_dd.value),
             "Stereo Scale": self._parse_float(self.stereo_scale_dd.value, DEFAULTS["Stereo Scale"]),
             "Convergence": self._parse_float(self.convergence_dd.value, DEFAULTS["Convergence"]),
@@ -286,10 +289,13 @@ class GUIConfigMixin:
         antialias_strength = self._parse_float(self.antialiasing_dd.value, DEFAULTS["Depth Antialias Strength"])
         foreground_scale = self._clamp_foreground_scale(self._parse_float(self.foreground_scale_dd.value, DEFAULTS["Foreground Scale"]))
         self.foreground_scale_dd.value = f"{foreground_scale:.1f}"
+        stereo_preset = self._display_to_preset(self.stereo_preset_dd.value)
+        stereo_quality = self._stereo_quality_for_preset(stereo_preset)
+
         cfg.update({
-            "Stereo Preset": self._display_to_preset(self.stereo_preset_dd.value),
-            "Stereo Quality": self._display_to_stereo_quality(self.stereo_quality_dd.value),
-            "Synthetic View": self._display_to_stereo_quality(self.stereo_quality_dd.value),
+            "Stereo Preset": stereo_preset,
+            "Stereo Quality": stereo_quality,
+            "Synthetic View": stereo_quality,
             "IPD": self._display_ipd_mm_to_runtime_m(self.ipd_dd.value),
             "Stereo Scale": self._parse_float(self.stereo_scale_dd.value, DEFAULTS["Stereo Scale"]),
             "Convergence": self._parse_float(self.convergence_dd.value, DEFAULTS["Convergence"]),
@@ -322,32 +328,56 @@ class GUIConfigMixin:
 
     @staticmethod
     def _stereo_preset_gui_values(preset):
-        return {
+        presets = {
+            "traditional_fastest": {
+                "quality": "fast", "depth_strength": 2.5, "depth_quick": "Standard",
+                "convergence": 0.0, "max_shift_ratio": 0.03, "stereo_scale": 0.4,
+                "temporal_strength": 0.0, "scene_reset_threshold": 0.22, "reset_cooldown_frames": 3,
+                "foreground_scale": 0.0, "antialiasing": 0, "depth_antialias_strength": 0.0,
+                "edge_dilation": 0, "mask_feather_radius": 0, "hole_fill_mode": "balanced", "edge_threshold": 0.04,
+                "cross_eyed": False,
+            },
             "cinema": {
-                "quality": "quality_4k", "depth_strength": 3.5, "depth_quick": "Enhanced",
-                "convergence": 0.25, "max_shift_ratio": 0.03, "stereo_scale": 0.3,
-                "temporal_strength": 0.7, "foreground_scale": 0.5, "antialiasing": 1,
-                "edge_dilation": 2, "mask_feather_radius": 3, "hole_fill_mode": "soft_low_ghost", "edge_threshold": 0.04,
+                "quality": "quality_4k", "depth_strength": 2.5, "depth_quick": "Standard",
+                "convergence": 0.0, "max_shift_ratio": 0.03, "stereo_scale": 0.4,
+                "temporal_strength": 0.7, "scene_reset_threshold": 0.22, "reset_cooldown_frames": 3,
+                "foreground_scale": 0.0, "antialiasing": 1, "depth_antialias_strength": 1.0,
+                "edge_dilation": 2, "mask_feather_radius": 3, "hole_fill_mode": "balanced", "edge_threshold": 0.04,
+                "cross_eyed": False,
             },
             "game_low_latency": {
-                "quality": "fast_plus", "depth_strength": 2.5, "depth_quick": "Soft",
-                "convergence": 0.25, "max_shift_ratio": 0.03, "stereo_scale": 0.3,
-                "temporal_strength": 0.25, "foreground_scale": 0.0, "antialiasing": 0,
+                "quality": "fast_plus", "depth_strength": 2.0, "depth_quick": "Soft",
+                "convergence": 0.0, "max_shift_ratio": 0.03, "stereo_scale": 0.4,
+                "temporal_strength": 0.25, "scene_reset_threshold": 0.18, "reset_cooldown_frames": 2,
+                "foreground_scale": 0.0, "antialiasing": 0, "depth_antialias_strength": 0.0,
                 "edge_dilation": 1, "mask_feather_radius": 3, "hole_fill_mode": "soft_low_ghost", "edge_threshold": 0.04,
+                "cross_eyed": False,
             },
             "still_image_hq": {
                 "quality": "hq_4k", "depth_strength": 3.0, "depth_quick": "Enhanced",
-                "convergence": 0.25, "max_shift_ratio": 0.03, "stereo_scale": 0.3,
-                "temporal_strength": 0.00, "foreground_scale": 0.5, "antialiasing": 2,
-                "edge_dilation": 3, "mask_feather_radius": 3, "hole_fill_mode": "balanced", "edge_threshold": 0.04,
+                "convergence": 0.0, "max_shift_ratio": 0.03, "stereo_scale": 0.4,
+                "temporal_strength": 0.0, "scene_reset_threshold": 0.00, "reset_cooldown_frames": 3,
+                "foreground_scale": 0.0, "antialiasing": 2, "depth_antialias_strength": 2.0,
+                "edge_dilation": 3, "mask_feather_radius": 3, "hole_fill_mode": "sharp_test", "edge_threshold": 0.04,
+                "cross_eyed": False,
             },
             "debug_export": {
-                "quality": "quality_4k", "depth_strength": 3.5, "depth_quick": "Enhanced",
-                "convergence": 0.25, "max_shift_ratio": 0.03, "stereo_scale": 0.3,
-                "temporal_strength": 0.7, "foreground_scale": 0.0, "antialiasing": 0,
+                "quality": "quality_4k", "depth_strength": 3.0, "depth_quick": "Enhanced",
+                "convergence": 0.0, "max_shift_ratio": 0.03, "stereo_scale": 0.4,
+                "temporal_strength": 0.7, "scene_reset_threshold": 0.22, "reset_cooldown_frames": 3,
+                "foreground_scale": 0.0, "antialiasing": 0, "depth_antialias_strength": 0.0,
                 "edge_dilation": 2, "mask_feather_radius": 3, "hole_fill_mode": "balanced", "edge_threshold": 0.04,
+                "cross_eyed": False,
             },
-        }.get(preset)
+        }
+        return presets.get(preset)
+
+    @classmethod
+    def _stereo_quality_for_preset(cls, preset):
+        values = cls._stereo_preset_gui_values(preset)
+        if values:
+            return values["quality"]
+        return DEFAULTS["Stereo Quality"]
 
     _IPD_RUNTIME_PER_DISPLAY_MM = 30.0 / 60.0
 
@@ -440,10 +470,11 @@ class GUIConfigMixin:
     @staticmethod
     def _display_to_preset(value):
         mapping = {
+            "Traditional / Fastest": "traditional_fastest", "传统 / 速度最快": "traditional_fastest",
             "Cinema": "cinema", "Cinema / Balance": "cinema", "影院": "cinema", "电影 / 偏均衡": "cinema",
             "Game / Low Latency": "game_low_latency", "游戏 / 低延迟": "game_low_latency",
             "Image  / High Quality": "still_image_hq", "图片 / 高质量": "still_image_hq",
-            "Debug / Export": "debug_export", "调试 / 导出": "debug_export",
+            "Debug / Export": "cinema", "调试 / 导出": "cinema",
         }
         return mapping.get(value, str(value or "cinema").strip().lower())
 

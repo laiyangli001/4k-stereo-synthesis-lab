@@ -194,7 +194,7 @@ class GUIBuilderMixin:
             self.stream_proto_label, self.audio_label, self.crf_label,
         ]
         right_labels = [
-            self.ipd_label, self.stereo_quality_label, self.temporal_strength_label,
+            self.ipd_label, self.temporal_strength_label,
             self.reset_cooldown_label, self.edge_threshold_label, self.anaglyph_label,
             self.display_mode_label, self.environment_label,
             self.theme_label, self.stream_quality_label, self.stream_key_label,
@@ -255,9 +255,9 @@ class GUIBuilderMixin:
         self.depth_resolution_label = ft.Text("Depth Resolution:", size=FONT_SIZE, width=S(130))
         self.depth_res_dd = CompactDropdown(options=[], width=S(130))
         self.convergence_label = ft.Text("Convergence:", size=FONT_SIZE, width=S(130))
-        conv_options = [str(i / 4) for i in range(-2, 5)]
+        conv_options = [f"{i / 100:.2f}" for i in range(-50, 101, 5)]
         self.convergence_dd = CompactDropdown(width=S(130),
-            options=[v for v in conv_options], value="0.0",
+            options=[v for v in conv_options], value="0.00",
             on_select=self.on_stereo_hot_param_change)
         self.depth_quick_label = ft.Text("Depth Quick:", size=FONT_SIZE, width=S(130))
         self.depth_quick_dd = CompactDropdown(
@@ -300,23 +300,28 @@ class GUIBuilderMixin:
         self.ipd_dd = CompactDropdown(options=[str(i) for i in range(50, 71)], value="64",
             width=S(130), on_select=self.on_stereo_hot_param_change)
         self.stereo_scale_label = ft.Text("Stereo Scale:", size=FONT_SIZE, width=S(130))
-        self.stereo_scale_dd = CompactDropdown(options=[f"{i / 10:.1f}" for i in range(0, 11)],
-            value="0.5", width=S(130), on_select=self.on_stereo_hot_param_change)
+        self.stereo_scale_dd = CompactDropdown(options=[f"{i / 10:.1f}" for i in range(0, 5)],
+            value="0.4", width=S(130), on_select=self.on_stereo_hot_param_change)
         row3 = ft.Row([
             self.ipd_label, self.ipd_dd,
             ft.Container(width=S(40)), self.stereo_scale_label, self.stereo_scale_dd,
         ], spacing=1)
 
-        # Row 5: Stereo runtime mode and quality
+        # Row 5: Stereo runtime mode. Backend quality is derived from this preset.
         self.stereo_preset_label = ft.Text("Stereo Mode:", size=FONT_SIZE, width=S(130))
         self.stereo_preset_dd = CompactDropdown(
-            options=["Cinema", "Game / Low Latency", "Image  / High Quality", "Debug / Export"],
+            options=["Traditional / Fastest", "Cinema", "Game / Low Latency", "Image  / High Quality"],
             value="Cinema", width=S(130), on_select=self.on_stereo_preset_change)
-        self.stereo_quality_label = ft.Text("Synthetic View:", size=FONT_SIZE, width=S(130))
+        self.stereo_quality_label = ft.Text("Synthetic View:", size=FONT_SIZE, width=0, visible=False)
         self.stereo_quality_dd = CompactDropdown(options=self._stereo_quality_options(),
-            value=self._stereo_quality_to_display("quality_4k"), width=S(130))
+            value=self._stereo_quality_to_display("quality_4k"), width=S(1))
+        self.stereo_quality_dd.visible = False
+        self.hole_fill_mode_label = ft.Text("Hole Fill Mode:", size=FONT_SIZE, width=S(130))
+        self.hole_fill_mode_dd = CompactDropdown(
+            options=self._hole_fill_mode_options(),
+            value=self._hole_fill_mode_to_display("balanced"), width=S(130), on_select=self.on_stereo_hot_param_change)
         stereo_row0 = ft.Row([self.stereo_preset_label, self.stereo_preset_dd,
-            ft.Container(width=S(40)), self.stereo_quality_label, self.stereo_quality_dd], spacing=1)
+            ft.Container(width=S(40)), self.hole_fill_mode_label, self.hole_fill_mode_dd], spacing=1)
 
         self.max_shift_label = ft.Text("Max Shift Ratio:", size=FONT_SIZE, width=S(130))
         self.max_shift_dd = CompactDropdown(options=[f"{i / 100:.2f}" for i in range(0, 11)],
@@ -347,11 +352,6 @@ class GUIBuilderMixin:
         self.edge_threshold_label = ft.Text("Edge Threshold:", size=FONT_SIZE, width=S(130))
         self.edge_threshold_dd = CompactDropdown(options=[f"{i / 100:.2f}" for i in range(0, 11)],
             value="0.04", width=S(130), on_select=self.on_stereo_hot_param_change)
-        self.hole_fill_mode_label = ft.Text("Hole Fill Mode:", size=FONT_SIZE, width=S(130))
-        self.hole_fill_mode_dd = CompactDropdown(
-            options=["Balanced", "Soft / Low Ghost", "Sharp Test"],
-            value="Balanced", width=S(130), on_select=self.on_stereo_hot_param_change)
-        hole_fill_mode_row = ft.Row([self.hole_fill_mode_label, self.hole_fill_mode_dd], spacing=1)
         stereo_row3b = ft.Row([self.edge_threshold_label, self.edge_threshold_dd], spacing=1)
 
         self.cross_eyed_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT,
@@ -509,7 +509,7 @@ class GUIBuilderMixin:
 
         # Assembly
         depth_group = ft.Container(
-            ft.Column([row0, row1, stereo_row0, hole_fill_mode_row, convergence_depth_row, row2b, row3,
+            ft.Column([row0, row1, stereo_row0, convergence_depth_row, row2b, row3,
                        stereo_row1, stereo_row2, stereo_row3, stereo_row4,
                        self.row4a, self.row4b, self.row4c, advanced_stereo_row], spacing=S(8)),
             margin=ft.Margin(0, 0, 0, S(8)),
