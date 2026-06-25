@@ -310,6 +310,12 @@ def _normalize_hole_fill_mode(value: Any) -> tuple[str, int, float]:
         "soft_low_ghost": ("soft_low_ghost", 1, 0.6),
         "sharp": ("sharp_test", 1, 1.0),
         "sharp_test": ("sharp_test", 1, 1.0),
+        "quality": ("quality", 3, 1.0),
+        "highest_quality": ("quality", 3, 1.0),
+        "content_aware": ("quality", 3, 1.0),
+        "content_aware_highest_quality": ("quality", 3, 1.0),
+        "directional": ("quality", 3, 1.0),
+        "directional_content_aware": ("quality", 3, 1.0),
     }
     return mapping.get(key, ("balanced", 3, 1.0))
 
@@ -321,6 +327,9 @@ def _normalize_hole_fill_mode_key(value: Any) -> str:
         ("柔和", "soft"),
         ("均衡", "balanced"),
         ("锐利测试", "sharp test"),
+        ("最高质量", "highest quality"),
+        ("内容感知", "content aware"),
+        ("方向", "directional"),
     ):
         text = text.replace(old, new)
     for ch in ("-", "/", "+", "\\", "|", "(", ")", "[", "]"):

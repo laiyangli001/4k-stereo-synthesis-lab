@@ -335,6 +335,25 @@ def test_runtime_config_hole_fill_mode_overrides_legacy_radius_strength_values()
     assert stereo.hole_fill_strength == 1.0
 
 
+def test_runtime_config_accepts_content_aware_highest_quality_hole_fill_label():
+    config = runtime_config_from_d2s_settings(
+        {
+            "Depth Model": "Distill-Any-Depth-Base",
+            "Hole Fill Mode": "内容感知 / 最高质量",
+            "Hole Fill Radius": 1,
+            "Hole Fill Strength": 0.4,
+        }
+    )
+    stereo = stereo_config_from_runtime(config)
+
+    assert config.hole_fill_mode == "quality"
+    assert config.hole_fill_radius == 3
+    assert config.hole_fill_strength == 1.0
+    assert stereo.hole_fill_mode == "quality"
+    assert stereo.hole_fill_radius == 3
+    assert stereo.hole_fill_strength == 1.0
+
+
 def test_runtime_config_profile_sync_defaults_off_and_maps_setting():
     base = {"Depth Model": "Distill-Any-Depth-Base", "TensorRT": True}
 

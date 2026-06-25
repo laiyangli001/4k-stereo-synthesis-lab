@@ -420,9 +420,10 @@ def test_hole_fill_mode_gui_control_is_localized_and_hot_reloadable():
     assert '"Hole Fill Mode": self._display_to_hole_fill_mode(self.hole_fill_mode_dd.value)' in config_mgr_text
     assert 'self.hole_fill_mode_label.value = t["Hole Fill Mode:"]' in handlers_text
     assert '(self.hole_fill_mode_dd, "tooltip_hole_fill_mode")' in handlers_text
-    assert 'HOLE_FILL_MODE_KEYS = ("balanced", "soft_low_ghost", "sharp_test")' in localization_text
+    assert 'HOLE_FILL_MODE_KEYS = ("balanced", "soft_low_ghost", "sharp_test", "quality")' in localization_text
     assert '"Balanced / Standard": "均衡 / 标准"' in localization_text
     assert '"Sharp / High Detail": "锐利 / 高细节"' in localization_text
+    assert '"Content Aware / Highest Quality": "内容感知 / 最高质量"' in localization_text
     assert '"Hole Fill Mode:": "补洞模式:"' in localization_text
 
 
@@ -458,13 +459,20 @@ def test_hole_fill_mode_labels_are_balanced_and_legacy_compatible():
     namespace = {"MappingProxyType": MappingProxyType}
     exec(compile(module, str(_localization_source()), "exec"), namespace)
 
-    assert namespace["hole_fill_mode_options"]("EN") == ["Balanced / Standard", "Soft / Low Ghost", "Sharp / High Detail"]
-    assert namespace["hole_fill_mode_options"]("CN") == ["均衡 / 标准", "柔和 / 低重影", "锐利 / 高细节"]
+    assert namespace["hole_fill_mode_options"]("EN") == [
+        "Balanced / Standard",
+        "Soft / Low Ghost",
+        "Sharp / High Detail",
+        "Content Aware / Highest Quality",
+    ]
+    assert namespace["hole_fill_mode_options"]("CN") == ["均衡 / 标准", "柔和 / 低重影", "锐利 / 高细节", "内容感知 / 最高质量"]
     assert namespace["display_to_hole_fill_mode"]("Balanced / Standard") == "balanced"
     assert namespace["display_to_hole_fill_mode"]("均衡 / 标准") == "balanced"
     assert namespace["display_to_hole_fill_mode"]("Balanced") == "balanced"
     assert namespace["display_to_hole_fill_mode"]("锐利测试") == "sharp_test"
     assert namespace["display_to_hole_fill_mode"]("Sharp Test") == "sharp_test"
+    assert namespace["display_to_hole_fill_mode"]("内容感知 / 最高质量") == "quality"
+    assert namespace["display_to_hole_fill_mode"]("Content Aware / Highest Quality") == "quality"
 
 
 def test_model_backbone_size_dropdown_has_own_tooltip():
