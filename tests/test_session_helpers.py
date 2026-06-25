@@ -44,13 +44,32 @@ def test_stereo_warmup_tracker_deduplicates_by_frame_key():
     assert tracker.key_for_frame(FakeFrame())[0] == (3, 32, 32)
 
 
-def test_stereo_warmup_tracker_skips_openxr_direct():
+def test_stereo_warmup_tracker_skips_openxr_direct_without_full_synthesis_preset():
     runtime = FakeRuntime()
-    tracker = StereoWarmupTracker(runtime, run_mode="OpenXR", openxr_runtime_direct=True)
+    tracker = StereoWarmupTracker(
+        runtime,
+        run_mode="OpenXR",
+        openxr_runtime_direct=True,
+        active_preset="traditional_fastest",
+    )
 
     tracker.warmup_once_for_frame(FakeFrame())
 
     assert runtime.warmup_calls == 0
+
+
+def test_stereo_warmup_tracker_runs_for_openxr_full_synthesis_preset():
+    runtime = FakeRuntime()
+    tracker = StereoWarmupTracker(
+        runtime,
+        run_mode="OpenXR",
+        openxr_runtime_direct=True,
+        active_preset="cinema",
+    )
+
+    tracker.warmup_once_for_frame(FakeFrame())
+
+    assert runtime.warmup_calls == 1
 
 
 def test_stereo_runtime_logger_deduplicates_mode_logs(capsys):

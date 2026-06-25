@@ -9,7 +9,12 @@ import torch
 
 from .baseline_shift import ShiftParams, compute_shift_px, synthesize_baseline, warp_horizontal
 from .depth_postprocess import postprocess_depth
-from .hole_fill import directional_edge_aware_fill, directional_edge_aware_fill_backend
+from .hole_fill import (
+    directional_edge_aware_fill,
+    directional_edge_aware_fill_backend,
+    edge_aware_fill,
+    edge_aware_fill_backend,
+)
 from .layers import composite_layers, make_depth_layers
 from .occlusion import make_occlusion_mask, occlusion_backend
 from .output import AnaglyphMethod, OutputFormat, ensure_bchw, make_sbs, match_depth, sbs_backend
@@ -18,7 +23,7 @@ from .temporal import TemporalState, apply_temporal, detect_scene_change
 
 Backend = Literal["fast", "fast_plus", "quality_4k", "hq_4k"]
 HoleFill = Literal["none", "fast", "edge_aware"]
-HoleFillMode = Literal["balanced", "soft_low_ghost", "sharp_test"]
+HoleFillMode = Literal["balanced", "soft_low_ghost", "sharp_test", "quality", "content_aware", "directional"]
 
 
 @dataclass
@@ -142,17 +147,39 @@ def _layered_synthesis(rgb: torch.Tensor, depth: torch.Tensor, config: StereoCon
             strength = 0.65
         eyes = torch.cat([left, right], dim=0)
         fill_mask = mask.expand(eyes.shape[0], -1, -1, -1)
-        hole_fill_backend = directional_edge_aware_fill_backend()
-        eyes = directional_edge_aware_fill(
-            eyes,
-            fill_mask,
-            depth=depth,
-            shift_px=base_shift,
-            radius=radius,
-            strength=strength,
-            mask_feather_radius=config.mask_feather_radius,
-            depth_edge_threshold=config.edge_threshold,
-        )
+        use_directional_fill = str(config.hole_fill_mode).strip().lower() in {
+            "quality",
+            "content_aware",
+            "directional",
+        }
+        if use_directional_fill:
+            hole_fill_backend = directional_edge_aware_fill_backend()
+            eyes = directional_edge_aware_fill(
+                eyes,
+                fill_mask,
+                depth=depth,
+                shift_px=base_shift,
+                radius=radius,
+                strength=strength,
+                mask_feather_radius=config.mask_feather_radius,
+                depth_edge_threshold=config.edge_threshold,
+            )
+        else:
+            hole_fill_backend = edge_aware_fill_backend(
+                eyes,
+                fill_mask,
+                radius=radius,
+                strength=strength,
+                fused=config.fused,
+            )
+            eyes = edge_aware_fill(
+                eyes,
+                fill_mask,
+                radius=radius,
+                strength=strength,
+                fused=config.fused,
+                mask_feather_radius=config.mask_feather_radius,
+            )
         left, right = eyes.chunk(2, dim=0)
 
     stage_times["hole_fill_ms"] = (time.perf_counter() - stage_start) * 1000.0
@@ -322,4 +349,3 @@ def synthesize_stereo(
     if not config.debug_output:
         debug = {k: v for k, v in debug.items() if isinstance(v, (float, int, str))}
     return StereoResult(left_eye=left, right_eye=right, sbs=sbs, debug_info=debug)
-

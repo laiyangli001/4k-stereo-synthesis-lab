@@ -170,6 +170,15 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
         value = max(0.0, min(10.0, float(value)))
         return round(value * 10.0) / 10.0
 
+    @property
+    def depth_ratio(self):
+        return self.depth_strength
+
+    @depth_ratio.setter
+    def depth_ratio(self, value):
+        self.depth_strength = self._quantize_depth_strength(value)
+        self._depth_strength_adjust_raw = self.depth_strength
+
     def __init__(
         self,
         ipd=0.064,

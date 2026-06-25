@@ -5,6 +5,10 @@ import time
 from dataclasses import dataclass
 from typing import Callable
 
+from .runtime import openxr_result_from_stereo_result
+
+_OPENXR_FULL_SYNTHESIS_PRESETS = {"cinema", "game_low_latency", "still_image_hq", "debug_export"}
+
 
 @dataclass(frozen=True)
 class RuntimePipelineContext:
@@ -14,6 +18,7 @@ class RuntimePipelineContext:
     time_sleep: float
     run_mode: str
     openxr_runtime_direct: bool
+    stereo_active_preset: str | None
     device: object
     use_cudart: bool
     thread_latencies: dict
@@ -37,6 +42,14 @@ class RuntimePipelineContext:
     warmup_stereo_once_for_frame: Callable[[object], None]
     log_fast_plus_fused_runtime_state: Callable[[object], None]
 
+
+
+def _openxr_full_synthesis_enabled(ctx: RuntimePipelineContext) -> bool:
+    if ctx.run_mode != "OpenXR":
+        return False
+    if not ctx.openxr_runtime_direct:
+        return True
+    return str(ctx.stereo_active_preset or "").strip().lower() in _OPENXR_FULL_SYNTHESIS_PRESETS
 
 
 def _rgb_size_text(frame) -> str:
@@ -124,13 +137,15 @@ class RuntimePipelineLoop:
                 ctx.apply_stereo_hot_reload_if_needed()
                 ctx.warmup_stereo_once_for_frame(runtime_rgb)
                 runtime_call_start_time = time.perf_counter()
-                if ctx.run_mode == "OpenXR" and ctx.openxr_runtime_direct:
+                if ctx.run_mode == "OpenXR" and not _openxr_full_synthesis_enabled(ctx):
                     runtime_result = ctx.stereo_runtime.process_openxr_frame(
                         runtime_rgb,
                         ctx.current_openxr_render_config(),
                     )
                 else:
                     runtime_result = ctx.stereo_runtime.process_rgb_frame(runtime_rgb)
+                    if ctx.run_mode == "OpenXR":
+                        runtime_result = openxr_result_from_stereo_result(runtime_result)
                 ctx.breakdown_add_time("rt_call", time.perf_counter() - runtime_call_start_time)
                 ctx.breakdown_add_runtime_timing(runtime_result)
                 ctx.log_fast_plus_fused_runtime_state(runtime_result)
@@ -143,13 +158,7 @@ class RuntimePipelineLoop:
                 ctx.thread_latencies["runtime"] = runtime_latency
 
                 queue_put_start_time = time.perf_counter()
-                if ctx.run_mode == "OpenXR" and not ctx.openxr_runtime_direct:
-                    fallback_depth = runtime_result.depth
-                    if hasattr(fallback_depth, "detach") and fallback_depth.ndim == 4:
-                        fallback_depth = fallback_depth[0, 0]
-                    ctx.queue_put_latest(ctx.runtime_q, ((frame_rgb, fallback_depth), capture_start_time))
-                else:
-                    ctx.queue_put_latest(ctx.runtime_q, (runtime_result, capture_start_time))
+                ctx.queue_put_latest(ctx.runtime_q, (runtime_result, capture_start_time))
                 ctx.breakdown_add_time("rt_put", time.perf_counter() - queue_put_start_time)
                 ctx.breakdown_add_time("rt_loop", time.perf_counter() - loop_start_time)
                 ctx.source_stat_inc(

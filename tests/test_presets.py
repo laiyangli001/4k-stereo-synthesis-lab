@@ -24,22 +24,32 @@ from stereo_runtime.synthesis import StereoConfig
 
 
 def test_preset_choices_are_public_and_stable():
-    assert PRESET_CHOICES == ("auto", "cinema", "game_low_latency", "still_image_hq", "debug_export")
+    assert PRESET_CHOICES == ("auto", "traditional_fastest", "cinema", "game_low_latency", "still_image_hq", "debug_export")
 
 
 def test_stereo_presets_map_to_expected_modes():
+    traditional = stereo_config_for_preset("Traditional / Fastest")
     cinema = stereo_config_for_preset("cinema")
     game = stereo_config_for_preset("game")
     still = stereo_config_for_preset("still image / hq")
     debug = stereo_config_for_preset("debug")
 
+    assert isinstance(traditional, StereoConfig)
+    assert traditional.backend == "fast"
+    assert traditional.temporal is False
+    assert traditional.temporal_strength == 0.0
+    assert traditional.max_shift_ratio == 0.03
+    assert traditional.edge_dilation == 0
+    assert traditional.depth_antialias_strength == 0.0
+
     assert isinstance(cinema, StereoConfig)
     assert cinema.backend == "quality_4k"
     assert cinema.temporal is True
     assert cinema.auto_reset_temporal is True
+    assert cinema.hole_fill_mode == "balanced"
     assert cinema.ipd_mm == StereoConfig().ipd_mm
     assert cinema.stereo_scale < 1.0
-    for config in (cinema, game, still, debug):
+    for config in (traditional, cinema, game, still, debug):
         assert config.convergence == 0.0
         assert config.foreground_scale == 0.0
 
@@ -52,9 +62,11 @@ def test_stereo_presets_map_to_expected_modes():
     assert still.layers == 3
     assert still.temporal is False
     assert still.auto_reset_temporal is False
+    assert still.hole_fill_mode == "quality"
 
     assert debug.debug_output is True
     assert debug.depth_strength >= cinema.depth_strength
+    assert debug.hole_fill_mode == "quality"
 
 
 def test_preset_output_format_and_overrides():
@@ -70,14 +82,17 @@ def test_preset_output_format_and_overrides():
 
 
 def test_openxr_presets_map_shared_stereo_params():
+    traditional = openxr_config_for_preset("traditional_fastest")
     openxr = openxr_config_for_preset("game_low_latency", screen_roll=0.5)
     cinema = openxr_config_for_preset("cinema")
 
+    assert isinstance(traditional, OpenXRRenderConfig)
+    assert traditional.max_shift_ratio == 0.03
     assert isinstance(openxr, OpenXRRenderConfig)
     assert openxr.screen_roll == 0.5
     assert openxr.depth_strength < cinema.depth_strength
     assert openxr.max_shift_ratio <= cinema.max_shift_ratio
-    for config in (openxr, cinema, openxr_config_for_preset("still_image_hq"), openxr_config_for_preset("debug_export")):
+    for config in (traditional, openxr, cinema, openxr_config_for_preset("still_image_hq"), openxr_config_for_preset("debug_export")):
         assert config.convergence == 0.0
 
 
@@ -106,7 +121,8 @@ def test_auto_mode_config_helpers_return_decision_and_config():
 
 def test_preset_summary_is_serializable_shape():
     summary = preset_summary()
-    assert set(summary) == {"cinema", "game_low_latency", "still_image_hq", "debug_export"}
+    assert set(summary) == {"traditional_fastest", "cinema", "game_low_latency", "still_image_hq", "debug_export"}
+    assert summary["traditional_fastest"]["stereo"]["backend"] == "fast"
     assert summary["cinema"]["stereo"]["backend"] == "quality_4k"
     assert "depth_strength" in summary["cinema"]["openxr"]
 
@@ -166,5 +182,6 @@ def test_manual_presets_bypass_auto_runtime_contract():
     assert auto_default.backend == "quality_4k"
     assert auto_default.hole_fill == "edge_aware"
     assert auto_detection_required("auto") is True
+    assert auto_detection_required("traditional_fastest") is False
     assert auto_detection_required("cinema") is False
     assert auto_detection_required("game_low_latency") is False

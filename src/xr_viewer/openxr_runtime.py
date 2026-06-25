@@ -43,6 +43,30 @@ def frame_size_from_eye(first_eye):
     return first_eye.shape[1], first_eye.shape[0]
 
 
+def frame_size_from_runtime_result(runtime_result):
+    debug = getattr(runtime_result, "debug_info", None) or {}
+    display_size = _parse_size_text(debug.get("runtime_output_display_size"))
+    if display_size is not None:
+        return display_size
+    return frame_size_from_eye(runtime_result.left_eye)
+
+
+def _parse_size_text(value):
+    if value is None:
+        return None
+    parts = str(value).strip().lower().split("x", 1)
+    if len(parts) != 2:
+        return None
+    try:
+        width = int(parts[0])
+        height = int(parts[1])
+    except ValueError:
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    return width, height
+
+
 def load_openxr_viewer(environment_model):
     if use_environment_viewer(environment_model):
         from xr_viewer.environment import OPENXR_AVAILABLE, OpenXRViewer
@@ -56,11 +80,11 @@ def load_openxr_viewer(environment_model):
 def run_openxr_mode(runtime_q, config: OpenXRRuntimeConfig, callbacks: OpenXRRuntimeCallbacks):
     OpenXRViewer = load_openxr_viewer(config.environment_model)
     runtime_result, capture_start_time = runtime_q.get()
-    width, height = frame_size_from_eye(runtime_result.left_eye)
+    width, height = frame_size_from_runtime_result(runtime_result)
     try:
         viewer = OpenXRViewer(
             ipd=config.ipd,
-            depth_ratio=config.depth_strength,
+            depth_strength=config.depth_strength,
             convergence=config.convergence,
             frame_size=(width, height),
             fps=config.fps,

@@ -3,12 +3,15 @@ from __future__ import annotations
 import os
 import threading
 
+_OPENXR_FULL_SYNTHESIS_PRESETS = {"cinema", "game_low_latency", "still_image_hq", "debug_export"}
+
 
 class StereoWarmupTracker:
-    def __init__(self, runtime, *, run_mode: str, openxr_runtime_direct: bool):
+    def __init__(self, runtime, *, run_mode: str, openxr_runtime_direct: bool, active_preset: str | None = None):
         self.runtime = runtime
         self.run_mode = run_mode
         self.openxr_runtime_direct = openxr_runtime_direct
+        self.active_preset = active_preset
         self.lock = threading.Lock()
         self.keys = set()
 
@@ -28,7 +31,12 @@ class StereoWarmupTracker:
         )
 
     def warmup_once_for_frame(self, rgb_frame) -> None:
-        if self.run_mode == "OpenXR" and self.openxr_runtime_direct:
+        active_preset = str(self.active_preset or "").strip().lower()
+        if (
+            self.run_mode == "OpenXR"
+            and self.openxr_runtime_direct
+            and active_preset not in _OPENXR_FULL_SYNTHESIS_PRESETS
+        ):
             return
         key = self.key_for_frame(rgb_frame)
         with self.lock:

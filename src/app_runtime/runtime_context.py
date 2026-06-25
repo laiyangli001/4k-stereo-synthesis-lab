@@ -141,6 +141,7 @@ def create_runtime_context(
             stereo_runtime,
             run_mode=run_mode,
             openxr_runtime_direct=openxr_runtime_direct,
+            active_preset=stereo_active_preset,
         ),
         stereo_runtime_logger=StereoRuntimeLogger(
             stereo_runtime,
@@ -227,6 +228,7 @@ def build_runtime_pipeline_context(
         time_sleep=app_context.time_sleep,
         run_mode=run_mode,
         openxr_runtime_direct=app_context.openxr_runtime_direct,
+        stereo_active_preset=getattr(app_context, "stereo_active_preset", None),
         device=device,
         use_cudart=app_context.use_cudart,
         thread_latencies=app_context.thread_latencies,

@@ -191,6 +191,44 @@ def test_layered_hole_fill_mode_controls_radius_and_strength():
     assert result.debug_info["hole_fill_strength"] == 0.6
 
 
+def test_layered_balanced_hole_fill_uses_fast_edge_aware_path():
+    rgb, depth = make_inputs()
+    result = synthesize_stereo(
+        rgb,
+        depth,
+        StereoConfig(
+            backend="quality_4k",
+            output_format="half_sbs",
+            debug_output=True,
+            temporal=False,
+            fused=False,
+            hole_fill_mode="balanced",
+        ),
+    )
+
+    assert result.debug_info["hole_fill_mode"] == "balanced"
+    assert result.debug_info["hole_fill_backend"] == "torch_avg_pool"
+
+
+def test_layered_quality_hole_fill_uses_directional_content_aware_path():
+    rgb, depth = make_inputs()
+    result = synthesize_stereo(
+        rgb,
+        depth,
+        StereoConfig(
+            backend="quality_4k",
+            output_format="half_sbs",
+            debug_output=True,
+            temporal=False,
+            fused=False,
+            hole_fill_mode="quality",
+        ),
+    )
+
+    assert result.debug_info["hole_fill_mode"] == "quality"
+    assert result.debug_info["hole_fill_backend"] == "torch_directional_content_aware"
+
+
 def test_mask_feather_radius_softens_hole_fill_blend():
     image = torch.zeros(1, 3, 9, 9)
     image[:, :, :, 5:] = 1.0
@@ -736,7 +774,7 @@ def test_fused_config_false_uses_torch_backends():
     )
     assert result.debug_info["warp_composite_backend"] == "torch_grid_sample"
     assert result.debug_info["occlusion_mask_backend"] == "torch_max_pool"
-    assert result.debug_info["hole_fill_backend"] == "torch_directional_content_aware"
+    assert result.debug_info["hole_fill_backend"] == "torch_avg_pool"
     assert result.debug_info["sbs_backend"] == "torch_interpolate"
 
     full_result = synthesize_stereo(
@@ -779,7 +817,7 @@ def test_disable_triton_env_uses_torch_backends(monkeypatch: pytest.MonkeyPatch)
     )
     assert result.debug_info["warp_composite_backend"] == "torch_grid_sample"
     assert result.debug_info["occlusion_mask_backend"] == "torch_max_pool"
-    assert result.debug_info["hole_fill_backend"] == "torch_directional_content_aware"
+    assert result.debug_info["hole_fill_backend"] == "torch_avg_pool"
     assert result.debug_info["sbs_backend"] == "torch_interpolate"
 
     full_result = synthesize_stereo(

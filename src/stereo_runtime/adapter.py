@@ -365,6 +365,8 @@ def preset_for_runtime_mode(mode: str) -> str:
     key = str(mode).strip().lower().replace("-", "_")
     mapping = {
         "auto": "auto",
+        "traditional": "traditional_fastest",
+        "traditional_fastest": "traditional_fastest",
         "movie": "cinema",
         "cinema": "cinema",
         "video": "cinema",

@@ -29,6 +29,110 @@ except ImportError:
 
 
 class CoreRuntimeEyeMixin:
+    def _runtime_eye_source_mean(self, frame):
+        try:
+            if hasattr(frame, 'detach'):
+                tensor = frame.detach()
+                mean = float(tensor.float().mean().item())
+                if not tensor.is_floating_point():
+                    mean /= 255.0
+                return mean
+            arr = np.asarray(frame).astype(np.float32, copy=False)
+            if np.issubdtype(np.asarray(frame).dtype, np.integer):
+                arr = arr / 255.0
+            return float(arr.mean())
+        except Exception:
+            return None
+
+    def _log_runtime_eye_stats_once(self, runtime_result, *, upload_path):
+        if getattr(self, '_runtime_eye_stats_logged', False):
+            return
+        self._runtime_eye_stats_logged = True
+
+        def _stats(label, frame):
+            try:
+                if hasattr(frame, 'detach'):
+                    tensor = frame.detach().float()
+                    return (
+                        f"{label}: shape={tuple(frame.shape)} dtype={getattr(frame, 'dtype', 'unknown')} "
+                        f"device={getattr(frame, 'device', 'unknown')} "
+                        f"min={float(tensor.amin().item()):.6f} "
+                        f"max={float(tensor.amax().item()):.6f} "
+                        f"mean={float(tensor.mean().item()):.6f}"
+                    )
+                arr = np.asarray(frame)
+                arr_f = arr.astype(np.float32, copy=False)
+                return (
+                    f"{label}: shape={arr.shape} dtype={arr.dtype} device=cpu "
+                    f"min={float(arr_f.min()):.6f} "
+                    f"max={float(arr_f.max()):.6f} "
+                    f"mean={float(arr_f.mean()):.6f}"
+                )
+            except Exception as exc:
+                return f"{label}: stats unavailable {type(exc).__name__}: {exc}"
+
+        debug = getattr(runtime_result, 'debug_info', {}) or {}
+        print(
+            "[OpenXRViewer] runtime eye stats:"
+            f" upload={upload_path}"
+            f" format={debug.get('runtime_output_format', 'unknown')}"
+            f" runtime_dtype={debug.get('runtime_output_dtype', 'unknown')}"
+            f" eye_size={debug.get('runtime_output_eye_size', 'unknown')}"
+            f" pack={debug.get('runtime_output_pack_backend', 'unknown')}"
+            f" left=({_stats('left', runtime_result.left_eye)})"
+            f" right=({_stats('right', runtime_result.right_eye)})",
+            flush=True,
+        )
+
+    def _verify_runtime_eye_gpu_upload_once(self, eyes, w, h):
+        if getattr(self, '_runtime_eye_gpu_verify_done', False):
+            return True
+        self._runtime_eye_gpu_verify_done = True
+        try:
+            source_mean = self._runtime_eye_source_mean(eyes[0])
+            tex = self._runtime_eye_textures[0]
+            if tex is None:
+                return True
+            data = tex.read()
+            if not data:
+                return True
+            arr = np.frombuffer(data, dtype=np.uint8)
+            if arr.size <= 0:
+                return True
+            texture_mean = float(arr.mean()) / 255.0
+            texture_max = int(arr.max())
+            print(
+                "[OpenXRViewer] runtime eye GPU upload verify:"
+                f" source_mean={source_mean if source_mean is not None else 'unknown'}"
+                f" texture_mean={texture_mean:.6f}"
+                f" texture_max={texture_max}"
+                f" size={w}x{h}",
+                flush=True,
+            )
+            if source_mean is not None and source_mean > 0.02 and texture_mean < 0.002 and texture_max <= 2:
+                self._runtime_eye_gpu_enabled = False
+                self._runtime_eye_gpu_disabled_reason = (
+                    f"runtime eye GPU upload produced black GL texture "
+                    f"(source_mean={source_mean:.6f}, texture_mean={texture_mean:.6f}, texture_max={texture_max})"
+                )
+                try:
+                    self._release_runtime_eye_texture_resources()
+                    self._release_runtime_eye_pbos()
+                except Exception:
+                    pass
+                print(
+                    "[OpenXRViewer] runtime OpenGL GPU upload disabled:"
+                    f" {self._runtime_eye_gpu_disabled_reason}; falling back to CPU GL upload",
+                    flush=True,
+                )
+                return False
+        except Exception as exc:
+            print(
+                f"[OpenXRViewer] runtime eye GPU upload verify skipped: {type(exc).__name__}: {exc}",
+                flush=True,
+            )
+        return True
+
     def _log_runtime_eye_difference_once(self, left_eye, right_eye):
         if getattr(self, '_runtime_eye_diff_logged', False):
             return
@@ -227,7 +331,7 @@ class CoreRuntimeEyeMixin:
             raise RuntimeError(f"Unsupported OpenXR runtime eye shape: {tuple(tensor.shape)}")
         if tensor.is_floating_point():
             max_value = float(tensor.detach().amax().item()) if tensor.numel() else 0.0
-            if max_value <= 1.0:
+            if max_value <= 1.5:
                 tensor = tensor * 255.0
         return tensor.contiguous().clamp(0, 255).to(torch_module.uint8)
 
@@ -270,7 +374,9 @@ class CoreRuntimeEyeMixin:
                 return True
             if texture_gpu_was_enabled and not self._runtime_eye_texture_gpu_enabled:
                 return False
-            return self._update_runtime_frame_pbo_gpu((left, right), w, h)
+            if not self._update_runtime_frame_pbo_gpu((left, right), w, h):
+                return False
+            return self._verify_runtime_eye_gpu_upload_once((left, right), w, h)
         except Exception as e:
             self._runtime_eye_gpu_enabled = False
             self._runtime_eye_gpu_disabled_reason = str(e)
@@ -392,6 +498,9 @@ class CoreRuntimeEyeMixin:
             if not self._runtime_eye_cpu_logged:
                 print(f"[OpenXRViewer] runtime_direct_cpu_gl active {w}x{h}")
                 self._runtime_eye_cpu_logged = True
+            self._log_runtime_eye_stats_once(runtime_result, upload_path='cpu_gl')
+        else:
+            self._log_runtime_eye_stats_once(runtime_result, upload_path='gpu_gl')
         self._runtime_direct_source = True
         self._texture_size = (w, h)
         self.frame_size = (w, h)

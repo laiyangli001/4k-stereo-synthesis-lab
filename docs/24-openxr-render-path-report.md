@@ -2,16 +2,18 @@
 
 ## 目的
 
-本报告阐明旧版 Desktop2Stereo OpenXR 路径的工作方式、当前 OpenXR 路径的差异，以及立体模式在立体运行时重写后应如何映射到渲染路径。
+本报告记录当前 Desktop2Stereo OpenXR 渲染路径的实际实现方式、与旧版 OpenXR 行为的关系，以及各立体模式现在对应的 OpenXR 输出路径。
 
-核心产品目标是：
+当前目标已经从“设计接入方案”更新为“说明已接入路径”：
 
-- 传统立体模式应保留旧版 OpenXR 行为。
-- 影院、游戏和静态图像立体模式在需要 OpenXR 质量输出时，应使用新的完整 `stereo_runtime.synthesize_stereo()` 管线。
+- 传统 / Fastest 保留旧版兼容的 OpenXR RGB+深度 shader 路径。
+- 影院、游戏、静态图像和 debug/export 模式在 OpenXR 下使用完整立体合成 eyes 路径。
+- `D2S_OPENXR_RUNTIME_DIRECT=0` 仍然可以强制 OpenXR 使用完整立体合成 eyes 路径。
+- viewer 协议不变：根据 `runtime_output_format` 区分 RGB+深度和 runtime direct eyes。
 
 ## 旧版 Desktop2Stereo OpenXR 流程
 
-旧版 `Desktop2Stereo_v2.5.0Beta` OpenXR 路径未使用完整的 `make_sbs()` 立体合成路径。
+旧版 `Desktop2Stereo_v2.5.0Beta` OpenXR 路径没有使用完整 `make_sbs()` 立体合成路径。
 
 旧版 OpenXR 流程：
 
@@ -21,7 +23,7 @@ capture
 -> depth_q.put(rgb, depth, timestamp)
 -> OpenXRViewer.run(first_rgb, first_depth)
 -> viewer 上传 RGB 纹理 + 深度纹理
--> OpenXR 着色器从 RGB + 深度生成每眼视差
+-> OpenXR shader 从 RGB + 深度生成每眼视差
 ```
 
 相关旧版行为：
@@ -29,42 +31,50 @@ capture
 - `main.py` 的 OpenXR 分支创建 `OpenXRViewer(ipd=IPD, depth_ratio=DEPTH_STRENGTH, ...)`。
 - 将 `rgb` 和 `depth` 直接传入 `viewer.run()`。
 - OpenXR viewer 在 `_update_frame(rgb, depth)` 中上传 RGB 和深度。
-- viewer 着色器使用 `depth_strength * depth_ratio` 创建立体视差。
-- 旧版 `make_sbs(...)` 路径用于旧版流媒体 / 非 OpenXR 输出，不用于 OpenXR。
+- viewer shader 使用深度参数创建立体视差。
+- 旧版 `make_sbs(...)` 路径用于流媒体 / 非 OpenXR 输出，不用于 OpenXR。
 
-因此，旧版 OpenXR 最佳描述为 RGB+深度着色器路径，而非完整的 SBS 合成路径。
+因此，旧版 OpenXR 最准确的描述是 RGB+深度 shader 路径，而不是完整 SBS 合成路径。
 
-## 当前渲染路径概念
+## 当前 OpenXR 路径总览
 
-当前代码库包含三个不同的概念，不得等同对待：
+当前代码库有三类 OpenXR 输出路径：
 
-1. OpenXR rgb-depth
-2. OpenXR prewarp eyes
-3. OpenXR full stereo synthesis eyes（尚未完全接入）
+1. OpenXR RGB+深度 shader 路径
+2. OpenXR prewarp eyes 路径
+3. OpenXR full stereo synthesis eyes 路径
 
-### 1. OpenXR rgb-depth
+其中第 1 类是传统 / Fastest 的默认兼容路径，第 3 类是影院、游戏、静态图像和 debug/export 的当前质量路径。第 2 类仍是实验 / 兼容路径，不是主要模式映射目标。
 
-这是当前默认的低延迟 OpenXR 路径。
+## 1. OpenXR RGB+深度 shader 路径
+
+这是传统 / Fastest 使用的旧版兼容路径，也是 `D2S_OPENXR_RUNTIME_DIRECT=1` 且当前 active preset 不属于完整合成 preset 时的 direct 路径。
 
 ```text
 runtime:
-RGB -> 深度模型 -> 深度后处理
+RGB -> 深度模型 -> 深度后处理 -> OpenXRRuntimeResult(source_rgb, depth)
 
 viewer:
-RGB + 深度 -> OpenXR 着色器 -> 头显
+source_rgb + depth -> OpenXR shader -> 头显
 ```
 
-该路径消费的参数：
+当前实现要点：
+
+- `RuntimePipelineLoop.run()` 在 OpenXR direct 且未启用 full synthesis 时调用 `stereo_runtime.process_openxr_frame()`。
+- runtime result 的 `debug_info["runtime_output_format"]` 为 `"openxr_rgb_depth"`。
+- viewer 根据该 format 走 RGB+深度上传和 OpenXR shader 视差生成。
+- `OpenXRViewer` 构造参数现在使用 `depth_strength`；旧的 `depth_ratio` 作为兼容 property 映射到 `depth_strength`。
+
+该路径主要消费的参数：
 
 - `depth_strength`
 - `convergence`
 - `ipd` / `ipd_mm`
 - `stereo_scale`
 - `max_shift_ratio`
-- `foreground_scale`
-- `depth_antialias_strength`
+- OpenXR viewer 侧屏幕和显示参数
 
-该路径不消费的参数：
+该路径不完整消费的立体合成参数：
 
 - `temporal_strength`
 - `edge_threshold`
@@ -76,104 +86,91 @@ RGB + 深度 -> OpenXR 着色器 -> 头显
 
 优势：
 
-- 在 OpenXR 路径中延迟最低。
-- 控制器和 GUI 对核心深度参数的变更开销很小。
 - 最接近旧版 OpenXR 行为。
-- 适合交互式调参和实时头显使用。
+- 延迟最低。
+- 适合实时头显使用和交互式调参。
+- 不需要在 runtime 端生成并传输左右眼完整图像。
 
 劣势：
 
-- 未使用完整的立体合成管线。
-- 影院、游戏和静态图像预设仅部分生效。
-- 补洞、边缘膨胀、遮罩羽化和立体时序混合不会影响头显输出。
-
-性能影响：
-
-- 深度推理后的额外开销最低。
-- 大部分开销来自深度模型推理和相对廉价的 viewer 着色器。
+- 不调用完整 `stereo_runtime.synthesize_stereo()`。
+- 补洞、边缘处理、遮罩羽化和时序合成不会完整影响头显输出。
+- 不适合作为影院 / 静态图像等质量优先模式的最终输出路径。
 
 正确用途：
 
-- 传统的 OpenXR 模式。
-- 旧版行为兼容。
-- 低延迟使用场景。
-- 实时控制器深度调节。
+- Traditional / Fastest。
+- 旧版 OpenXR 行为兼容。
+- 低延迟优先场景。
+- OpenXR direct shader 调参。
 
-### 2. OpenXR prewarp eyes
+## 2. OpenXR prewarp eyes 路径
 
-该路径在将图像传递给 viewer 之前，先在 runtime 中生成左右眼图像。
+该路径在 runtime 中先生成左右眼图像，再交给 viewer 上传。
 
 ```text
 runtime:
-RGB + 深度 -> render_openxr_stereo() -> left_eye + right_eye
+RGB + depth -> render_openxr_stereo() -> left_eye + right_eye
 
 viewer:
-上传 left_eye + right_eye -> 头显
+left_eye + right_eye -> runtime direct eye textures -> 头显
 ```
 
-该路径消费的参数：
+当前实现定位：
 
-- `depth_strength`
-- `convergence`
-- `ipd`
-- `stereo_scale`
-- `max_shift_ratio`
-- `screen_roll`
-
-该路径不消费的参数：
-
-- `foreground_scale`
-- `depth_antialias_strength`
-- `temporal_strength`
-- `edge_threshold`
-- `edge_dilation`
-- `mask_feather_radius`
-- `hole_fill_*`
+- `render_openxr_stereo()` 位于 `stereo_runtime.openxr_render`。
+- 它使用 `OpenXRRenderConfig` 中的 `depth_strength`、`convergence`、`ipd`、`stereo_scale`、`max_shift_ratio` 和 `screen_roll`。
+- 它不等同于完整 `synthesize_stereo()` 管线。
+- 当前不是 GUI 立体 preset 的主映射路径。
 
 优势：
 
-- Runtime 拥有 OpenXR 立体 warp 的控制权。
-- Viewer 更接近左右眼纹理展示器。
-- 可用作实验性或兼容性路径。
+- runtime 能控制 OpenXR warp。
+- viewer 更接近左右眼纹理展示器。
+- 可作为 RGB+深度 shader 不适用时的实验路径。
 
 劣势：
 
-- 未调用完整的 `synthesize_stereo()`。
-- 未使影院/游戏/静态图像的完整合成参数生效。
-- 比 rgb-depth 更昂贵，因为需要生成和传输两幅眼图。
-
-性能影响：
-
-- 中等。
-- GPU 和内存带宽开销高于 rgb-depth。
-- 通常不如 rgb-depth 适合快速的交互式调参。
+- 不使用完整立体合成管线。
+- 不完整消费影院 / 游戏 / 静态图像 preset 的补洞、边缘和时序参数。
+- 比 RGB+深度路径更高带宽、更高开销。
 
 正确用途：
 
 - 兼容性实验。
-- 在 viewer 端 RGB+深度着色器行为不可取的情况下使用。
-- 不是全质量立体合成的最终路径。
+- OpenXR warp 算法验证。
+- 不作为当前质量 preset 的主要路径。
 
-### 3. OpenXR full stereo synthesis eyes
+## 3. OpenXR full stereo synthesis eyes 路径
 
-这是新的影院、游戏和静态图像模式所期望的质量路径。尚未完全接入 OpenXR 输出。
-
-目标流程：
+这是当前影院、游戏、静态图像和 debug/export 在 OpenXR 下使用的质量路径。
 
 ```text
 runtime:
-RGB + 深度
--> stereo_runtime.synthesize_stereo()
--> left_eye + right_eye，或将 SBS 分割为眼图
--> OpenXR runtime result
+RGB -> 深度模型 -> stereo_runtime.synthesize_stereo()
+-> StereoRuntimeResult(left_eye, right_eye, sbs, depth)
+-> openxr_result_from_stereo_result()
+-> OpenXRRuntimeResult(left_eye, right_eye, depth)
 
 viewer:
-runtime 直接上传眼图纹理 -> 头显
+left_eye + right_eye -> runtime direct eye textures -> 头显
 ```
 
-该路径应消费的参数：
+当前实现要点：
 
-- `quality_4k` / `fast` / `fast_plus`
+- `RuntimePipelineLoop.run()` 在 OpenXR 且 full synthesis 启用时调用 `stereo_runtime.process_rgb_frame()`。
+- `process_rgb_frame()` 生成普通 `StereoRuntimeResult`，包含 `left_eye`、`right_eye`、`sbs`、`depth`、`timing`、`provider_info` 和 `debug_info`。
+- `openxr_result_from_stereo_result()` 将 `StereoRuntimeResult` 转换为 `OpenXRRuntimeResult`。
+- 对 `quality_4k` / `hq_4k` 等已经生成全尺寸 `left_eye` / `right_eye` 的结果，转换函数保留全尺寸眼图，避免把 3840x2160 错降为 half-SBS 的 1920x2160 单眼纹理。
+- 只有 `fast_plus` fused half-SBS 这类 left/right 不代表最终眼图的结果，才会拆分 `sbs`，并将 `runtime_output_pack_backend` 标记为 `split_half_sbs`。
+- 转换后的 `debug_info["runtime_output_format"]` 为 `"openxr_full_synthesis_eyes"`。
+- 转换函数保留 `timing`、`provider_info`、`depth`，并补充 `runtime_output_dtype`、`runtime_output_eye_size`、`runtime_output_display_size` 和 `runtime_output_pack_backend`。
+- OpenXR viewer 初始化时优先使用 `runtime_output_display_size` 推导虚拟屏幕宽高；即使 fused half-SBS 单眼纹理是 1920x2160，也会按 3840x2160 的 16:9 显示尺寸建屏。
+- OpenXR viewer 继续使用 runtime direct eyes 上传路径，不需要改 viewer 协议。
+
+该路径消费的参数：
+
+- `backend` / `Stereo Quality`：`fast`、`fast_plus`、`quality_4k`、`hq_4k`
 - `depth_strength`
 - `convergence`
 - `ipd` / `ipd_mm`
@@ -188,146 +185,129 @@ runtime 直接上传眼图纹理 -> 头显
 - `hole_fill_mode`
 - `hole_fill_radius`
 - `hole_fill_strength`
+- output packing / runtime uint8 / fast_plus fused 相关参数
 
 优势：
 
-- 使新的立体运行时重写在 OpenXR 中发挥作用。
-- 为影院、游戏和静态图像模式启用全质量处理。
-- 按设计使用遮挡、补洞、边缘处理和时序平滑。
+- OpenXR 现在能直接显示完整立体合成结果。
+- 影院、游戏、静态图像 preset 的补洞、边缘、时序和输出打包逻辑能进入头显输出。
+- 与非 OpenXR viewer 共享 `process_rgb_frame()` / `synthesize_stereo()` 质量路径。
 
 劣势：
 
-- 运行时开销最高。
-- 延迟高于 rgb-depth。
-- 参数变更需要重新计算合成的眼图。
-- 4K 质量模式对于游戏类工作负载可能开销较大。
-
-性能影响：
-
-- 最高。
-- 在深度推理之后增加了完整的合成开销：深度后处理、warp/合成、遮挡 mask、补洞、时序混合以及输出打包/上传。
-- 必须按预设和分辨率分别进行基准测试。
+- 延迟和 GPU / 内存带宽开销高于 RGB+深度 shader 路径。
+- 参数变化需要重新计算左右眼结果。
+- 4K / HQ 配置需要按设备实际性能评估。
 
 正确用途：
 
-- 影院质量模式。
-- 静态图像高质量模式。
-- 游戏模式仅在使用 `fast` 或 `fast_plus` 等低延迟预设并通过性能验证后使用。
+- Cinema。
+- Game / Low Latency，配合 `fast_plus` 或低延迟 preset。
+- Still Image / HQ。
+- Debug / Export。
+- 用户显式设置 `D2S_OPENXR_RUNTIME_DIRECT=0` 时的 OpenXR 输出。
 
-## 当前的接入缺口
+## 当前路径选择逻辑
 
-当前管线包含一个部分回退，可以调用完整合成但未将其最终结果用于 OpenXR 显示。
-
-当前行为：
-
-```python
-if ctx.run_mode == "OpenXR" and ctx.openxr_runtime_direct:
-    runtime_result = ctx.stereo_runtime.process_openxr_frame(...)
-else:
-    runtime_result = ctx.stereo_runtime.process_rgb_frame(...)
-```
-
-当 `openxr_runtime_direct` 为 false 时，`process_rgb_frame()` 确实会运行完整的立体合成。然而，OpenXR 队列当前接收的是 RGB+深度回退数据：
-
-```python
-ctx.queue_put_latest(ctx.runtime_q, ((frame_rgb, fallback_depth), capture_start_time))
-```
-
-这意味着完整的合成输出实际上并未在 OpenXR 中显示。Viewer 回退到了 RGB+深度着色器路径。
-
-需要修复的内容：
+核心选择点在 `RuntimePipelineLoop.run()`：
 
 ```text
-process_rgb_frame()
--> 使用 StereoRuntimeResult.left_eye/right_eye 或拆分 StereoRuntimeResult.sbs
--> 打包为 OpenXR runtime result
--> 发送到 viewer 的 runtime 直接眼图纹理路径
+if run_mode == OpenXR and full_synthesis_enabled is false:
+    process_openxr_frame()        # OpenXR RGB+depth
+else:
+    process_rgb_frame()           # normal full stereo synthesis
+    if run_mode == OpenXR:
+        openxr_result_from_stereo_result()
 ```
 
-## 推荐模式映射
+`full_synthesis_enabled` 的当前规则：
 
-### 传统立体模式
+```text
+run_mode != OpenXR
+-> false
 
-使用 OpenXR rgb-depth。
+run_mode == OpenXR and openxr_runtime_direct == false
+-> true
 
-理由：
+run_mode == OpenXR and stereo_active_preset in {
+    cinema,
+    game_low_latency,
+    still_image_hq,
+    debug_export,
+}
+-> true
 
-- 这复现了旧版 OpenXR 行为。
-- 延迟低。
-- 很好地支持实时深度调节。
+其他 OpenXR 情况
+-> false
+```
 
-暴露或强调以下控件：
+因此，`D2S_OPENXR_RUNTIME_DIRECT=1` 仍是默认值，但不再代表所有 OpenXR preset 都强制走 RGB+深度；它只保留传统 / Fastest 等非质量 preset 的 direct shader 路径。影院、游戏和静态图像 preset 会因为 active preset 映射而进入完整合成 eyes 路径。
 
-- `Depth Strength`
-- `Convergence`
-- `IPD`
-- `Stereo Scale`
-- `Max Shift Ratio`
-- `Foreground Scale`
-- `Depth Antialias Strength`
+## 当前立体模式到 OpenXR 路径映射
 
-在 OpenXR rgb-depth 中隐藏、禁用或标记为不适用：
+| GUI / preset | runtime preset | OpenXR 路径 | 主要 runtime 调用 | 输出 format |
+|---|---|---|---|---|
+| Traditional / Fastest | `traditional_fastest` | RGB+深度 shader | `process_openxr_frame()` | `openxr_rgb_depth` |
+| Cinema | `cinema` | full stereo synthesis eyes | `process_rgb_frame()` -> `openxr_result_from_stereo_result()` | `openxr_full_synthesis_eyes` |
+| Game / Low Latency | `game_low_latency` | full stereo synthesis eyes | `process_rgb_frame()` -> `openxr_result_from_stereo_result()` | `openxr_full_synthesis_eyes` |
+| Still Image / HQ | `still_image_hq` | full stereo synthesis eyes | `process_rgb_frame()` -> `openxr_result_from_stereo_result()` | `openxr_full_synthesis_eyes` |
+| Debug / Export | `debug_export` | full stereo synthesis eyes | `process_rgb_frame()` -> `openxr_result_from_stereo_result()` | `openxr_full_synthesis_eyes` |
+| Auto | `auto` resolves to active preset | 跟随 active preset | 跟随 active preset | 跟随 active preset |
+| `D2S_OPENXR_RUNTIME_DIRECT=0` | 任意 | full stereo synthesis eyes | `process_rgb_frame()` -> `openxr_result_from_stereo_result()` | `openxr_full_synthesis_eyes` |
 
-- `Temporal Strength`
-- `Edge Threshold`
-- `Edge Dilation`
-- `Mask Feather Radius`
-- `Hole Fill Mode`
-- `Hole Fill Radius`
-- `Hole Fill Strength`
+## Viewer 协议和上传路径
 
-### 影院模式
+viewer 侧不需要新增协议。runtime queue 仍然发送：
 
-接入后使用 OpenXR full stereo synthesis eyes。
+```text
+(runtime_result, capture_start_time)
+```
 
-理由：
+viewer 根据 `runtime_result.debug_info["runtime_output_format"]` 分流：
 
-- 影院模式受益于高质量的遮挡和补洞处理。
-- 延迟不如视觉质量关键。
+- `openxr_rgb_depth`：上传 `source_rgb` + `depth`，由 OpenXR shader 生成视差。
+- 其他 runtime direct eyes format，包括 `openxr_full_synthesis_eyes`：上传 `left_eye` + `right_eye`，直接作为头显左右眼纹理来源。
 
-推荐后端：
+近期修复还统一了深度参数命名：
 
-- 性能允许时使用 `quality_4k`。
-- 如果运行时开销过高，回退到平衡或更快的预设。
+- OpenXR runtime 创建 viewer 时传入 `depth_strength=config.depth_strength`。
+- `OpenXRViewerCore.depth_ratio` 保留为兼容 property，读写时映射到 `depth_strength`。
+- overlay / environment profile 中旧的 `depth_ratio` 读取不会再导致 `AttributeError`。
 
-### 游戏模式
-
-仅在使用低延迟预设的情况下使用 OpenXR full stereo synthesis eyes。
-
-理由：
-
-- 游戏模式需要更低的延迟。
-- 完整的 `quality_4k` 可能开销过大。
-
-推荐后端：
-
-- `fast`
-- `fast_plus`
-- 在启用昂贵的补洞或时序设置之前仔细进行基准测试。
-
-### 静态图像模式
-
-接入后使用 OpenXR full stereo synthesis eyes。
-
-理由：
-
-- 延迟不那么重要。
-- 高质量的补洞、边缘处理和时序设置更有价值。
-
-推荐后端：
-
-- `quality_4k` 或静态图像高质量预设。
-
-## 汇总表
+## 性能和质量取舍
 
 | 路径 | 兼容旧版 | 完整合成 | 低延迟 | 使用补洞/边缘/时序 | 最佳用途 |
 |---|---|---|---|---|---|
-| OpenXR rgb-depth | 是 | 否 | 最佳 | 否 | 传统 OpenXR，实时调参 |
+| OpenXR RGB+深度 shader | 是 | 否 | 最佳 | 否 | Traditional / Fastest，实时调参 |
 | OpenXR prewarp eyes | 否 | 否 | 中等 | 否 | 兼容性 / 实验 |
-| OpenXR full synthesis eyes | 否 | 是 | 最差 | 是 | 影院、静态图像，重质量模式 |
+| OpenXR full synthesis eyes | 否 | 是 | 较高开销 | 是 | Cinema、Game、Still Image、Debug/Export |
 
-## 最终建议
+## 当前验证覆盖
 
-保留 OpenXR rgb-depth 作为兼容旧版的传统模式。
+与当前实现相关的回归测试覆盖了以下行为：
 
-增加或修复 OpenXR full stereo synthesis eyes，作为影院、游戏和静态图像模式的独立质量路径。不要在 OpenXR rgb-depth 中将纯 SBS 合成控件呈现为可用状态，除非它们确实被当前渲染路径所消费。
+- `run_mode="OpenXR"` 且 `openxr_runtime_direct=True`、`stereo_active_preset="traditional_fastest"` 时调用 `process_openxr_frame()`，输出 `openxr_rgb_depth`。
+- `run_mode="OpenXR"` 且 `openxr_runtime_direct=False` 时调用 `process_rgb_frame()`，并将结果转换为 `OpenXRRuntimeResult`。
+- `cinema`、`game_low_latency`、`still_image_hq` 在 OpenXR direct 默认打开时仍进入 full synthesis eyes。
+- `StereoRuntimeResult -> OpenXRRuntimeResult` 转换保留左右眼、深度、timing、provider_info，并设置 `openxr_full_synthesis_eyes`。
+- `traditional_fastest` 是合法 runtime preset，并保持 OpenXR RGB+深度路径。
+- OpenXR runtime viewer 构造使用 `depth_strength`，不再传旧的 `depth_ratio` 参数名。
+
+最近验证命令：
+
+```powershell
+src\python3\python.exe -m py_compile src\stereo_runtime\runtime.py src\stereo_runtime\pipeline.py src\stereo_runtime\openxr_state.py src\stereo_runtime\session_helpers.py src\app_runtime\runtime_callbacks.py src\app_runtime\runtime_context.py src\xr_viewer\openxr_runtime.py src\xr_viewer\implementation.py
+
+src\python3\python.exe -m pytest tests\test_runtime_pipeline.py tests\test_runtime_openxr.py tests\test_openxr_state.py tests\test_session_helpers.py tests\test_runtime_context.py tests\test_presets.py tests\test_adapter_config.py tests\test_openxr_runtime.py
+```
+
+## 后续建议
+
+当前 OpenXR 渲染路径已经补齐。后续工作不应再把“full synthesis 尚未接入 OpenXR”作为已知缺口。
+
+建议后续单独处理：
+
+- GUI 控件可用性整理：在 RGB+深度 shader 路径下标记或隐藏不会生效的完整合成参数。
+- 对 `cinema`、`game_low_latency`、`still_image_hq` 分别做真实头显帧时间基准测试。
+- 按设备区分 full synthesis eyes 的默认质量级别，尤其是游戏 preset。
+- 保留 `traditional_fastest` 作为旧版兼容和低延迟回退路径。

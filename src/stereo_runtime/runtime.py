@@ -182,6 +182,75 @@ class OpenXRRuntimeResult:
     provider_info: dict[str, Any] = field(default_factory=dict)
 
 
+def openxr_result_from_stereo_result(stereo_result: StereoRuntimeResult) -> OpenXRRuntimeResult:
+    debug = dict(stereo_result.debug_info or {})
+    left_eye = stereo_result.left_eye
+    right_eye = stereo_result.right_eye
+    display_size = _runtime_frame_size(left_eye)
+    if debug.get("runtime_output_format") == "half_sbs" and _should_split_half_sbs_for_openxr(debug):
+        split_eyes = _split_half_sbs_frame(stereo_result.sbs)
+        if split_eyes is not None:
+            left_eye, right_eye = split_eyes
+            display_size = _runtime_frame_size(stereo_result.sbs)
+            debug.setdefault("runtime_output_pack_backend", "split_half_sbs")
+
+    debug["runtime_output_format"] = "openxr_full_synthesis_eyes"
+    debug["runtime_output_dtype"] = _runtime_eye_dtype(left_eye, right_eye)
+    debug["runtime_output_eye_size"] = _runtime_eye_size(left_eye)
+    debug["runtime_output_display_size"] = _runtime_size_text(display_size)
+    debug.setdefault("runtime_output_pack_backend", "none")
+
+    return OpenXRRuntimeResult(
+        depth=stereo_result.depth,
+        left_eye=left_eye,
+        right_eye=right_eye,
+        source_rgb=None,
+        debug_info=debug,
+        timing=dict(stereo_result.timing or {}),
+        provider_info=dict(stereo_result.provider_info or {}),
+    )
+
+
+def _should_split_half_sbs_for_openxr(debug: dict[str, Any]) -> bool:
+    fused_backend = str(debug.get("fast_plus_fused_backend", "") or "").strip().lower()
+    sbs_backend = str(debug.get("sbs_backend", "") or "").strip().lower()
+    if fused_backend and fused_backend not in {"not_used", "none", "n/a"}:
+        return True
+    return "fused_half_sbs" in sbs_backend
+
+
+def _split_half_sbs_frame(frame: Any) -> tuple[Any, Any] | None:
+    shape = tuple(getattr(frame, "shape", ()))
+    if len(shape) < 2:
+        return None
+    if len(shape) == 4 and shape[1] in (1, 3, 4):
+        width_dim = 3
+    elif len(shape) == 4 and shape[-1] in (1, 3, 4):
+        width_dim = 2
+    elif len(shape) == 3 and shape[0] in (1, 3, 4):
+        width_dim = 2
+    elif len(shape) == 3 and shape[-1] in (1, 3, 4):
+        width_dim = 1
+    else:
+        width_dim = len(shape) - 1
+    width = int(shape[width_dim])
+    half_width = width // 2
+    if half_width <= 0:
+        return None
+
+    left_slice = [slice(None)] * len(shape)
+    right_slice = [slice(None)] * len(shape)
+    left_slice[width_dim] = slice(0, half_width)
+    right_slice[width_dim] = slice(half_width, half_width * 2)
+    left = frame[tuple(left_slice)]
+    right = frame[tuple(right_slice)]
+    if hasattr(left, "contiguous"):
+        left = left.contiguous()
+    if hasattr(right, "contiguous"):
+        right = right.contiguous()
+    return left, right
+
+
 class RollingRuntimeStats:
     def __init__(self, *, maxlen: int = 300) -> None:
         self.maxlen = int(max(1, maxlen))
@@ -765,6 +834,25 @@ def _validate_runtime_rgb_frame(rgb_frame: Any) -> torch.Tensor:
         raise TypeError(f"rgb_frame must be float 0..1; got dtype {rgb_frame.dtype}")
     return rgb_frame
 
+
+
+def _runtime_frame_size(frame) -> tuple[int, int] | None:
+    shape = tuple(getattr(frame, "shape", ()))
+    if len(shape) == 4:
+        shape = shape[1:]
+    if len(shape) == 3 and shape[0] in (1, 3, 4):
+        return int(shape[2]), int(shape[1])
+    if len(shape) == 3 and shape[-1] in (1, 3, 4):
+        return int(shape[1]), int(shape[0])
+    if len(shape) >= 2:
+        return int(shape[-1]), int(shape[-2])
+    return None
+
+
+def _runtime_size_text(size: tuple[int, int] | None) -> str:
+    if size is None:
+        return "unknown"
+    return f"{int(size[0])}x{int(size[1])}"
 
 
 def _runtime_eye_dtype(left_eye, right_eye) -> str:

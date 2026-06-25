@@ -11,8 +11,9 @@ class OpenXRStateController:
         *,
         run_mode: str,
         ipd: float,
-        depth_ratio: float,
-        convergence: float,
+        depth_ratio: float | None = None,
+        depth_strength: float | None = None,
+        convergence: float = 0.0,
         stereo_scale: float | None = None,
         max_shift_ratio: float | None = None,
     ):
@@ -22,6 +23,10 @@ class OpenXRStateController:
         self.wait_idle_active = threading.Event()
         self.bootstrap_done = threading.Event()
         self.runtime_config_lock = threading.Lock()
+        if depth_ratio is None:
+            depth_ratio = depth_strength
+        if depth_ratio is None:
+            raise TypeError("OpenXRStateController requires depth_ratio or depth_strength")
         self.runtime_config_state = {
             "ipd": float(ipd),
             "depth_ratio": float(depth_ratio),
@@ -72,6 +77,7 @@ class OpenXRStateController:
         *,
         ipd=None,
         depth_ratio=None,
+        depth_strength=None,
         convergence=None,
         stereo_scale=None,
         max_shift_ratio=None,
@@ -80,6 +86,8 @@ class OpenXRStateController:
         with self.runtime_config_lock:
             if ipd is not None:
                 self.runtime_config_state["ipd"] = float(ipd)
+            if depth_ratio is None:
+                depth_ratio = depth_strength
             if depth_ratio is not None:
                 self.runtime_config_state["depth_ratio"] = float(depth_ratio)
             if convergence is not None:

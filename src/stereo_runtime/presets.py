@@ -7,10 +7,11 @@ from .openxr_render import OpenXRRenderConfig
 from .output import OutputFormat
 from .synthesis import StereoConfig
 
-StereoModePreset = Literal["auto", "cinema", "game_low_latency", "still_image_hq", "debug_export"]
+StereoModePreset = Literal["auto", "traditional_fastest", "cinema", "game_low_latency", "still_image_hq", "debug_export"]
 
 PRESET_CHOICES: tuple[StereoModePreset, ...] = (
     "auto",
+    "traditional_fastest",
     "cinema",
     "game_low_latency",
     "still_image_hq",
@@ -19,6 +20,10 @@ PRESET_CHOICES: tuple[StereoModePreset, ...] = (
 
 _PRESET_ALIASES: dict[str, StereoModePreset] = {
     "auto": "auto",
+    "traditional": "traditional_fastest",
+    "traditional_fastest": "traditional_fastest",
+    "traditional / fastest": "traditional_fastest",
+    "fastest": "traditional_fastest",
     "cinema": "cinema",
     "movie": "cinema",
     "film": "cinema",
@@ -344,7 +349,7 @@ def preset_summary() -> dict[str, dict[str, Any]]:
             "stereo": asdict(_STEREO_PRESETS[name]),
             "openxr": asdict(_OPENXR_PRESETS[name]),
         }
-        for name in ("cinema", "game_low_latency", "still_image_hq", "debug_export")
+        for name in ("traditional_fastest", "cinema", "game_low_latency", "still_image_hq", "debug_export")
     }
 
 
@@ -369,6 +374,27 @@ _FAST_UPGRADE_PRESETS: set[StereoModePreset] = {"game_low_latency", "debug_expor
 
 _STEREO_PRESETS: dict[StereoModePreset, StereoConfig] = {
     "auto": StereoConfig(),
+    "traditional_fastest": StereoConfig(
+        backend="fast",
+        layers=2,
+        temporal=False,
+        temporal_strength=0.0,
+        auto_reset_temporal=False,
+        scene_reset_threshold=0.0,
+        reset_cooldown_frames=0,
+        depth_strength=2.5,
+        stereo_scale=0.4,
+        convergence=0.0,
+        max_shift_ratio=0.03,
+        edge_dilation=0,
+        edge_threshold=0.04,
+        depth_antialias_strength=0.0,
+        foreground_scale=0.0,
+        hole_fill="fast",
+        hole_fill_mode="balanced",
+        mask_feather_radius=0,
+        fused=True,
+    ),
     "cinema": StereoConfig(
         backend="quality_4k",
         layers=2,
@@ -385,6 +411,7 @@ _STEREO_PRESETS: dict[StereoModePreset, StereoConfig] = {
         depth_antialias_strength=1.0,
         foreground_scale=0.0,
         hole_fill="edge_aware",
+        hole_fill_mode="balanced",
         fused=True,
     ),
     "game_low_latency": StereoConfig(
@@ -415,6 +442,7 @@ _STEREO_PRESETS: dict[StereoModePreset, StereoConfig] = {
         depth_antialias_strength=1.5,
         foreground_scale=0.0,
         hole_fill="edge_aware",
+        hole_fill_mode="quality",
         fused=True,
     ),
     "debug_export": StereoConfig(
@@ -433,6 +461,7 @@ _STEREO_PRESETS: dict[StereoModePreset, StereoConfig] = {
         depth_antialias_strength=0.0,
         foreground_scale=0.0,
         hole_fill="edge_aware",
+        hole_fill_mode="quality",
         debug_output=True,
         fused=True,
     ),
@@ -440,6 +469,7 @@ _STEREO_PRESETS: dict[StereoModePreset, StereoConfig] = {
 
 _OPENXR_PRESETS: dict[StereoModePreset, OpenXRRenderConfig] = {
     "auto": OpenXRRenderConfig(),
+    "traditional_fastest": OpenXRRenderConfig(depth_strength=2.5, convergence=0.0, stereo_scale=0.4, max_shift_ratio=0.03),
     "cinema": OpenXRRenderConfig(depth_strength=1.8, convergence=0.0, stereo_scale=0.4, max_shift_ratio=0.045),
     "game_low_latency": OpenXRRenderConfig(depth_strength=1.5, convergence=0.0, stereo_scale=0.4, max_shift_ratio=0.04),
     "still_image_hq": OpenXRRenderConfig(depth_strength=2.1, convergence=0.0, stereo_scale=0.4, max_shift_ratio=0.05),

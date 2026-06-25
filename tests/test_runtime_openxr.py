@@ -1,7 +1,14 @@
 import torch
 from pathlib import Path
 
-from stereo_runtime import OpenXRRenderConfig, OpenXRRuntimeResult, StereoRuntime, StereoRuntimeConfig
+from stereo_runtime import (
+    OpenXRRenderConfig,
+    OpenXRRuntimeResult,
+    StereoRuntime,
+    StereoRuntimeConfig,
+    StereoRuntimeResult,
+    openxr_result_from_stereo_result,
+)
 from stereo_runtime.depth_provider import DepthProfileResult
 
 
@@ -53,6 +60,68 @@ def test_process_openxr_frame_defaults_to_rgb_depth_runtime_result():
     assert result.debug_info["runtime_output_format"] == "openxr_rgb_depth"
     assert result.debug_info["runtime_output_dtype"] == "float32"
     assert result.debug_info["backend"] == "openxr_viewer_shader_dibr"
+
+
+def test_openxr_result_from_stereo_result_keeps_full_size_eye_views_for_quality_half_sbs():
+    depth = torch.ones(1, 1, 2, 4)
+    source_left = torch.zeros(1, 3, 2, 4)
+    source_right = torch.ones(1, 3, 2, 4)
+    sbs = torch.arange(1 * 3 * 2 * 8, dtype=torch.uint8).reshape(1, 3, 2, 8)
+    stereo_result = StereoRuntimeResult(
+        depth=depth,
+        left_eye=source_left,
+        right_eye=source_right,
+        sbs=sbs,
+        debug_info={"backend": "quality_4k", "runtime_output_format": "half_sbs"},
+        timing={"total_ms": 5.0},
+        provider_info={"provider": "fake"},
+    )
+
+    result = openxr_result_from_stereo_result(stereo_result)
+
+    assert isinstance(result, OpenXRRuntimeResult)
+    assert result.depth is depth
+    assert result.source_rgb is None
+    assert result.left_eye is source_left
+    assert result.right_eye is source_right
+    assert result.timing == {"total_ms": 5.0}
+    assert result.provider_info == {"provider": "fake"}
+    assert result.debug_info["backend"] == "quality_4k"
+    assert result.debug_info["runtime_output_format"] == "openxr_full_synthesis_eyes"
+    assert result.debug_info["runtime_output_dtype"] == "float32"
+    assert result.debug_info["runtime_output_eye_size"] == "4x2"
+    assert result.debug_info["runtime_output_display_size"] == "4x2"
+    assert result.debug_info["runtime_output_pack_backend"] == "none"
+
+
+def test_openxr_result_from_stereo_result_splits_fused_half_sbs_eye_views_and_preserves_display_size():
+    depth = torch.ones(1, 1, 2, 4)
+    source_left = torch.zeros(1, 3, 2, 4)
+    source_right = torch.zeros(1, 3, 2, 4)
+    sbs = torch.arange(1 * 3 * 2 * 8, dtype=torch.uint8).reshape(1, 3, 2, 8)
+    stereo_result = StereoRuntimeResult(
+        depth=depth,
+        left_eye=source_left,
+        right_eye=source_right,
+        sbs=sbs,
+        debug_info={
+            "backend": "fast_plus",
+            "runtime_output_format": "half_sbs",
+            "fast_plus_fused_backend": "triton_half_sbs_uint8",
+        },
+        timing={"total_ms": 5.0},
+        provider_info={"provider": "fake"},
+    )
+
+    result = openxr_result_from_stereo_result(stereo_result)
+
+    assert torch.equal(result.left_eye, sbs[:, :, :, :4])
+    assert torch.equal(result.right_eye, sbs[:, :, :, 4:8])
+    assert result.debug_info["runtime_output_format"] == "openxr_full_synthesis_eyes"
+    assert result.debug_info["runtime_output_dtype"] == "uint8"
+    assert result.debug_info["runtime_output_eye_size"] == "4x2"
+    assert result.debug_info["runtime_output_display_size"] == "8x2"
+    assert result.debug_info["runtime_output_pack_backend"] == "split_half_sbs"
 
 
 def test_openxr_rgb_depth_debug_info_carries_stereo_scale_and_max_shift():

@@ -64,6 +64,7 @@ def test_runtime_config_maps_modes_and_stereo_params():
     stereo = stereo_config_from_runtime(config)
 
     assert preset_for_runtime_mode("movie") == "cinema"
+    assert preset_for_runtime_mode("traditional_fastest") == "traditional_fastest"
     assert preset_for_runtime_mode("game") == "game_low_latency"
     assert preset_for_runtime_mode("image") == "still_image_hq"
     assert stereo.backend == "quality_4k"
@@ -185,6 +186,28 @@ def test_runtime_config_from_d2s_settings_uses_dtype_auto_for_gui_fp16_flag():
     assert config.depth_backend == "pytorch_cuda"
     assert config.onnx_dtype == "auto"
     assert config.build_trt_engine is False
+
+def test_runtime_config_from_d2s_settings_accepts_traditional_fastest_preset():
+    config = runtime_config_from_d2s_settings(
+        {
+            "Depth Model": "Distill-Any-Depth-Base",
+            "Stereo Preset": "Traditional / Fastest",
+            "Stereo Quality": "fast",
+            "Max Shift Ratio": 0.03,
+            "Edge Dilation": 0,
+            "Depth Antialias Strength": 0.0,
+        },
+        device="cuda",
+    )
+    stereo = stereo_config_from_runtime(config)
+
+    assert config.stereo_preset == "Traditional / Fastest"
+    assert stereo.backend == "fast"
+    assert stereo.temporal is False
+    assert stereo.max_shift_ratio == 0.03
+    assert stereo.edge_dilation == 0
+    assert stereo.depth_antialias_strength == 0.0
+
 
 def test_runtime_config_from_d2s_settings_maps_realtime_stereo_options():
     config = runtime_config_from_d2s_settings(
