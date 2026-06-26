@@ -568,15 +568,24 @@ def test_gui_render_size_policy_is_exposed_and_persisted():
     assert 'self.render_fixed_dd = CompactDropdown(' in builders_text
     assert '"1280x720", "1600x900", "1920x1080", "2560x1440", "3840x2160"' in builders_text
     assert 'self.row6d = ft.Row([self.render_policy_label, self.render_policy_dd' in builders_text
-    assert 'self.row6e = ft.Row([self.render_fixed_label, self.render_fixed_dd' in builders_text
+    row6d_start = builders_text.index('self.row6d = ft.Row([')
+    row6d_end = builders_text.index('], spacing=1)', row6d_start)
+    row6d = builders_text[row6d_start:row6d_end]
+    assert row6d.index('self.render_policy_dd') < row6d.index('self.render_align_label')
+    assert 'self.row6e = ft.Row([self.render_scale_label, self.render_scale_dd' in builders_text
     assert 'self.row6f = ft.Row([self.render_min_dimension_label, self.render_min_dimension_dd' in builders_text
+    row6f_start = builders_text.index('self.row6f = ft.Row([')
+    row6f_end = builders_text.index('], spacing=1)', row6f_start)
+    row6f = builders_text[row6f_start:row6f_end]
+    assert row6f.index('self.render_min_dimension_dd') < row6f.index('self.render_max_pixels_label')
     assert 'on_select=self.on_render_policy_change' in builders_text
     assert 'def on_render_policy_change' in handlers_text
     assert 'def _update_render_size_control_visibility' in handlers_text
     assert 'show_scaled = show_render_size and policy == "scaled"' in handlers_text
     assert 'show_fixed = show_render_size and policy == "fixed"' in handlers_text
     assert 'show_dynamic = show_render_size and policy == "dynamic"' in handlers_text
-    assert 'self.row6e.visible = show_fixed or show_dynamic' in handlers_text
+    assert 'self.row6e.visible = show_scaled or show_fixed' in handlers_text
+    assert 'self.row6f.visible = show_dynamic' in handlers_text
     assert 'self._update_render_size_control_visibility(show_render_size)' in handlers_text
 
     assert 'cfg.get("Render Size Policy", DEFAULTS["Render Size Policy"])' in config_mgr_text

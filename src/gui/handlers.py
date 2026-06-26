@@ -80,8 +80,8 @@ class GUIHandlerMixin:
         show_align = show_render_size
 
         self.row6d.visible = show_render_size
-        self.row6e.visible = show_fixed or show_dynamic
-        self.row6f.visible = show_dynamic or show_align
+        self.row6e.visible = show_scaled or show_fixed
+        self.row6f.visible = show_dynamic
         for ctrl in [self.render_policy_label, self.render_policy_dd]:
             ctrl.visible = show_render_size
         for ctrl in [self.render_scale_label, self.render_scale_dd]:

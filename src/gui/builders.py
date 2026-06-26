@@ -426,27 +426,27 @@ class GUIBuilderMixin:
         self.render_policy_dd = CompactDropdown(
             options=["Native", "Scaled", "Fixed", "Dynamic"], value="Native", width=S(130),
             on_select=self.on_render_policy_change)
+        self.render_align_label = ft.Text("Render Align:", size=FONT_SIZE, width=S(130))
+        self.render_align_dd = CompactDropdown(options=["1", "8", "16", "32"], value="16", width=S(130))
+        self.row6d = ft.Row([self.render_policy_label, self.render_policy_dd,
+            ft.Container(width=S(40)), self.render_align_label, self.render_align_dd], spacing=1)
         self.render_scale_label = ft.Text("Render Scale:", size=FONT_SIZE, width=S(130))
         self.render_scale_dd = CompactDropdown(options=["0.25", "0.50", "0.75", "1.00"],
             value="1.00", width=S(130))
-        self.row6d = ft.Row([self.render_policy_label, self.render_policy_dd,
-            ft.Container(width=S(40)), self.render_scale_label, self.render_scale_dd], spacing=1)
         self.render_fixed_label = ft.Text("Render Fixed Size:", size=FONT_SIZE, width=S(130))
         self.render_fixed_dd = CompactDropdown(
             options=["1280x720", "1600x900", "1920x1080", "2560x1440", "3840x2160"],
             value="1920x1080", width=S(130))
+        self.row6e = ft.Row([self.render_scale_label, self.render_scale_dd,
+            ft.Container(width=S(40)), self.render_fixed_label, self.render_fixed_dd], spacing=1)
         self.render_max_pixels_label = ft.Text("Render Pixel Cap:", size=FONT_SIZE, width=S(130))
         self.render_max_pixels_dd = CompactDropdown(
             options=["921600", "2073600", "3686400", "8294400"], value="8294400", width=S(130))
-        self.row6e = ft.Row([self.render_fixed_label, self.render_fixed_dd,
-            ft.Container(width=S(40)), self.render_max_pixels_label, self.render_max_pixels_dd], spacing=1)
         self.render_min_dimension_label = ft.Text("Render Min Side:", size=FONT_SIZE, width=S(130))
         self.render_min_dimension_dd = CompactDropdown(options=["360", "480", "540", "720"],
             value="480", width=S(130))
-        self.render_align_label = ft.Text("Render Align:", size=FONT_SIZE, width=S(130))
-        self.render_align_dd = CompactDropdown(options=["1", "8", "16", "32"], value="16", width=S(130))
         self.row6f = ft.Row([self.render_min_dimension_label, self.render_min_dimension_dd,
-            ft.Container(width=S(40)), self.render_align_label, self.render_align_dd], spacing=1)
+            ft.Container(width=S(40)), self.render_max_pixels_label, self.render_max_pixels_dd], spacing=1)
         self.upscaler_label = ft.Text("", size=FONT_SIZE, width=0, visible=False)
         self.upscaler_dd = CompactDropdown(options=["Off"], value="Off", width=S(1))
         self.upscaler_dd.visible = False
