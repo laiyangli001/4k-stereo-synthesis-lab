@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 from capture.types import CapturedFrame, FrameCopyMode
 from stereo_runtime.pipeline import RuntimePipelineContext, RuntimePipelineLoop
+from stereo_runtime.render_size import RenderSizeConfig, RenderSizePolicy
 from stereo_runtime.settings_snapshot import SnapshotChangeClass, RuntimeSettingsSnapshot
 
 
@@ -188,9 +189,82 @@ def test_runtime_pipeline_accepts_captured_frame_queue_item():
             target_height=(4, 4),
             timestamp=12.5,
             capture_tool="FakeCapture",
-            copy_mode=FrameCopyMode.COPY,
+            frame_raw_type="torch.Tensor",
+            frame_raw_device="cuda",
+            frame_raw_dtype="torch.uint8",
+            copy_mode=FrameCopyMode.CLONE,
+            metadata={"zero_copy": False},
         )
     )
+    shutdown = OneShotShutdown()
+    seen = {}
+
+    def capture_frame_to_rgb(frame, size, **kwargs):
+        seen["frame"] = frame
+        seen["size"] = size
+        seen["kwargs"] = kwargs
+        return SimpleNamespace(
+            _d2s_preprocess_backend="fake-preprocess",
+            _d2s_preprocess_device_origin="cuda",
+            _d2s_preprocess_device_output="cpu",
+            _d2s_preprocess_device_transfer="cuda->cpu",
+            _d2s_preprocess_input_kind="torch.Tensor",
+            _d2s_capture_copy_mode="clone",
+            _d2s_capture_zero_copy=False,
+        )
+
+    context = RuntimePipelineContext(
+        shutdown_event=shutdown,
+        raw_q=raw_q,
+        runtime_q=runtime_q,
+        time_sleep=0.01,
+        run_mode="Viewer",
+        openxr_runtime_direct=False,
+        stereo_active_preset=None,
+        device="cpu",
+        use_cudart=False,
+        thread_latencies={},
+        stereo_runtime=FakeRuntime(),
+        capture_frame_to_rgb=capture_frame_to_rgb,
+        prepare_rgb_for_stereo_runtime=lambda frame, **kwargs: "runtime-rgb",
+        current_openxr_render_config=lambda: None,
+        is_hard_idle=lambda: False,
+        is_source_paused=lambda: False,
+        log_source_health=lambda: None,
+        source_stat_inc=lambda *args, **kwargs: None,
+        breakdown_inc=lambda *args, **kwargs: None,
+        breakdown_add_time=lambda *args, **kwargs: None,
+        breakdown_add_runtime_timing=lambda result: None,
+        set_preprocess_backend=lambda backend: None,
+        queue_clear=lambda q: None,
+        queue_drain_latest=lambda q, first_item: first_item,
+        queue_put_latest=lambda q, item: q.put_nowait(item),
+        log_stereo_runtime_mode_once=lambda: None,
+        apply_stereo_hot_reload_if_needed=lambda: None,
+        warmup_stereo_once_for_frame=lambda frame: None,
+        log_fast_plus_fused_runtime_state=lambda result: None,
+    )
+
+    RuntimePipelineLoop(context).run()
+
+    assert seen["frame"] == "captured-raw"
+    assert seen["size"] == (4, 4)
+    assert seen["kwargs"]["frame_raw_device"] == "cuda"
+    assert seen["kwargs"]["capture_copy_mode"] == "clone"
+    assert seen["kwargs"]["capture_zero_copy"] is False
+    runtime_result, capture_start_time = runtime_q.get_nowait()
+    assert capture_start_time == 12.5
+    assert runtime_result.debug_info["capture_copy_mode"] == "clone"
+    assert runtime_result.debug_info["capture_zero_copy"] is False
+    assert runtime_result.debug_info["capture_frame_raw_device"] == "cuda"
+    assert runtime_result.debug_info["preprocess_device_origin"] == "cuda"
+    assert runtime_result.debug_info["preprocess_device_transfer"] == "cuda->cpu"
+
+
+def test_runtime_pipeline_resolves_render_size_before_preprocess():
+    raw_q = queue.Queue(maxsize=1)
+    runtime_q = queue.Queue(maxsize=1)
+    raw_q.put(("raw", (1920, 1080), 10.0))
     shutdown = OneShotShutdown()
     seen = {}
 
@@ -229,13 +303,18 @@ def test_runtime_pipeline_accepts_captured_frame_queue_item():
         apply_stereo_hot_reload_if_needed=lambda: None,
         warmup_stereo_once_for_frame=lambda frame: None,
         log_fast_plus_fused_runtime_state=lambda result: None,
+        render_size_config=RenderSizeConfig(
+            policy=RenderSizePolicy.SCALED,
+            scale_factor=0.5,
+            align=8,
+        ),
     )
 
     RuntimePipelineLoop(context).run()
 
-    assert seen == {"frame": "captured-raw", "size": (4, 4)}
+    assert seen == {"frame": "raw", "size": (960, 536)}
     _runtime_result, capture_start_time = runtime_q.get_nowait()
-    assert capture_start_time == 12.5
+    assert capture_start_time == 10.0
 
 
 def test_runtime_pipeline_passes_current_openxr_config_to_runtime():

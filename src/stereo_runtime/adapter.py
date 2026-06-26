@@ -434,6 +434,52 @@ def depth_provider_config_from_runtime(config: StereoRuntimeConfig) -> "DepthPro
     )
 
 
+def openxr_render_config_from_snapshot(
+    snapshot,
+    *,
+    render_size: tuple[int, int] | None = None,
+    preset: str = "legacy",
+    screen_roll: float = 0.0,
+    padding_mode: str = "reflection",
+):
+    """Convert normalized runtime settings into OpenXR render-core uniforms."""
+    from .openxr_render import OpenXRRenderConfig
+    from .parallax import resolve_parallax_budget
+
+    depth_strength = 2.0 if snapshot.depth_strength is None else float(snapshot.depth_strength)
+    convergence = 0.0 if snapshot.convergence is None else float(snapshot.convergence)
+    ipd_mm = 32.0 if snapshot.ipd_mm is None else float(snapshot.ipd_mm)
+    stereo_scale = 0.4 if snapshot.stereo_scale is None else float(snapshot.stereo_scale)
+    max_shift_ratio = 0.05 if snapshot.max_shift_ratio is None else float(snapshot.max_shift_ratio)
+    parallax_preset = str(snapshot.parallax_preset or preset or "legacy")
+    max_disparity_px = snapshot.max_disparity_px
+    if max_disparity_px is None and render_size is not None:
+        budget = resolve_parallax_budget(
+            render_width=int(render_size[0]),
+            render_height=int(render_size[1]),
+            preset=parallax_preset,
+            depth_strength=depth_strength,
+            stereo_scale=stereo_scale,
+            convergence=convergence,
+            ipd_mm=ipd_mm,
+            max_shift_ratio=max_shift_ratio,
+        )
+        max_disparity_px = float(budget.max_disparity_px)
+
+    return OpenXRRenderConfig(
+        depth_strength=depth_strength,
+        convergence=convergence,
+        ipd=ipd_mm / 1000.0,
+        max_shift_ratio=max_shift_ratio,
+        ipd_mm=ipd_mm,
+        stereo_scale=stereo_scale,
+        max_disparity_px=max_disparity_px,
+        parallax_preset=parallax_preset,
+        screen_roll=float(screen_roll),
+        padding_mode=padding_mode,
+    )
+
+
 def stereo_config_from_runtime(config: StereoRuntimeConfig) -> "StereoConfig":
     from .presets import normalize_preset, stereo_config_for_preset
 

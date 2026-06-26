@@ -223,7 +223,7 @@ def test_stereo_scale_control_is_next_to_ipd():
     builders_text = _file_text("builders.py")
     assert 'self.ipd_dd = CompactDropdown(options=[str(i) for i in range(50, 71)]' in builders_text
     assert 'self.stereo_scale_label = ft.Text("Stereo Scale:"' in builders_text
-    assert 'self.stereo_scale_dd = CompactDropdown(options=[f"{i / 10:.1f}" for i in range(0, 5)]' in builders_text
+    assert 'self.stereo_scale_dd = CompactDropdown(options=[f"{i / 10:.1f}" for i in range(0, 11)]' in builders_text
     assert 'value="0.4", width=S(130), on_select=self.on_stereo_hot_param_change)' in builders_text
     row_start = builders_text.index('row3 = ft.Row([')
     row_end = builders_text.index('# Row 5: Stereo runtime mode. Backend quality is derived from this preset.', row_start)
@@ -541,6 +541,57 @@ def test_vsync_uses_teammate_config_key_and_default():
     assert '"VSync": "垂直同步"' in localization_text
     assert '"tooltip_vsync"' in localization_text
     assert 'tooltip_local_vsync' not in localization_text
+
+
+def test_gui_render_size_policy_is_exposed_and_persisted():
+    config_text = _config_source().read_text(encoding="utf-8")
+    builders_text = _file_text("builders.py")
+    handlers_text = _file_text("handlers.py")
+    config_mgr_text = _file_text("config_mgr.py")
+    localization_text = _localization_source().read_text(encoding="utf-8")
+
+    for key, value in {
+        "Render Size Policy": "native",
+        "Render Scale": 1.0,
+        "Render Fixed Width": 1920,
+        "Render Fixed Height": 1080,
+        "Render Min Dimension": 480,
+        "Render Align": 16,
+    }.items():
+        expected = f'"{key}": "{value}"' if isinstance(value, str) else f'"{key}": {value}'
+        assert expected in config_text
+    assert '"Render Max Pixels": 3840 * 2160' in config_text
+
+    assert 'self.render_policy_dd = CompactDropdown(' in builders_text
+    assert 'options=["Native", "Scaled", "Fixed", "Dynamic"]' in builders_text
+    assert 'self.render_scale_dd = CompactDropdown(options=["0.25", "0.50", "0.75", "1.00"]' in builders_text
+    assert 'self.render_fixed_dd = CompactDropdown(' in builders_text
+    assert '"1280x720", "1600x900", "1920x1080", "2560x1440", "3840x2160"' in builders_text
+    assert 'self.row6d = ft.Row([self.render_policy_label, self.render_policy_dd' in builders_text
+    assert 'self.row6e = ft.Row([self.render_fixed_label, self.render_fixed_dd' in builders_text
+    assert 'self.row6f = ft.Row([self.render_min_dimension_label, self.render_min_dimension_dd' in builders_text
+    assert 'self.row6d.visible = show_render_size' in handlers_text
+    assert 'self.row6e.visible = show_render_size' in handlers_text
+    assert 'self.row6f.visible = show_render_size' in handlers_text
+
+    assert 'cfg.get("Render Size Policy", DEFAULTS["Render Size Policy"])' in config_mgr_text
+    assert 'cfg.get("Render Scale", DEFAULTS["Render Scale"])' in config_mgr_text
+    assert 'cfg.get("Render Fixed Width", DEFAULTS["Render Fixed Width"])' in config_mgr_text
+    assert 'cfg.get("Render Fixed Height", DEFAULTS["Render Fixed Height"])' in config_mgr_text
+    assert '"Render Size Policy": self._display_to_render_policy(self.render_policy_dd.value)' in config_mgr_text
+    assert '"Render Scale": self._parse_float(self.render_scale_dd.value, DEFAULTS["Render Scale"])' in config_mgr_text
+    assert '"Render Fixed Width": render_fixed_width' in config_mgr_text
+    assert '"Render Fixed Height": render_fixed_height' in config_mgr_text
+    assert '"Render Max Pixels": self._parse_int(self.render_max_pixels_dd.value, DEFAULTS["Render Max Pixels"])' in config_mgr_text
+    assert '"Render Min Dimension": self._parse_int(self.render_min_dimension_dd.value, DEFAULTS["Render Min Dimension"])' in config_mgr_text
+    assert '"Render Align": self._parse_int(self.render_align_dd.value, DEFAULTS["Render Align"])' in config_mgr_text
+
+    assert '"Render Policy:": "Render Policy:"' in localization_text
+    assert '"Render Policy:": "渲染策略:"' in localization_text
+    assert '"Native": "原生"' in localization_text
+    assert '"tooltip_render_policy"' in localization_text
+    assert '(self.render_policy_dd, "tooltip_render_policy")' in handlers_text
+    assert '(self.render_align_dd, "tooltip_render_align")' in handlers_text
 
 
 def test_gui_forces_fp16_off_for_mps_save():

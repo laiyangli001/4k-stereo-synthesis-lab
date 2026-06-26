@@ -3,18 +3,42 @@ from __future__ import annotations
 import numpy as np
 
 
-def capture_frame_to_rgb(frame_raw, target_resolution, *, device=None, use_torch=None, output="auto"):
+def capture_frame_to_rgb(
+    frame_raw,
+    target_resolution=None,
+    *,
+    target_height=None,
+    size=None,
+    device=None,
+    use_torch=None,
+    output="auto",
+    frame_raw_device=None,
+    capture_copy_mode=None,
+    capture_zero_copy=None,
+):
     """
     Convert a raw capture frame to the RGB frame consumed by stereo_runtime.
 
     This keeps capture-side responsibilities out of stereo runtime code:
-    raw BGRA/BGR frame -> RGB frame, plus the existing processing-resolution
-    resize used by the Desktop2Stereo pipeline.
+    raw BGRA/BGR frame -> RGB frame, explicit device transfer, and the existing
+    processing-resolution resize used by the Desktop2Stereo pipeline.
     """
+    target_resolution = _resolve_target_resolution(
+        target_resolution,
+        target_height=target_height,
+        size=size,
+    )
     if use_torch is None:
         use_torch = _is_torch_tensor(frame_raw)
     if use_torch or output == "tensor":
-        return _capture_frame_to_rgb_torch(frame_raw, target_resolution, device=device)
+        return _capture_frame_to_rgb_torch(
+            frame_raw,
+            target_resolution,
+            device=device,
+            frame_raw_device=frame_raw_device,
+            capture_copy_mode=capture_copy_mode,
+            capture_zero_copy=capture_zero_copy,
+        )
     return _capture_frame_to_rgb_numpy(frame_raw, target_resolution)
 
 
@@ -36,8 +60,9 @@ def prepare_rgb_for_stereo_runtime(frame_rgb, *, device=None):
     if not isinstance(frame_rgb, torch.Tensor):
         raise TypeError("frame_rgb must be a torch.Tensor or numpy.ndarray prepared by capture")
 
+    source_frame = frame_rgb
     if frame_rgb.ndim == 3 and frame_rgb.shape[0] == 3:
-        tensor = frame_rgb
+        tensor = frame_rgb.unsqueeze(0)
     elif frame_rgb.ndim == 4 and frame_rgb.shape[1] == 3:
         tensor = frame_rgb
     else:
@@ -47,7 +72,9 @@ def prepare_rgb_for_stereo_runtime(frame_rgb, *, device=None):
     tensor = tensor.to(device=device, dtype=torch.float32)
     if scale_from_uint8:
         tensor = tensor.mul_(1.0 / 255.0)
-    return tensor.clamp_(0.0, 1.0)
+    tensor = tensor.clamp_(0.0, 1.0)
+    _copy_preprocess_metadata(source_frame, tensor)
+    return tensor
 
 
 def _is_torch_tensor(value):
@@ -55,7 +82,15 @@ def _is_torch_tensor(value):
     return torch_type.startswith("torch") and hasattr(value, "permute")
 
 
-def _capture_frame_to_rgb_torch(frame_raw, target_resolution, *, device=None):
+def _capture_frame_to_rgb_torch(
+    frame_raw,
+    target_resolution,
+    *,
+    device=None,
+    frame_raw_device=None,
+    capture_copy_mode=None,
+    capture_zero_copy=None,
+):
     import torch
     import torch.nn.functional as F
 
@@ -63,36 +98,73 @@ def _capture_frame_to_rgb_torch(frame_raw, target_resolution, *, device=None):
         from utils import DEVICE
         device = DEVICE
 
+    origin_device = str(frame_raw_device or _frame_device_text(frame_raw))
+    input_kind = _frame_kind_text(frame_raw)
     if isinstance(frame_raw, np.ndarray):
-        frame_raw = torch.from_numpy(frame_raw).to(device)
+        frame_raw = torch.from_numpy(frame_raw)
+
+    if not isinstance(frame_raw, torch.Tensor):
+        raise TypeError("frame_raw must be a torch.Tensor or numpy.ndarray for tensor preprocess")
+    if frame_raw.ndim != 3 or frame_raw.shape[-1] not in (3, 4):
+        raise ValueError(f"frame_raw must be HWC BGR/BGRA, got shape {tuple(frame_raw.shape)}")
 
     h0, w0 = frame_raw.shape[:2]
     new_height, new_width = _resolve_target_size(target_resolution, h0, w0)
+    requested_device = torch.device(device)
 
     try:
         from capture.preprocess_triton import bgr_to_rgb_resize_norm, can_use_triton_preprocess
 
-        if can_use_triton_preprocess(frame_raw):
+        if can_use_triton_preprocess(frame_raw) and frame_raw.device == requested_device:
             out = bgr_to_rgb_resize_norm(frame_raw, new_height, new_width)
-            setattr(out, "_d2s_preprocess_backend", "triton_bgr_resize_norm")
+            _mark_preprocess_metadata(
+                out,
+                backend="triton_bgr_resize_norm",
+                input_kind=input_kind,
+                origin_device=origin_device,
+                output_device=_frame_device_text(out),
+                capture_copy_mode=capture_copy_mode,
+                capture_zero_copy=capture_zero_copy,
+            )
             return out
     except Exception:
         pass
 
+    source_device = torch.device(frame_raw.device)
+    if source_device != requested_device:
+        frame_raw = frame_raw.to(device=requested_device, non_blocking=True)
+
     frame_rgb = frame_raw[..., [2, 1, 0]].permute(2, 0, 1).contiguous()
     with torch.no_grad():
-        frame_float = frame_rgb.to(device=device, dtype=torch.float32).mul_(1.0 / 255.0)
+        frame_float = frame_rgb.to(dtype=torch.float32).mul_(1.0 / 255.0)
         if new_height == h0 and new_width == w0:
-            setattr(frame_float, "_d2s_preprocess_backend", "torch_bgr_norm")
-            return frame_float
+            out = frame_float.unsqueeze(0).clamp_(0.0, 1.0)
+            _mark_preprocess_metadata(
+                out,
+                backend="torch_bgr_norm",
+                input_kind=input_kind,
+                origin_device=origin_device,
+                output_device=_frame_device_text(out),
+                capture_copy_mode=capture_copy_mode,
+                capture_zero_copy=capture_zero_copy,
+            )
+            return out
         out = F.interpolate(
             frame_float.unsqueeze(0),
             size=(new_height, new_width),
             mode="bilinear",
             align_corners=False,
             antialias=new_height < h0 or new_width < w0,
-        ).squeeze(0).clamp_(0.0, 1.0)
-        setattr(out, "_d2s_preprocess_backend", "torch_bgr_resize_norm")
+        ).clamp_(0.0, 1.0)
+        _mark_preprocess_metadata(
+            out,
+            backend="torch_bgr_resize_norm",
+            input_kind=input_kind,
+            origin_device=origin_device,
+            output_device=_frame_device_text(out),
+            capture_copy_mode=capture_copy_mode,
+            capture_zero_copy=capture_zero_copy,
+        )
         return out
 
 
@@ -117,6 +189,65 @@ def _capture_frame_to_rgb_numpy(frame_raw, target_resolution):
 
     interpolation = cv2.INTER_AREA if new_height < h0 or new_width < w0 else cv2.INTER_CUBIC
     return cv2.resize(frame_rgb, (new_width, new_height), interpolation=interpolation)
+
+
+def _resolve_target_resolution(target_resolution, *, target_height=None, size=None):
+    values = [value for value in (target_resolution, target_height, size) if value is not None]
+    if len(values) != 1:
+        raise TypeError("Provide exactly one of target_resolution, target_height, or size")
+    return values[0]
+
+
+def _mark_preprocess_metadata(
+    tensor,
+    *,
+    backend,
+    input_kind,
+    origin_device,
+    output_device,
+    capture_copy_mode=None,
+    capture_zero_copy=None,
+):
+    setattr(tensor, "_d2s_preprocess_backend", backend)
+    setattr(tensor, "_d2s_preprocess_input_kind", input_kind)
+    setattr(tensor, "_d2s_preprocess_device_origin", origin_device)
+    setattr(tensor, "_d2s_preprocess_device_output", output_device)
+    setattr(tensor, "_d2s_preprocess_device_transfer", f"{origin_device}->{output_device}")
+    if capture_copy_mode is not None:
+        setattr(tensor, "_d2s_capture_copy_mode", str(capture_copy_mode))
+    if capture_zero_copy is not None:
+        setattr(tensor, "_d2s_capture_zero_copy", bool(capture_zero_copy))
+
+
+def _copy_preprocess_metadata(source, target):
+    for name in (
+        "_d2s_preprocess_backend",
+        "_d2s_preprocess_input_kind",
+        "_d2s_preprocess_device_origin",
+        "_d2s_preprocess_device_output",
+        "_d2s_preprocess_device_transfer",
+        "_d2s_capture_copy_mode",
+        "_d2s_capture_zero_copy",
+    ):
+        if hasattr(source, name):
+            setattr(target, name, getattr(source, name))
+
+
+def _frame_kind_text(value):
+    if isinstance(value, np.ndarray):
+        return "numpy"
+    if _is_torch_tensor(value):
+        return "torch.Tensor"
+    return type(value).__name__
+
+
+def _frame_device_text(value):
+    if isinstance(value, np.ndarray):
+        return "cpu"
+    device = getattr(value, "device", None)
+    if device is None:
+        return "unknown"
+    return str(device)
 
 
 def _resolve_target_size(target_resolution, source_height, source_width):

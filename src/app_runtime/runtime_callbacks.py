@@ -84,21 +84,27 @@ class RuntimeCallbacks:
     def update_openxr_runtime_config(
         self,
         *,
+        snapshot=None,
         ipd=None,
         depth_ratio=None,
         depth_strength=None,
         convergence=None,
         stereo_scale=None,
         max_shift_ratio=None,
+        max_disparity_px=None,
+        parallax_preset=None,
         screen_roll=None,
     ):
         self.context.openxr_state.update_runtime_config(
+            snapshot=snapshot,
             ipd=ipd,
             depth_ratio=depth_ratio,
             depth_strength=depth_strength,
             convergence=convergence,
             stereo_scale=stereo_scale,
             max_shift_ratio=max_shift_ratio,
+            max_disparity_px=max_disparity_px,
+            parallax_preset=parallax_preset,
             screen_roll=screen_roll,
         )
 

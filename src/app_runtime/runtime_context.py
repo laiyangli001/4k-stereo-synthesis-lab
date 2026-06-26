@@ -14,6 +14,7 @@ from stereo_runtime.hot_reload import StereoHotReloader
 from stereo_runtime.openxr_state import OpenXRStateController
 from stereo_runtime.pipeline import RuntimePipelineContext
 from stereo_runtime.presets import normalize_preset
+from stereo_runtime.render_size import RenderSizeConfig
 from stereo_runtime.session_helpers import StereoRuntimeLogger, StereoWarmupTracker
 from utils.breakdown import FPSBreakdown
 
@@ -42,6 +43,7 @@ class AppRuntimeContext:
     fps_breakdown: FPSBreakdown
     thread_latencies: dict
     capture_config: CaptureConfig
+    render_size_config: RenderSizeConfig
 
 
 def initial_stereo_preset_state(config):
@@ -71,6 +73,7 @@ def create_runtime_context(
     device,
     device_info,
     output_resolution,
+    render_size_config,
     fps,
     window_title,
     capture_mode,
@@ -170,6 +173,7 @@ def create_runtime_context(
             capture_tool=capture_tool,
             os_name=os_name,
         ),
+        render_size_config=render_size_config or RenderSizeConfig(),
     )
 
 
@@ -255,4 +259,5 @@ def build_runtime_pipeline_context(
         warmup_stereo_once_for_frame=warmup_stereo_once_for_frame,
         log_fast_plus_fused_runtime_state=log_fast_plus_fused_runtime_state,
         settings_update_q=app_context.settings_update_q,
+        render_size_config=app_context.render_size_config,
     )

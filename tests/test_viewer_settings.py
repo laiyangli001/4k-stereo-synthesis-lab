@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from stereo_runtime.render_size import RenderSizePolicy
 from viewer.settings import resolve_viewer_settings
 
 
@@ -45,6 +46,32 @@ def test_resolve_viewer_settings_requires_vsync_key():
         assert exc.args == ("VSync",)
     else:
         raise AssertionError("resolve_viewer_settings should require VSync")
+
+
+def test_resolve_viewer_settings_reads_render_size_config():
+    settings = dict(
+        BASE_SETTINGS,
+        VSync=False,
+        **{
+            "Render Size Policy": "scaled",
+            "Render Scale": 0.5,
+            "Render Fixed Width": 1600,
+            "Render Fixed Height": 900,
+            "Render Max Pixels": 2073600,
+            "Render Min Dimension": 540,
+            "Render Align": 8,
+        },
+    )
+
+    resolved = resolve_viewer_settings(settings)
+
+    assert resolved.render_size_config.policy is RenderSizePolicy.SCALED
+    assert resolved.render_size_config.scale_factor == 0.5
+    assert resolved.render_size_config.fixed_width == 1600
+    assert resolved.render_size_config.fixed_height == 900
+    assert resolved.render_size_config.max_pixels == 2073600
+    assert resolved.render_size_config.min_dimension == 540
+    assert resolved.render_size_config.align == 8
 
 
 def test_viewer_hip_runtime_searches_rocm_sdk_paths():

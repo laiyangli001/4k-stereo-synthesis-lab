@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from stereo_runtime.adapter import openxr_render_config_from_snapshot
 from stereo_runtime.openxr_state import OpenXRStateController
+from stereo_runtime.settings_snapshot import RuntimeSettingsSnapshot
 from xr_viewer.core_source_state import CoreSourceStateMixin
 
 
@@ -12,6 +14,8 @@ def make_runtime():
             ipd_mm=32.0,
             stereo_scale=0.4,
             max_shift_ratio=0.04,
+            max_disparity_px=None,
+            parallax_preset="standard",
         )
     )
 
@@ -57,6 +61,31 @@ def test_openxr_hard_idle_on_enter_runs_once_per_transition(capsys):
     assert "OpenXR hard idle exited" in output
 
 
+def test_openxr_render_config_from_snapshot_resolves_normalized_fields():
+    snapshot = RuntimeSettingsSnapshot(
+        version=1,
+        timestamp=1.0,
+        depth_strength=1.5,
+        convergence=0.2,
+        ipd_mm=64.0,
+        stereo_scale=0.5,
+        max_shift_ratio=0.04,
+        parallax_preset="standard",
+    )
+
+    config = openxr_render_config_from_snapshot(snapshot, render_size=(1920, 1080), screen_roll=0.15)
+
+    assert config.ipd == 0.064
+    assert config.ipd_mm == 64.0
+    assert config.stereo_scale == 0.5
+    assert config.depth_strength == 1.5
+    assert config.convergence == 0.2
+    assert config.max_shift_ratio == 0.04
+    assert config.max_disparity_px is not None
+    assert config.parallax_preset == "standard"
+    assert config.screen_roll == 0.15
+
+
 def test_openxr_runtime_config_update_and_render_config():
     state = OpenXRStateController(
         run_mode="OpenXR",
@@ -82,6 +111,41 @@ def test_openxr_runtime_config_update_and_render_config():
     assert config.convergence == 0.7
     assert config.max_shift_ratio == 0.055
     assert config.screen_roll == 0.1
+
+
+def test_openxr_runtime_config_accepts_runtime_settings_snapshot():
+    state = OpenXRStateController(
+        run_mode="OpenXR",
+        ipd=0.064,
+        depth_strength=1.0,
+        convergence=0.5,
+    )
+
+    state.update_runtime_config(
+        snapshot=RuntimeSettingsSnapshot(
+            version=2,
+            timestamp=2.0,
+            depth_strength=1.75,
+            convergence=0.25,
+            ipd_mm=63.0,
+            stereo_scale=0.45,
+            max_shift_ratio=0.035,
+            max_disparity_px=24.0,
+            parallax_preset="comfort",
+        ),
+        screen_roll=0.2,
+    )
+    config = state.current_render_config(make_runtime())
+
+    assert config.ipd == 0.063
+    assert config.ipd_mm == 63.0
+    assert config.stereo_scale == 0.45
+    assert config.depth_strength == 1.75
+    assert config.convergence == 0.25
+    assert config.max_shift_ratio == 0.035
+    assert config.max_disparity_px == 24.0
+    assert config.parallax_preset == "comfort"
+    assert config.screen_roll == 0.2
 
 
 def test_openxr_runtime_config_falls_back_to_runtime_stereo_config():

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from stereo_runtime.render_size import RenderSizeConfig, render_size_config_from_settings
 from utils.display import compute_output_resolution, get_fps
 from viewer.controller_help import get_controller_help_rows
 from viewer.upscaler import normalize_upscaler, normalize_upscaler_sharpness
@@ -14,6 +15,7 @@ class ViewerSettings:
     stereo_display_index: int | None
     stereo_display_selection: bool
     output_resolution: int | tuple[int, int]
+    render_size_config: RenderSizeConfig
     show_fps: bool
     depth_strength: float
     ipd: float
@@ -52,6 +54,7 @@ def resolve_viewer_settings(settings: dict) -> ViewerSettings:
         stereo_display_index,
         use_stereo_monitor=use_stereo_monitor,
     )
+    render_size_config = render_size_config_from_settings(settings)
     capture_mode = settings["Capture Mode"]
     window_title = settings["Window Title"] if capture_mode == "Window" else None
     target_fps = int(settings.get("Target FPS", 0) or 0)
@@ -65,6 +68,7 @@ def resolve_viewer_settings(settings: dict) -> ViewerSettings:
         stereo_display_index=stereo_display_index,
         stereo_display_selection=stereo_display_selection,
         output_resolution=output_resolution,
+        render_size_config=render_size_config,
         show_fps=settings["Show FPS"],
         depth_strength=settings["Depth Strength"],
         ipd=settings["IPD"],

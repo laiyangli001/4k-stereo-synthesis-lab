@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from streaming.config import resolve_streaming_config
 from stereo_runtime.depth_settings import resolve_depth_settings
 from stereo_runtime.model_capabilities import model_name_mapping
+from stereo_runtime.render_size import RenderSizeConfig
 from viewer.settings import resolve_viewer_settings
 
 from .capture_tool import resolve_capture_tool
@@ -33,6 +34,7 @@ class RuntimeExports:
     stereo_display_index: int | None
     stereo_display_selection: bool
     output_resolution: int | tuple[int, int]
+    render_size_config: RenderSizeConfig
     show_fps: bool
     depth_strength: float
     ipd: float
@@ -103,6 +105,7 @@ def resolve_runtime_exports(settings: dict, *, os_name: str) -> RuntimeExports:
         stereo_display_index=viewer_settings.stereo_display_index,
         stereo_display_selection=viewer_settings.stereo_display_selection,
         output_resolution=viewer_settings.output_resolution,
+        render_size_config=viewer_settings.render_size_config,
         show_fps=viewer_settings.show_fps,
         depth_strength=viewer_settings.depth_strength,
         ipd=viewer_settings.ipd,

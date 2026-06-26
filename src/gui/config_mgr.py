@@ -67,6 +67,17 @@ class GUIConfigMixin:
         self.upscaler_sharpness_dd.value = "0.00"
         target_fps = self._parse_int(cfg.get("Target FPS", DEFAULTS["Target FPS"]), DEFAULTS["Target FPS"])
         self.target_fps_dd.value = self._target_fps_to_display(target_fps)
+        self.render_policy_dd.value = self._render_policy_to_display(
+            cfg.get("Render Size Policy", DEFAULTS["Render Size Policy"]))
+        self.render_scale_dd.value = f'{self._parse_float(cfg.get("Render Scale", DEFAULTS["Render Scale"]), DEFAULTS["Render Scale"]):.2f}'
+        fixed_width = self._parse_int(cfg.get("Render Fixed Width", DEFAULTS["Render Fixed Width"]), DEFAULTS["Render Fixed Width"])
+        fixed_height = self._parse_int(cfg.get("Render Fixed Height", DEFAULTS["Render Fixed Height"]), DEFAULTS["Render Fixed Height"])
+        self.render_fixed_dd.value = self._fixed_size_to_display(fixed_width, fixed_height)
+        self.render_max_pixels_dd.value = str(self._parse_int(
+            cfg.get("Render Max Pixels", DEFAULTS["Render Max Pixels"]), DEFAULTS["Render Max Pixels"]))
+        self.render_min_dimension_dd.value = str(self._parse_int(
+            cfg.get("Render Min Dimension", DEFAULTS["Render Min Dimension"]), DEFAULTS["Render Min Dimension"]))
+        self.render_align_dd.value = str(self._parse_int(cfg.get("Render Align", DEFAULTS["Render Align"]), DEFAULTS["Render Align"]))
         self.antialiasing_dd.value = str(cfg.get("Anti-aliasing", DEFAULTS["Anti-aliasing"]))
         self.foreground_scale_dd.value = str(self._clamp_foreground_scale(
             cfg.get("Foreground Scale", DEFAULTS["Foreground Scale"])))
@@ -188,6 +199,7 @@ class GUIConfigMixin:
 
         stereo_preset = self._display_to_preset(self.stereo_preset_dd.value)
         stereo_quality = self._stereo_quality_for_preset(stereo_preset)
+        render_fixed_width, render_fixed_height = self._parse_fixed_size(self.render_fixed_dd.value)
 
         self._config.update({
             "Capture Mode": self.capture_mode_key,
@@ -230,6 +242,13 @@ class GUIConfigMixin:
             "VSync": self.local_vsync_cb.value,
             "Target FPS": self._target_fps_from_display(self.target_fps_dd.value),
             "Processing Resolution": self._config.get("Processing Resolution", DEFAULTS["Processing Resolution"]),
+            "Render Size Policy": self._display_to_render_policy(self.render_policy_dd.value),
+            "Render Scale": self._parse_float(self.render_scale_dd.value, DEFAULTS["Render Scale"]),
+            "Render Fixed Width": render_fixed_width,
+            "Render Fixed Height": render_fixed_height,
+            "Render Max Pixels": self._parse_int(self.render_max_pixels_dd.value, DEFAULTS["Render Max Pixels"]),
+            "Render Min Dimension": self._parse_int(self.render_min_dimension_dd.value, DEFAULTS["Render Min Dimension"]),
+            "Render Align": self._parse_int(self.render_align_dd.value, DEFAULTS["Render Align"]),
             "Upscaler": "Off",
             "Upscaler Sharpness": 0.0,
             "Stream Protocol": self.stream_proto_dd.value,
@@ -479,6 +498,25 @@ class GUIConfigMixin:
             "Debug / Export": "cinema", "调试 / 导出": "cinema",
         }
         return mapping.get(value, str(value or "cinema").strip().lower())
+
+    @staticmethod
+    def _fixed_size_to_display(width, height):
+        return f"{width}x{height}"
+
+    @staticmethod
+    def _parse_fixed_size(value):
+        text = str(value or "").strip().lower().replace(" ", "")
+        if "x" not in text:
+            return DEFAULTS["Render Fixed Width"], DEFAULTS["Render Fixed Height"]
+        width_text, height_text = text.split("x", 1)
+        try:
+            width = int(width_text)
+            height = int(height_text)
+        except (TypeError, ValueError):
+            return DEFAULTS["Render Fixed Width"], DEFAULTS["Render Fixed Height"]
+        if width <= 0 or height <= 0:
+            return DEFAULTS["Render Fixed Width"], DEFAULTS["Render Fixed Height"]
+        return width, height
 
     @staticmethod
     def _clamp_foreground_scale(value):

@@ -112,6 +112,8 @@ def test_windows_capture_runner_uses_copy_or_clone_buffers(monkeypatch):
     assert received[-1].frame == "copied-buffer"
     assert received[-1].target_height == (3840, 2160)
     assert received[-1].copy_mode is FrameCopyMode.COPY
+    assert received[-1].frame_raw_device == "cuda"
+    assert received[-1].metadata["zero_copy"] is False
     assert received[-1].capture_tool == "WindowsCaptureCUDA"
     assert received[-1].capture_mode == "Monitor"
     assert received[-1].monitor_index == 3
@@ -124,7 +126,43 @@ def test_windows_capture_runner_uses_copy_or_clone_buffers(monkeypatch):
     assert clone_buffer.cloned is True
     assert received[-1].frame == "cloned-buffer"
     assert received[-1].copy_mode is FrameCopyMode.CLONE
+    assert received[-1].frame_raw_device == "cuda"
     assert received[-1].original_format == "CloneBuffer"
+
+
+def test_windows_capture_runner_marks_rocm_clone_device(monkeypatch):
+    module = _install_capture_module(monkeypatch, "wc_rocm")
+    monkeypatch.setattr(windows_capture_event, "_setup_dpi_awareness", lambda: None)
+    monkeypatch.setattr(windows_capture_event.WindowsCaptureEventRunner, "_start_keyboard_worker", lambda self, event: None)
+
+    runner = windows_capture_event.WindowsCaptureEventRunner(
+        CaptureConfig(
+            os_name="Windows",
+            capture_tool="WindowsCaptureROCm",
+            capture_mode="Monitor",
+            monitor_index=2,
+            output_resolution=(1920, 1080),
+        )
+    )
+    received = []
+    shutdown_event = threading.Event()
+
+    runner.run(
+        shutdown_event=shutdown_event,
+        on_frame=received.append,
+        on_error=lambda exc: shutdown_event.set(),
+    )
+
+    capture = module.WindowsCapture.last_instance
+    clone_buffer = CloneBuffer()
+    shutdown_event.clear()
+    capture.handlers[0](FakeFrame(clone_buffer), FakeControl())
+
+    assert clone_buffer.cloned is True
+    assert received[-1].frame == "cloned-buffer"
+    assert received[-1].copy_mode is FrameCopyMode.CLONE
+    assert received[-1].frame_raw_device == "rocm"
+    assert received[-1].metadata["zero_copy"] is False
 
 
 def test_windows_capture_runner_uses_window_name_for_window_capture(monkeypatch):

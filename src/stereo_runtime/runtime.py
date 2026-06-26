@@ -13,6 +13,8 @@ from .adapter import StereoRuntimeConfig, depth_provider_config_from_runtime, st
 from .depth_postprocess import postprocess_depth
 from .depth_provider import DepthProfileResult, create_depth_provider
 from .openxr_render import OpenXRRenderConfig, render_openxr_stereo
+from .parallax import parallax_debug_info, resolve_parallax_budget
+from .render_size import runtime_output_size_text
 from .settings_snapshot import RuntimeSettingsRestartRequired, RuntimeSettingsSnapshot, SnapshotChangeClass
 from .synthesis import StereoResult, synthesize_stereo
 from .temporal import TemporalState
@@ -532,6 +534,7 @@ class StereoRuntime:
         debug["runtime_output_format"] = self.stereo_config.output_format
         debug["runtime_depth_upsample"] = self.config.depth_upsample
         debug["active_settings_version"] = int(self.active_settings_version)
+        _add_preprocess_debug_info(debug, rgb_frame)
         if memory:
             debug.update(memory)
 
@@ -552,6 +555,7 @@ class StereoRuntime:
                 debug["runtime_output_dtype"] = "uint8"
             else:
                 debug["runtime_output_dtype"] = str(sbs.dtype).replace("torch.", "")
+        _add_runtime_output_size_debug_info(debug, stereo.left_eye, sbs)
         pack_ms = (time.perf_counter() - pack_start) * 1000.0
         timing["pack_ms"] = float(pack_ms)
         if total_ms >= float(os.environ.get("D2S_SLOW_RUNTIME_LOG_MS", "200") or "200"):
@@ -652,15 +656,12 @@ class StereoRuntime:
         debug["runtime_output_format"] = output_format
         debug["active_settings_version"] = int(self.active_settings_version)
         debug["runtime_output_dtype"] = _runtime_eye_dtype(left_eye, right_eye)
-        debug["runtime_output_eye_size"] = _runtime_eye_size(left_eye)
+        _add_runtime_output_size_debug_info(debug, left_eye, left_eye)
         debug["runtime_output_pack_backend"] = pack_backend
         if openxr_config is not None:
-            debug["openxr_ipd"] = float(openxr_config.ipd)
-            debug["openxr_depth_strength"] = float(openxr_config.depth_strength)
-            debug["openxr_stereo_scale"] = float(openxr_config.stereo_scale)
-            debug["openxr_max_shift_ratio"] = float(openxr_config.max_shift_ratio)
-            debug["openxr_convergence"] = float(openxr_config.convergence)
+            _add_openxr_config_debug_info(debug, openxr_config, left_eye)
         debug["runtime_depth_upsample"] = self.config.depth_upsample
+        _add_preprocess_debug_info(debug, rgb_frame)
         if memory:
             debug.update(memory)
         if total_ms >= float(os.environ.get("D2S_SLOW_RUNTIME_LOG_MS", "120") or "120") and os.environ.get('D2S_DEBUG', '0') in ('1', 'true', 'yes', 'on'):
@@ -869,6 +870,54 @@ def _validate_runtime_rgb_frame(rgb_frame: Any) -> torch.Tensor:
     if not rgb_frame.is_floating_point():
         raise TypeError(f"rgb_frame must be float 0..1; got dtype {rgb_frame.dtype}")
     return rgb_frame
+
+
+def _add_runtime_output_size_debug_info(debug: dict[str, Any], eye_frame: torch.Tensor, display_frame: torch.Tensor) -> None:
+    debug["runtime_output_eye_size"] = runtime_output_size_text(_runtime_frame_size(eye_frame))
+    debug["runtime_output_display_size"] = runtime_output_size_text(_runtime_frame_size(display_frame))
+
+
+def _add_openxr_config_debug_info(debug: dict[str, Any], config: OpenXRRenderConfig, eye_frame: torch.Tensor) -> None:
+    render_size = _runtime_frame_size(eye_frame)
+    if render_size is not None:
+        budget = resolve_parallax_budget(
+            render_width=render_size[0],
+            render_height=render_size[1],
+            preset=config.parallax_preset,
+            depth_strength=config.depth_strength,
+            stereo_scale=config.stereo_scale,
+            convergence=config.convergence,
+            ipd_mm=config.ipd_mm,
+            max_shift_ratio=config.max_shift_ratio,
+            ipd=config.ipd,
+            max_disparity_px=config.max_disparity_px,
+        )
+        debug.update(parallax_debug_info(budget))
+    elif config.max_disparity_px is not None:
+        debug["resolved_max_disparity_px"] = float(config.max_disparity_px)
+        debug["parallax_budget_preset"] = str(config.parallax_preset)
+    debug["openxr_ipd"] = float(config.ipd)
+    debug["openxr_depth_strength"] = float(config.depth_strength)
+    debug["openxr_stereo_scale"] = float(config.stereo_scale)
+    debug["openxr_max_shift_ratio"] = float(config.max_shift_ratio)
+    debug["openxr_convergence"] = float(config.convergence)
+    if config.max_disparity_px is not None:
+        debug["openxr_max_disparity_px"] = float(config.max_disparity_px)
+    debug["openxr_parallax_preset"] = str(config.parallax_preset)
+
+
+def _add_preprocess_debug_info(debug: dict[str, Any], rgb_frame: torch.Tensor) -> None:
+    mapping = {
+        "_d2s_preprocess_backend": "preprocess_backend",
+        "_d2s_preprocess_input_kind": "preprocess_input_kind",
+        "_d2s_preprocess_device_origin": "preprocess_device_origin",
+        "_d2s_preprocess_device_output": "preprocess_device_output",
+        "_d2s_preprocess_device_transfer": "preprocess_device_transfer",
+    }
+    for attr, key in mapping.items():
+        value = getattr(rgb_frame, attr, None)
+        if value is not None:
+            debug[key] = str(value)
 
 
 

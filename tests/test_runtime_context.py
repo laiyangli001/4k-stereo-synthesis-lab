@@ -2,6 +2,7 @@
 from types import SimpleNamespace
 
 from app_runtime.runtime_context import build_capture_callbacks, build_runtime_pipeline_context, env_flag, initial_stereo_preset_state
+from stereo_runtime.render_size import RenderSizeConfig
 
 
 def test_env_flag_accepts_common_truthy_values(monkeypatch):
@@ -50,14 +51,18 @@ def test_build_capture_callbacks_wires_raw_queue_clear():
 def test_build_runtime_pipeline_context_uses_app_context_queues():
     raw_q = queue.Queue()
     runtime_q = queue.Queue()
+    settings_update_q = queue.Queue()
+    render_size_config = RenderSizeConfig()
     app_context = SimpleNamespace(
         raw_q=raw_q,
         runtime_q=runtime_q,
+        settings_update_q=settings_update_q,
         time_sleep=0.01,
         openxr_runtime_direct=False,
         use_cudart=False,
         thread_latencies={},
         stereo_runtime=object(),
+        render_size_config=render_size_config,
     )
     shutdown = SimpleNamespace(is_set=lambda: False)
 
@@ -88,5 +93,7 @@ def test_build_runtime_pipeline_context_uses_app_context_queues():
 
     assert context.raw_q is raw_q
     assert context.runtime_q is runtime_q
+    assert context.settings_update_q is settings_update_q
+    assert context.render_size_config is render_size_config
     assert context.run_mode == "Viewer"
     assert context.device == "cpu"

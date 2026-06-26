@@ -48,6 +48,30 @@ class GUIHandlerMixin:
     def _depth_quick_to_display(self, value):
         return UI_MESSAGES[self.locale].get(value, value)
 
+    def _render_policy_options(self):
+        t = UI_MESSAGES[self.locale]
+        return [t["Native"], t["Scaled"], t["Fixed"], t["Dynamic"]]
+
+    def _render_policy_to_display(self, value):
+        mapping = {
+            "native": "Native",
+            "scaled": "Scaled",
+            "fixed": "Fixed",
+            "dynamic": "Dynamic",
+        }
+        key = mapping.get(str(value or "native").strip().lower(), "Native")
+        return UI_MESSAGES[self.locale].get(key, key)
+
+    def _display_to_render_policy(self, value):
+        text = str(value or "")
+        mapping = {
+            "native": "native", "Native": "native", "原生": "native",
+            "scaled": "scaled", "Scaled": "scaled", "缩放": "scaled",
+            "fixed": "fixed", "Fixed": "fixed", "固定": "fixed",
+            "dynamic": "dynamic", "Dynamic": "dynamic", "动态": "dynamic",
+        }
+        return mapping.get(text, text.strip().lower() or "native")
+
     def _preset_to_display(self, value):
         mapping = {
             "auto": "Cinema", "cinema": "Cinema",
@@ -431,10 +455,23 @@ class GUIHandlerMixin:
         show_enhance = False
         self.row6b.visible = show_timing
         self.row6c.visible = show_enhance
+        show_render_size = advanced and mode in ["Local Viewer", "3D Monitor", "OpenXR Link"]
+        self.row6d.visible = show_render_size
+        self.row6e.visible = show_render_size
+        self.row6f.visible = show_render_size
         self.target_fps_label.visible = show_timing
         self.target_fps_dd.visible = show_timing
         self.local_vsync_cb.visible = advanced and mode in ["Local Viewer", "3D Monitor"]
         self.debug_mode_cb.visible = advanced
+        for ctrl in [
+            self.render_policy_label, self.render_policy_dd,
+            self.render_scale_label, self.render_scale_dd,
+            self.render_fixed_label, self.render_fixed_dd,
+            self.render_max_pixels_label, self.render_max_pixels_dd,
+            self.render_min_dimension_label, self.render_min_dimension_dd,
+            self.render_align_label, self.render_align_dd,
+        ]:
+            ctrl.visible = show_render_size
         self.upscaler_label.visible = show_enhance
         self.upscaler_dd.visible = show_enhance
         self.upscaler_sharpness_label.visible = show_enhance
@@ -609,6 +646,15 @@ class GUIHandlerMixin:
         target_fps_value = self._target_fps_from_display(self.target_fps_dd.value)
         self.target_fps_dd.options = [t["Auto"], "60", "72", "80", "90", "120"]
         self.target_fps_dd.value = self._target_fps_to_display(target_fps_value)
+        self.render_policy_label.value = t["Render Policy:"]
+        render_policy = self._display_to_render_policy(self.render_policy_dd.value)
+        self.render_policy_dd.options = self._render_policy_options()
+        self.render_policy_dd.value = self._render_policy_to_display(render_policy)
+        self.render_scale_label.value = t["Render Scale:"]
+        self.render_fixed_label.value = t["Render Fixed Size:"]
+        self.render_max_pixels_label.value = t["Render Pixel Cap:"]
+        self.render_min_dimension_label.value = t["Render Min Side:"]
+        self.render_align_label.value = t["Render Align:"]
         self.upscaler_label.value = t.get("Upscaler:", "Upscaler:")
         self.upscaler_sharpness_label.value = t.get("Upscaler Sharpness:", "Sharpness:")
         self.upscaler_dd.options = self._upscaler_display_options()
@@ -702,6 +748,12 @@ class GUIHandlerMixin:
             (self.display_mode_dd, "tooltip_display_mode"),
             (self.local_vsync_cb, "tooltip_vsync"),
             (self.target_fps_dd, "tooltip_target_fps"),
+            (self.render_policy_dd, "tooltip_render_policy"),
+            (self.render_scale_dd, "tooltip_render_scale"),
+            (self.render_fixed_dd, "tooltip_render_fixed_size"),
+            (self.render_max_pixels_dd, "tooltip_render_max_pixels"),
+            (self.render_min_dimension_dd, "tooltip_render_min_dimension"),
+            (self.render_align_dd, "tooltip_render_align"),
             (self.ctrl_model_dd, "tooltip_ctrl_model"),
             (self.env_model_dd, "tooltip_env_model"),
             (self.capture_mode_dd, "tooltip_capture_mode"),

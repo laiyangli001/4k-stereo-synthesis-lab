@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import threading
+from dataclasses import replace
 
-from stereo_runtime import OpenXRRenderConfig
+from .adapter import openxr_render_config_from_snapshot
+from .openxr_render import OpenXRRenderConfig
+from .settings_snapshot import RuntimeSettingsSnapshot
 
 
 class OpenXRStateController:
@@ -27,14 +30,16 @@ class OpenXRStateController:
             depth_ratio = depth_strength
         if depth_ratio is None:
             raise TypeError("OpenXRStateController requires depth_ratio or depth_strength")
-        self.runtime_config_state = {
-            "ipd": float(ipd),
-            "depth_ratio": float(depth_ratio),
-            "convergence": float(convergence),
-            "stereo_scale": None if stereo_scale is None else float(stereo_scale),
-            "max_shift_ratio": None if max_shift_ratio is None else float(max_shift_ratio),
-            "screen_roll": 0.0,
-        }
+        self.runtime_settings_snapshot = RuntimeSettingsSnapshot(
+            version=0,
+            timestamp=0.0,
+            depth_strength=float(depth_ratio),
+            convergence=float(convergence),
+            stereo_scale=None if stereo_scale is None else float(stereo_scale),
+            max_shift_ratio=None if max_shift_ratio is None else float(max_shift_ratio),
+        )
+        self.legacy_ipd = float(ipd)
+        self.screen_roll = 0.0
         self.source_pause_notice_lock = threading.Lock()
         self.source_pause_noticed = None
         self.wait_idle_notice_lock = threading.Lock()
@@ -75,47 +80,96 @@ class OpenXRStateController:
     def update_runtime_config(
         self,
         *,
+        snapshot=None,
         ipd=None,
         depth_ratio=None,
         depth_strength=None,
         convergence=None,
         stereo_scale=None,
         max_shift_ratio=None,
+        max_disparity_px=None,
+        parallax_preset=None,
         screen_roll=None,
     ) -> None:
         with self.runtime_config_lock:
+            current = self.runtime_settings_snapshot
+            if snapshot is not None:
+                current = _merge_snapshot(current, snapshot)
+                if snapshot.ipd_mm is not None:
+                    self.legacy_ipd = None
             if ipd is not None:
-                self.runtime_config_state["ipd"] = float(ipd)
+                self.legacy_ipd = float(ipd)
             if depth_ratio is None:
                 depth_ratio = depth_strength
             if depth_ratio is not None:
-                self.runtime_config_state["depth_ratio"] = float(depth_ratio)
+                current = replace(current, depth_strength=float(depth_ratio))
             if convergence is not None:
-                self.runtime_config_state["convergence"] = float(convergence)
+                current = replace(current, convergence=float(convergence))
             if stereo_scale is not None:
-                self.runtime_config_state["stereo_scale"] = float(stereo_scale)
+                current = replace(current, stereo_scale=float(stereo_scale))
             if max_shift_ratio is not None:
-                self.runtime_config_state["max_shift_ratio"] = float(max_shift_ratio)
+                current = replace(current, max_shift_ratio=float(max_shift_ratio))
+            if max_disparity_px is not None:
+                current = replace(current, max_disparity_px=float(max_disparity_px))
+            if parallax_preset is not None:
+                current = replace(current, parallax_preset=str(parallax_preset))
             if screen_roll is not None:
-                self.runtime_config_state["screen_roll"] = float(screen_roll)
+                self.screen_roll = float(screen_roll)
+            self.runtime_settings_snapshot = current
 
     def current_render_config(self, runtime) -> OpenXRRenderConfig:
         with self.runtime_config_lock:
-            state = dict(self.runtime_config_state)
-        return OpenXRRenderConfig(
-            ipd=state["ipd"],
-            ipd_mm=runtime.stereo_config.ipd_mm,
-            stereo_scale=(
-                runtime.stereo_config.stereo_scale
-                if state["stereo_scale"] is None
-                else state["stereo_scale"]
-            ),
-            depth_strength=state["depth_ratio"],
-            convergence=state["convergence"],
-            max_shift_ratio=(
-                runtime.stereo_config.max_shift_ratio
-                if state["max_shift_ratio"] is None
-                else state["max_shift_ratio"]
-            ),
-            screen_roll=state["screen_roll"],
+            snapshot = _snapshot_with_runtime_fallbacks(self.runtime_settings_snapshot, runtime)
+            screen_roll = self.screen_roll
+            legacy_ipd = self.legacy_ipd
+        config = openxr_render_config_from_snapshot(
+            snapshot,
+            preset=getattr(runtime.stereo_config, "parallax_preset", "legacy"),
+            screen_roll=screen_roll,
         )
+        if legacy_ipd is not None:
+            return replace(config, ipd=float(legacy_ipd))
+        return config
+
+
+def _merge_snapshot(base: RuntimeSettingsSnapshot, updates: RuntimeSettingsSnapshot) -> RuntimeSettingsSnapshot:
+    values = {}
+    for name in updates.__dataclass_fields__:
+        value = getattr(updates, name)
+        if value is not None:
+            values[name] = value
+    if values:
+        return replace(base, **values)
+    return base
+
+
+def _snapshot_with_runtime_fallbacks(snapshot: RuntimeSettingsSnapshot, runtime) -> RuntimeSettingsSnapshot:
+    stereo_config = runtime.stereo_config
+    return replace(
+        snapshot,
+        ipd_mm=(
+            float(stereo_config.ipd_mm)
+            if snapshot.ipd_mm is None and stereo_config.ipd_mm is not None
+            else snapshot.ipd_mm
+        ),
+        stereo_scale=(
+            float(stereo_config.stereo_scale)
+            if snapshot.stereo_scale is None
+            else snapshot.stereo_scale
+        ),
+        max_shift_ratio=(
+            float(stereo_config.max_shift_ratio)
+            if snapshot.max_shift_ratio is None
+            else snapshot.max_shift_ratio
+        ),
+        max_disparity_px=(
+            getattr(stereo_config, "max_disparity_px", None)
+            if snapshot.max_disparity_px is None
+            else snapshot.max_disparity_px
+        ),
+        parallax_preset=(
+            getattr(stereo_config, "parallax_preset", "legacy")
+            if snapshot.parallax_preset is None
+            else snapshot.parallax_preset
+        ),
+    )

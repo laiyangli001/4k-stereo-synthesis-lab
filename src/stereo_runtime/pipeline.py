@@ -8,6 +8,7 @@ from typing import Callable
 
 from capture.types import CapturedFrame
 
+from .render_size import RenderSizeConfig, resolve_render_size
 from .runtime import openxr_result_from_stereo_result
 from .settings_snapshot import RuntimeSettingsRestartRequired
 
@@ -46,6 +47,7 @@ class RuntimePipelineContext:
     warmup_stereo_once_for_frame: Callable[[object], None]
     log_fast_plus_fused_runtime_state: Callable[[object], None]
     settings_update_q: object | None = None
+    render_size_config: RenderSizeConfig | None = None
 
 
 def _drain_latest_nowait(q: object | None):
@@ -69,8 +71,17 @@ def _openxr_full_synthesis_enabled(ctx: RuntimePipelineContext) -> bool:
 
 def _unpack_raw_queue_item(item):
     if isinstance(item, CapturedFrame):
-        return item.frame, item.target_height, item.timestamp
-    return item
+        return item.frame, item.target_height, item.timestamp, item
+    frame_raw, size, capture_start_time = item
+    return frame_raw, size, capture_start_time, None
+
+
+def _resolve_pipeline_render_size(size, config: RenderSizeConfig | None):
+    if config is None:
+        return size
+    if isinstance(size, (tuple, list)) and len(size) == 2:
+        return resolve_render_size((int(size[0]), int(size[1])), config)
+    return size
 
 
 def _rgb_size_text(frame) -> str:
@@ -82,6 +93,47 @@ def _rgb_size_text(frame) -> str:
     if len(shape) == 3:
         return f"{int(shape[1])}x{int(shape[0])}"
     return "unknown"
+
+
+def _capture_zero_copy(captured_frame: CapturedFrame | None):
+    if captured_frame is None:
+        return None
+    if "zero_copy" in captured_frame.metadata:
+        return bool(captured_frame.metadata["zero_copy"])
+    return captured_frame.copy_mode.value == "none"
+
+
+def _capture_copy_mode(captured_frame: CapturedFrame | None):
+    if captured_frame is None:
+        return None
+    return captured_frame.copy_mode.value
+
+
+def _capture_debug_fields(captured_frame: CapturedFrame | None, frame_rgb) -> dict:
+    fields = {
+        "preprocess_device_origin": getattr(frame_rgb, "_d2s_preprocess_device_origin", None),
+        "preprocess_device_output": getattr(frame_rgb, "_d2s_preprocess_device_output", None),
+        "preprocess_device_transfer": getattr(frame_rgb, "_d2s_preprocess_device_transfer", None),
+        "preprocess_input_kind": getattr(frame_rgb, "_d2s_preprocess_input_kind", None),
+        "capture_copy_mode": getattr(frame_rgb, "_d2s_capture_copy_mode", _capture_copy_mode(captured_frame)),
+        "capture_zero_copy": getattr(frame_rgb, "_d2s_capture_zero_copy", _capture_zero_copy(captured_frame)),
+    }
+    if captured_frame is not None:
+        fields.update(
+            capture_tool=captured_frame.capture_tool,
+            capture_frame_raw_device=captured_frame.frame_raw_device,
+            capture_frame_raw_type=captured_frame.frame_raw_type,
+            capture_frame_raw_dtype=captured_frame.frame_raw_dtype,
+        )
+    return {key: value for key, value in fields.items() if value is not None}
+
+
+def _attach_capture_debug(runtime_result, captured_frame: CapturedFrame | None, frame_rgb) -> None:
+    debug_info = getattr(runtime_result, "debug_info", None)
+    if isinstance(debug_info, dict):
+        debug_info.update(_capture_debug_fields(captured_frame, frame_rgb))
+
+
 class RuntimePipelineLoop:
     def __init__(self, context: RuntimePipelineContext):
         self.context = context
@@ -118,7 +170,7 @@ class RuntimePipelineLoop:
                         last_settings_change_class=change_class.value,
                     )
 
-                frame_raw, size, capture_start_time = _unpack_raw_queue_item(
+                frame_raw, size, capture_start_time, captured_frame = _unpack_raw_queue_item(
                     ctx.queue_drain_latest(
                         ctx.raw_q,
                         ctx.raw_q.get(timeout=min(ctx.time_sleep, 0.01)),
@@ -137,12 +189,16 @@ class RuntimePipelineLoop:
                 loop_start_time = time.perf_counter()
 
                 process_start_time = time.perf_counter()
+                render_size = _resolve_pipeline_render_size(size, ctx.render_size_config)
                 frame_rgb = ctx.capture_frame_to_rgb(
                     frame_raw,
-                    size,
+                    render_size,
                     device=ctx.device,
                     use_torch=ctx.use_cudart,
                     output="tensor",
+                    frame_raw_device=captured_frame.frame_raw_device if captured_frame else None,
+                    capture_copy_mode=_capture_copy_mode(captured_frame),
+                    capture_zero_copy=_capture_zero_copy(captured_frame),
                 )
                 if not self._logged_rgb_shape and os.environ.get('D2S_DEBUG', '0') in ('1', 'true', 'yes', 'on'):
                     self._logged_rgb_shape = True
@@ -182,6 +238,7 @@ class RuntimePipelineLoop:
                     if ctx.run_mode == "OpenXR":
                         runtime_result = openxr_result_from_stereo_result(runtime_result)
                 ctx.breakdown_add_time("rt_call", time.perf_counter() - runtime_call_start_time)
+                _attach_capture_debug(runtime_result, captured_frame, frame_rgb)
                 ctx.breakdown_add_runtime_timing(runtime_result)
                 ctx.log_fast_plus_fused_runtime_state(runtime_result)
                 if runtime_result.depth is None:

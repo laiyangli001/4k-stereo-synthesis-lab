@@ -188,7 +188,8 @@ class GUIBuilderMixin:
             self.antialiasing_label, self.stereo_preset_label, self.max_shift_label,
             self.scene_reset_label, self.edge_dilation_label, self.mask_feather_label, self.hole_fill_mode_label, self.stereo_scale_label,
             self.acceleration_label, self.computing_device_label, self.capture_tool_label,
-            self.target_fps_label, self.run_mode_label,
+            self.target_fps_label, self.render_policy_label, self.render_fixed_label,
+            self.render_min_dimension_label, self.run_mode_label,
             self.stereo_output_label, self.controller_label, self.lang_label,
             self.stream_url_label, self.stream_port_label,
             self.stream_proto_label, self.audio_label, self.crf_label,
@@ -196,6 +197,7 @@ class GUIBuilderMixin:
         right_labels = [
             self.ipd_label, self.temporal_strength_label,
             self.reset_cooldown_label, self.edge_threshold_label, self.anaglyph_label,
+            self.render_scale_label, self.render_max_pixels_label, self.render_align_label,
             self.display_mode_label, self.environment_label,
             self.theme_label, self.stream_quality_label, self.stream_key_label,
             self.audio_delay_label,
@@ -420,6 +422,30 @@ class GUIBuilderMixin:
             ft.Container(width=S(5)), self.debug_mode_cb], spacing=1)
         self.row6b = ft.Row([self.target_fps_label, self.target_fps_dd,
             ft.Container(width=S(20)), self.local_vsync_cb], spacing=1)
+        self.render_policy_label = ft.Text("Render Policy:", size=FONT_SIZE, width=S(130))
+        self.render_policy_dd = CompactDropdown(
+            options=["Native", "Scaled", "Fixed", "Dynamic"], value="Native", width=S(130))
+        self.render_scale_label = ft.Text("Render Scale:", size=FONT_SIZE, width=S(130))
+        self.render_scale_dd = CompactDropdown(options=["0.25", "0.50", "0.75", "1.00"],
+            value="1.00", width=S(130))
+        self.row6d = ft.Row([self.render_policy_label, self.render_policy_dd,
+            ft.Container(width=S(40)), self.render_scale_label, self.render_scale_dd], spacing=1)
+        self.render_fixed_label = ft.Text("Render Fixed Size:", size=FONT_SIZE, width=S(130))
+        self.render_fixed_dd = CompactDropdown(
+            options=["1280x720", "1600x900", "1920x1080", "2560x1440", "3840x2160"],
+            value="1920x1080", width=S(130))
+        self.render_max_pixels_label = ft.Text("Render Pixel Cap:", size=FONT_SIZE, width=S(130))
+        self.render_max_pixels_dd = CompactDropdown(
+            options=["921600", "2073600", "3686400", "8294400"], value="8294400", width=S(130))
+        self.row6e = ft.Row([self.render_fixed_label, self.render_fixed_dd,
+            ft.Container(width=S(40)), self.render_max_pixels_label, self.render_max_pixels_dd], spacing=1)
+        self.render_min_dimension_label = ft.Text("Render Min Side:", size=FONT_SIZE, width=S(130))
+        self.render_min_dimension_dd = CompactDropdown(options=["360", "480", "540", "720"],
+            value="480", width=S(130))
+        self.render_align_label = ft.Text("Render Align:", size=FONT_SIZE, width=S(130))
+        self.render_align_dd = CompactDropdown(options=["1", "8", "16", "32"], value="16", width=S(130))
+        self.row6f = ft.Row([self.render_min_dimension_label, self.render_min_dimension_dd,
+            ft.Container(width=S(40)), self.render_align_label, self.render_align_dd], spacing=1)
         self.upscaler_label = ft.Text("", size=FONT_SIZE, width=0, visible=False)
         self.upscaler_dd = CompactDropdown(options=["Off"], value="Off", width=S(1))
         self.upscaler_dd.visible = False
@@ -519,7 +545,8 @@ class GUIBuilderMixin:
                              ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE)),
             border_radius=6, padding=ft.Padding(S(16), S(10), S(16), S(10)))
         device_group = ft.Container(
-            ft.Column([row5, row6, self.row6b, self.row7a, self.row7b, row8, self.row6c, self.row9], spacing=S(8)),
+            ft.Column([row5, row6, self.row6b, self.row6d, self.row6e, self.row6f,
+                       self.row7a, self.row7b, row8, self.row6c, self.row9], spacing=S(8)),
             margin=ft.Margin(0, 0, 0, S(8)),
             border=ft.Border(ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE),
                              ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE)),

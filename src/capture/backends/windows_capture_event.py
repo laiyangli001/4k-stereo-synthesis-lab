@@ -23,6 +23,24 @@ def _load_windows_capture(capture_tool):
 
 
 
+def _event_capture_device(capture_tool):
+    if capture_tool == "WindowsCaptureCUDA":
+        return "cuda"
+    if capture_tool == "WindowsCaptureROCm":
+        return "rocm"
+    return "cpu"
+
+
+def _copy_frame_buffer(frame_buffer, capture_tool):
+    device = _event_capture_device(capture_tool)
+    prefer_clone = device in ("cuda", "rocm")
+    if prefer_clone and hasattr(frame_buffer, "clone"):
+        return frame_buffer.clone(), FrameCopyMode.CLONE, device
+    if hasattr(frame_buffer, "copy"):
+        return frame_buffer.copy(), FrameCopyMode.COPY, device
+    return frame_buffer.clone(), FrameCopyMode.CLONE, device
+
+
 def _setup_dpi_awareness():
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(2)
@@ -146,12 +164,7 @@ class WindowsCaptureEventRunner:
                     if on_paused is not None:
                         on_paused("paused")
                     return
-                if hasattr(frame.frame_buffer, "copy"):
-                    raw = frame.frame_buffer.copy()
-                    copy_mode = FrameCopyMode.COPY
-                else:
-                    raw = frame.frame_buffer.clone()
-                    copy_mode = FrameCopyMode.CLONE
+                raw, copy_mode, frame_raw_device = _copy_frame_buffer(frame.frame_buffer, self.capture_tool)
                 on_frame(
                     capture_frame_from_raw(
                         raw,
@@ -160,7 +173,11 @@ class WindowsCaptureEventRunner:
                         config=self.config,
                         copy_mode=copy_mode,
                         original_format=type(frame.frame_buffer).__name__,
-                        metadata={"backend": "windows_capture_event"},
+                        frame_raw_device=frame_raw_device,
+                        metadata={
+                            "backend": "windows_capture_event",
+                            "zero_copy": False,
+                        },
                     )
                 )
 

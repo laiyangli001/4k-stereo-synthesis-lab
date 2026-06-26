@@ -90,6 +90,9 @@ def capture_frame_from_raw(
     original_format: str = "",
     metadata: dict[str, Any] | None = None,
     capture_size: tuple[int, int] | None = None,
+    frame_raw_type: str | None = None,
+    frame_raw_device: str | None = None,
+    frame_raw_dtype: str | None = None,
 ) -> CapturedFrame:
     return CapturedFrame(
         frame=frame,
@@ -100,9 +103,9 @@ def capture_frame_from_raw(
         monitor_index=int(config.monitor_index) if config is not None else 0,
         window_title=str(config.window_title or "") if config is not None else "",
         capture_size=capture_size if capture_size is not None else _capture_size(frame),
-        frame_raw_type=_frame_raw_type(frame),
-        frame_raw_device=_frame_raw_device(frame),
-        frame_raw_dtype=_frame_raw_dtype(frame),
+        frame_raw_type=frame_raw_type if frame_raw_type is not None else _frame_raw_type(frame),
+        frame_raw_device=frame_raw_device if frame_raw_device is not None else _frame_raw_device(frame),
+        frame_raw_dtype=frame_raw_dtype if frame_raw_dtype is not None else _frame_raw_dtype(frame),
         copy_mode=copy_mode,
         original_format=original_format,
         metadata=dict(metadata or {}),

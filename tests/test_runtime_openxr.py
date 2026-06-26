@@ -59,7 +59,72 @@ def test_process_openxr_frame_defaults_to_rgb_depth_runtime_result():
     assert result.timing["pack_ms"] == 0.0
     assert result.debug_info["runtime_output_format"] == "openxr_rgb_depth"
     assert result.debug_info["runtime_output_dtype"] == "float32"
+    assert result.debug_info["runtime_output_eye_size"] == "16x12"
+    assert result.debug_info["runtime_output_display_size"] == "16x12"
     assert result.debug_info["backend"] == "openxr_viewer_shader_dibr"
+
+
+def test_process_openxr_frame_debug_info_carries_preprocess_device_metadata():
+    config = StereoRuntimeConfig(
+        model_id="Distill-Any-Depth-Base",
+        cache_dir="models",
+        device="cpu",
+        depth_backend="pytorch_cuda",
+    )
+    runtime = StereoRuntime(config, depth_provider=FakeDepthProvider(), collect_memory_stats=False)
+    rgb = torch.rand(1, 3, 12, 16)
+    rgb._d2s_preprocess_device_transfer = "cpu->cpu"
+
+    result = runtime.process_openxr_frame(rgb, OpenXRRenderConfig())
+
+    assert result.debug_info["preprocess_device_transfer"] == "cpu->cpu"
+    assert result.debug_info["runtime_output_eye_size"] == "16x12"
+    assert result.debug_info["runtime_output_display_size"] == "16x12"
+
+
+def test_runtime_debug_info_carries_preprocess_device_metadata():
+    config = StereoRuntimeConfig(
+        model_id="Distill-Any-Depth-Base",
+        cache_dir="models",
+        device="cpu",
+        depth_backend="pytorch_cuda",
+        stereo_quality="fast",
+    )
+    runtime = StereoRuntime(config, depth_provider=FakeDepthProvider(), collect_memory_stats=False)
+    rgb = torch.rand(1, 3, 12, 16)
+    rgb._d2s_preprocess_backend = "torch_bgr_norm"
+    rgb._d2s_preprocess_input_kind = "numpy"
+    rgb._d2s_preprocess_device_origin = "cpu"
+    rgb._d2s_preprocess_device_output = "cpu"
+    rgb._d2s_preprocess_device_transfer = "cpu->cpu"
+
+    result = runtime.process_rgb_frame(rgb)
+
+    assert result.debug_info["preprocess_backend"] == "torch_bgr_norm"
+    assert result.debug_info["preprocess_input_kind"] == "numpy"
+    assert result.debug_info["preprocess_device_origin"] == "cpu"
+    assert result.debug_info["preprocess_device_output"] == "cpu"
+    assert result.debug_info["preprocess_device_transfer"] == "cpu->cpu"
+    assert result.debug_info["runtime_output_eye_size"] == "16x12"
+    assert result.debug_info["runtime_output_display_size"] == "16x12"
+
+
+def test_runtime_debug_info_records_eye_and_display_sizes_for_sbs_output():
+    config = StereoRuntimeConfig(
+        model_id="Distill-Any-Depth-Base",
+        cache_dir="models",
+        device="cpu",
+        depth_backend="pytorch_cuda",
+        stereo_quality="fast",
+        output_format="full_sbs",
+    )
+    runtime = StereoRuntime(config, depth_provider=FakeDepthProvider(), collect_memory_stats=False)
+    rgb = torch.rand(1, 3, 12, 16)
+
+    result = runtime.process_rgb_frame(rgb)
+
+    assert result.debug_info["runtime_output_eye_size"] == "16x12"
+    assert result.debug_info["runtime_output_display_size"] == "32x12"
 
 
 def test_openxr_result_from_stereo_result_keeps_full_size_eye_views_for_quality_half_sbs():
@@ -142,6 +207,36 @@ def test_openxr_rgb_depth_debug_info_carries_stereo_scale_and_max_shift():
     assert result.debug_info["openxr_ipd"] == 0.064
     assert result.debug_info["openxr_stereo_scale"] == 0.35
     assert result.debug_info["openxr_max_shift_ratio"] == 0.0
+
+
+def test_openxr_rgb_depth_debug_info_records_resolved_max_disparity_px():
+    config = StereoRuntimeConfig(
+        model_id="Distill-Any-Depth-Base",
+        cache_dir="models",
+        device="cpu",
+        depth_backend="pytorch_cuda",
+    )
+    runtime = StereoRuntime(config, depth_provider=FakeDepthProvider(), collect_memory_stats=False)
+    rgb = torch.rand(1, 3, 12, 16)
+
+    result = runtime.process_openxr_frame(
+        rgb,
+        OpenXRRenderConfig(
+            depth_strength=2.0,
+            convergence=0.0,
+            ipd_mm=32.0,
+            stereo_scale=0.4,
+            max_shift_ratio=0.05,
+            max_disparity_px=18.0,
+            parallax_preset="standard",
+        ),
+    )
+
+    assert result.debug_info["resolved_max_disparity_px"] == 18.0
+    assert result.debug_info["parallax_budget_preset"] == "standard"
+    assert result.debug_info["parallax_resolver_version"] == 1
+    assert result.debug_info["openxr_max_disparity_px"] == 18.0
+    assert result.debug_info["openxr_parallax_preset"] == "standard"
 
 
 def test_openxr_rgb_depth_viewer_keeps_ipd_separate_from_stereo_scale():

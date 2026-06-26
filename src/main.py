@@ -4,7 +4,7 @@ import time
 import subprocess
 import os
 
-from utils import OS_NAME, OUTPUT_RESOLUTION, CAPTURE_MODE, CAPTURE_TOOL, MONITOR_INDEX, FPS, WINDOW_TITLE, IPD, DEPTH_STRENGTH, CONVERGENCE, RUN_MODE, STEREOMIX_DEVICE, STREAM_KEY, AUDIO_DELAY, CRF, DEVICE_INFO, DEVICE, CACHE_PATH, shutdown_event, SHOW_FPS, _get_settings
+from utils import OS_NAME, OUTPUT_RESOLUTION, RENDER_SIZE_CONFIG, CAPTURE_MODE, CAPTURE_TOOL, MONITOR_INDEX, FPS, WINDOW_TITLE, IPD, DEPTH_STRENGTH, CONVERGENCE, RUN_MODE, STEREOMIX_DEVICE, STREAM_KEY, AUDIO_DELAY, CRF, DEVICE_INFO, DEVICE, CACHE_PATH, shutdown_event, SHOW_FPS, _get_settings
 from capture import capture_frame_to_rgb, prepare_rgb_for_stereo_runtime
 from capture.session import CaptureSessionLoop
 from stereo_runtime.pipeline import RuntimePipelineLoop
@@ -24,6 +24,7 @@ context = create_runtime_context(
     device=DEVICE,
     device_info=DEVICE_INFO,
     output_resolution=OUTPUT_RESOLUTION,
+    render_size_config=RENDER_SIZE_CONFIG,
     fps=FPS,
     window_title=WINDOW_TITLE,
     capture_mode=CAPTURE_MODE,

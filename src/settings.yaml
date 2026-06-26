@@ -356,6 +356,13 @@ XR Preview Window: false
 VSync: false
 Target FPS: 0
 Processing Resolution: Auto
+Render Size Policy: native
+Render Scale: 1.0
+Render Fixed Width: 1920
+Render Fixed Height: 1080
+Render Max Pixels: 8294400
+Render Min Dimension: 480
+Render Align: 16
 Upscaler: 'Off'
 Upscaler Sharpness: 0.0
 Stream Protocol: HLS
