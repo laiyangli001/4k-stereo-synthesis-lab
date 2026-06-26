@@ -5,6 +5,7 @@ import cv2
 from socketserver import ThreadingMixIn
 from wsgiref.simple_server import make_server, WSGIServer
 from utils.network import get_local_ip
+from streaming.encoder_profile import EncoderProfile
 
 # Path to favicon file
 ICON_PATH = "icon2.ico"
@@ -34,16 +35,20 @@ class ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
                 self.active_connections -= 1
 
 class MJPEGStreamer:
-    def __init__(self, host="0.0.0.0", port=1303, fps=60, quality=90):
+    def __init__(self, host="0.0.0.0", port=1303, fps=60, quality=90, profile: EncoderProfile | None = None):
         """
         Initialize the MJPEG streamer with configuration parameters.
-        Note: Quality is kept constant as specified, no dynamic adjustments.
+        Legacy fps/quality arguments remain supported; EncoderProfile is the
+        canonical transport contract.
         """
+        self.profile = profile or EncoderProfile(codec="mjpeg", quality=quality, target_fps=fps)
+        if self.profile.codec != "mjpeg":
+            raise ValueError(f"MJPEGStreamer requires an mjpeg profile, got {self.profile.codec}")
         # MJPEG stream boundary marker
         self.boundary = b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
-        self.quality = int(quality)  # Fixed quality, no changes during runtime
-        self.fps = fps
-        self.delay = 1.0 / fps
+        self.quality = int(self.profile.quality)
+        self.fps = int(self.profile.target_fps)
+        self.delay = 1.0 / self.fps
 
         self.raw_frame = None       # Latest frame (numpy RGB)
         self.encoded_frame = None   # Latest JPEG
@@ -203,7 +208,9 @@ class MJPEGStreamer:
         Set the current frame to be streamed. This will also update the cached HTML
         page if the output resolution changes so newly-connecting clients see the
         correct initial dimensions.
-        Note: No scaling applied, preserving original frame resolution.
+        Network streaming consumes packed SBS RGB frames by default. Transport
+        resize and JPEG conversion happen inside the streamer according to the
+        EncoderProfile, not in stereo_runtime.
         """
         with self.lock:
             h, w = frame_np.shape[:2]
@@ -246,10 +253,10 @@ class MJPEGStreamer:
                 continue
             prev_time = current_time
 
-            # Encode frame with original quality
-            bgr = np.ascontiguousarray(raw[..., ::-1])
+            # Encode the packed SBS frame according to the transport profile.
+            frame_for_jpeg = self._prepare_frame_for_jpeg(raw)
             try:
-                success, buf = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, self.quality])
+                success, buf = cv2.imencode(".jpg", frame_for_jpeg, [cv2.IMWRITE_JPEG_QUALITY, self.quality])
                 if success:
                     with self.lock:
                         self.encoded_frame = buf.tobytes()
@@ -282,10 +289,25 @@ class MJPEGStreamer:
                 next_frame_time = time.perf_counter()
         yield b""
 
+    def _prepare_frame_for_jpeg(self, arr: np.ndarray) -> np.ndarray:
+        if arr is None:
+            return arr
+        frame = arr
+        if self.profile.resize_size is not None:
+            frame = cv2.resize(frame, self.profile.resize_size, interpolation=cv2.INTER_AREA)
+        if self.profile.pixel_format == "rgb":
+            frame = frame[..., ::-1]
+        elif self.profile.pixel_format == "bgra":
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+        elif self.profile.pixel_format == "bgr":
+            pass
+        else:
+            raise ValueError("MJPEGStreamer only accepts rgb, bgr, or bgra packed frames")
+        return np.ascontiguousarray(frame)
+
     def encode_jpeg(self, arr: np.ndarray) -> bytes:
-        # Note: Uses original quality setting
         if arr is None:
             return b""
-        bgr = np.ascontiguousarray(arr[..., ::-1])
-        success, buf = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, self.quality])
+        frame_for_jpeg = self._prepare_frame_for_jpeg(arr)
+        success, buf = cv2.imencode(".jpg", frame_for_jpeg, [cv2.IMWRITE_JPEG_QUALITY, self.quality])
         return buf.tobytes() if success else b""

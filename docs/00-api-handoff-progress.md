@@ -23,7 +23,7 @@ Desktop2Stereo engineering-spec refactor tasks from prompts/codex-refactor-promp
 Latest pushed task commit:
 
 ```text
-refactor: add captured frame metadata contract
+refactor: add streaming encoder profile runtime wiring
 ```
 
 Canonical specs for current work:
@@ -46,6 +46,43 @@ Canonical specs for current work:
 - None currently recorded for this handoff.
 
 ## Current Status
+
+### 2026-06-27 Streaming Encoder Profile Runtime Wiring
+
+The MJPEG streamer dry-run has been formally applied and connected through legacy stream mode and viewer MJPEG runtime mode. This step only changes profile wiring plus encoding-side resize/pixel-format handling; it does not move transport policy into `stereo_runtime`.
+
+Implemented:
+
+- Added `EncoderProfile` as the transport profile contract for streaming codecs, quality, target FPS, optional resize, bitrate, and pixel format.
+- Updated `MJPEGStreamer` to accept `EncoderProfile` while preserving legacy `fps` / `quality` constructor arguments.
+- Moved MJPEG resize and RGB/BGR/BGRA conversion into the streamer immediately before JPEG encoding.
+- Updated legacy stream runtime to pass an encoder profile and keep `runtime_result.sbs` as the packed SBS source.
+- Updated viewer MJPEG runtime to pass the same encoder profile contract to `MJPEGStreamer`.
+- Updated mode config builders so viewer and legacy runtime configs derive encoder profiles from existing stream FPS/quality settings.
+- Added tests for mode config profile generation plus legacy/viewer profile propagation.
+
+Verification:
+
+```powershell
+src\python3\python.exe -m py_compile src\streaming\encoder_profile.py src\streaming\mjpeg_streamer.py src\streaming\legacy_runtime.py src\viewer\viewer_runtime.py src\app_runtime\mode_configs.py tests\test_legacy_runtime.py tests\test_viewer_runtime.py tests\test_mode_configs.py
+src\python3\python.exe -m pytest tests\test_legacy_runtime.py tests\test_viewer_runtime.py tests\test_mode_configs.py -q
+```
+
+Result:
+
+```text
+7 passed
+```
+
+Notes:
+
+- `docs/27-vr-headset-focal-distance-reference.md` has unrelated local edits and was intentionally left out of this task's code/doc changes.
+
+Commit title:
+
+```text
+refactor: add streaming encoder profile runtime wiring
+```
 
 ### 2026-06-27 CUDA/ROCm Capture Copy Metadata - Phase 1
 

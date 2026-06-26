@@ -5,6 +5,7 @@ import time
 from dataclasses import dataclass
 from typing import Callable
 from stereo_runtime.output_convert import runtime_output_to_numpy
+from streaming.encoder_profile import EncoderProfile
 
 
 @dataclass
@@ -13,6 +14,7 @@ class LegacyStreamConfig:
     fps: int
     stream_quality: int
     time_sleep: float
+    encoder_profile: EncoderProfile | None = None
 
 
 @dataclass
@@ -24,10 +26,14 @@ class LegacyStreamCallbacks:
 def create_legacy_streamer(config: LegacyStreamConfig):
     from streaming.mjpeg_streamer import MJPEGStreamer
 
+    profile = config.encoder_profile or EncoderProfile(
+        codec="mjpeg",
+        quality=config.stream_quality,
+        target_fps=config.fps,
+    )
     streamer = MJPEGStreamer(
         port=config.stream_port,
-        fps=config.fps,
-        quality=config.stream_quality,
+        profile=profile,
     )
     streamer.start()
     print("[Main] Legacy Streamer Started")
@@ -39,7 +45,9 @@ def run_legacy_stream_mode(runtime_q, config: LegacyStreamConfig, callbacks: Leg
     while not callbacks.shutdown_is_set():
         try:
             runtime_result, _ = runtime_q.get(timeout=config.time_sleep)
-            streamer.set_frame(runtime_output_to_numpy(runtime_result.sbs))
+            packed_sbs = runtime_result.sbs
+            # Network transport consumes packed SBS; conversion is handled by the streamer profile.
+            streamer.set_frame(runtime_output_to_numpy(packed_sbs))
 
             current_time = callbacks.now()
             if stats.record_frame(current_time):

@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+from streaming.encoder_profile import EncoderProfile
 from viewer.viewer_runtime import ViewerRuntimeCallbacks, ViewerRuntimeConfig, frame_size_from_output, start_viewer_streaming
 
 
@@ -60,3 +61,28 @@ def test_start_viewer_streaming_returns_none_for_local_mode(capsys):
 
     assert streamer is None
     assert "Local Viewer Started" in capsys.readouterr().out
+
+
+def test_start_viewer_streaming_passes_encoder_profile_to_mjpeg(monkeypatch):
+    created = {}
+
+    class FakeStreamer:
+        def __init__(self, **kwargs):
+            created.update(kwargs)
+
+        def start(self):
+            created["started"] = True
+
+    monkeypatch.setattr("streaming.mjpeg_streamer.MJPEGStreamer", FakeStreamer)
+    profile = EncoderProfile(codec="mjpeg", quality=72, target_fps=24, resize_width=640, resize_height=360)
+
+    streamer = start_viewer_streaming(
+        SimpleNamespace(window="handle"),
+        _config(stream_mode="MJPEG", encoder_profile=profile),
+        _callbacks(),
+    )
+
+    assert streamer is not None
+    assert created["port"] == 8000
+    assert created["profile"] is profile
+    assert created["started"] is True

@@ -36,6 +36,9 @@ def test_build_viewer_runtime_config_maps_expected_fields():
     assert config.stream_mode == "MJPEG"
     assert config.use_cudart is True
     assert config.stereo_display_index == 2
+    assert config.encoder_profile.codec == "mjpeg"
+    assert config.encoder_profile.quality == 80
+    assert config.encoder_profile.target_fps == 60
 
 
 def test_build_openxr_runtime_config_maps_expected_fields():
@@ -68,3 +71,6 @@ def test_build_legacy_stream_config_maps_expected_fields():
     assert config.stream_port == 9000
     assert config.fps == 30
     assert config.stream_quality == 70
+    assert config.encoder_profile.codec == "mjpeg"
+    assert config.encoder_profile.quality == 70
+    assert config.encoder_profile.target_fps == 30

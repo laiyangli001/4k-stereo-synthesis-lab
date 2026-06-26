@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from streaming.encoder_profile import EncoderProfile
 from streaming.legacy_runtime import LegacyStreamConfig
 from viewer.viewer_runtime import ViewerRuntimeConfig
 from xr_viewer.openxr_runtime import OpenXRRuntimeConfig
@@ -32,6 +33,11 @@ def build_viewer_runtime_config(
     stream_quality,
     time_sleep,
 ):
+    encoder_profile = EncoderProfile(
+        codec="mjpeg",
+        quality=stream_quality,
+        target_fps=fps,
+    )
     return ViewerRuntimeConfig(
         capture_mode=capture_mode,
         monitor_index=monitor_index,
@@ -57,6 +63,7 @@ def build_viewer_runtime_config(
         stream_port=stream_port,
         stream_quality=stream_quality,
         time_sleep=time_sleep,
+        encoder_profile=encoder_profile,
     )
 
 
@@ -88,9 +95,15 @@ def build_openxr_runtime_config(
 
 
 def build_legacy_stream_config(*, stream_port, fps, stream_quality, time_sleep):
+    encoder_profile = EncoderProfile(
+        codec="mjpeg",
+        quality=stream_quality,
+        target_fps=fps,
+    )
     return LegacyStreamConfig(
         stream_port=stream_port,
         fps=fps,
         stream_quality=stream_quality,
         time_sleep=time_sleep,
+        encoder_profile=encoder_profile,
     )

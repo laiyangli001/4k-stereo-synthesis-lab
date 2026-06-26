@@ -9,6 +9,7 @@ from typing import Callable
 import glfw
 
 from stereo_runtime.frame_stats import FrameStats, LatencyStats, format_viewer_title
+from streaming.encoder_profile import EncoderProfile
 
 
 @dataclass
@@ -37,6 +38,7 @@ class ViewerRuntimeConfig:
     stream_port: int
     stream_quality: int
     time_sleep: float
+    encoder_profile: EncoderProfile | None = None
 
 
 @dataclass
@@ -90,10 +92,14 @@ def start_viewer_streaming(window, config: ViewerRuntimeConfig, callbacks: Viewe
     if config.stream_mode == "MJPEG":
         from streaming.mjpeg_streamer import MJPEGStreamer
 
+        profile = config.encoder_profile or EncoderProfile(
+            codec="mjpeg",
+            quality=config.stream_quality,
+            target_fps=config.fps,
+        )
         streamer = MJPEGStreamer(
             port=config.stream_port,
-            fps=config.fps,
-            quality=config.stream_quality,
+            profile=profile,
         )
         streamer.start()
         print("[Main] MJPEG Streamer Started")
