@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import queue
 import time
 from dataclasses import dataclass
@@ -96,7 +97,7 @@ class RuntimePipelineLoop:
                     use_torch=ctx.use_cudart,
                     output="tensor",
                 )
-                if not self._logged_rgb_shape:
+                if not self._logged_rgb_shape and os.environ.get('D2S_DEBUG', '0') in ('1', 'true', 'yes', 'on'):
                     self._logged_rgb_shape = True
                     print(
                         f"[process_runtime_loop] rgb={_rgb_size_text(frame_rgb)}",

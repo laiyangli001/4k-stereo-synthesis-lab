@@ -407,7 +407,6 @@ class EnvironmentProfileMixin:
         return {
             'Controller Model': ctrl_val,
             'Environment Model': env_val,
-            'Depth Strength': round(float(getattr(self, 'depth_ratio', 1.0)), 4),
         }
 
 
@@ -423,7 +422,6 @@ class EnvironmentProfileMixin:
             data.update(self._settings_snapshot())
             with open(path, 'w', encoding='utf-8') as f:
                 yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
-            self._last_persisted_depth_ratio = float(getattr(self, 'depth_ratio', 1.0))
             self._settings_sync_dirty = False
         except Exception as exc:
             print(f"[OpenXRViewer] _persist_runtime_settings failed: {exc}")

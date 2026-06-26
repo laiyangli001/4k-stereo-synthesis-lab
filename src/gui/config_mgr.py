@@ -91,6 +91,7 @@ class GUIConfigMixin:
         self.stereo_scale_dd.value = f'{self._parse_float(cfg.get("Stereo Scale", cfg.get("Stereo Strength Scale", DEFAULTS["Stereo Scale"])), DEFAULTS["Stereo Scale"]):.1f}'
         self.fp16_cb.value = DEFAULTS["FP16"]
         self.showfps_cb.value = cfg.get("Show FPS", DEFAULTS["Show FPS"])
+        self.debug_mode_cb.value = cfg.get("Debug Mode", DEFAULTS["Debug Mode"])
         self.fill_16_9_cb.value = cfg.get("Fill 16:9", DEFAULTS["Fill 16:9"])
         self.fix_aspect_cb.value = cfg.get("Fix Viewer Aspect", DEFAULTS["Fix Viewer Aspect"])
         self.lossless_cb.value = cfg.get("Lossless Scaling Support", DEFAULTS["Lossless Scaling Support"])
@@ -193,6 +194,7 @@ class GUIConfigMixin:
             "Monitor Index": monitor_idx,
             "Window Title": self.selected_window_name if self.capture_mode_key == "Window" else "",
             "Show FPS": self.showfps_cb.value,
+            "Debug Mode": self.debug_mode_cb.value,
             "Stereo Preset": stereo_preset,
             "Stereo Quality": stereo_quality,
             "Synthetic View": stereo_quality,

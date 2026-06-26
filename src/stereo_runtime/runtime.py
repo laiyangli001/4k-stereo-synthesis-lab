@@ -558,7 +558,7 @@ class StereoRuntime:
         debug["runtime_depth_upsample"] = self.config.depth_upsample
         if memory:
             debug.update(memory)
-        if total_ms >= float(os.environ.get("D2S_SLOW_RUNTIME_LOG_MS", "120") or "120"):
+        if total_ms >= float(os.environ.get("D2S_SLOW_RUNTIME_LOG_MS", "120") or "120") and os.environ.get('D2S_DEBUG', '0') in ('1', 'true', 'yes', 'on'):
             print(
                 "[StereoRuntime] slow openxr frame:"
                 f" total_ms={total_ms:.1f}"

@@ -2,6 +2,7 @@
 
 import ctypes
 import math
+import os
 import sys
 
 import numpy as np
@@ -165,8 +166,9 @@ class _TouchInjector:
             inj.restype  = ctypes.c_int
             self._inject = inj
             self.available = True
-            print(f"[TouchInjector] ready "
-                  f"(max_contacts={max_contacts}, feedback=0x{feedback_mode:x})")
+            if os.environ.get('D2S_DEBUG', '0') in ('1', 'true', 'yes', 'on'):
+                print(f"[TouchInjector] ready "
+                      f"(max_contacts={max_contacts}, feedback=0x{feedback_mode:x})")
         except Exception as exc:  # pragma: no cover - environment-dependent
             print(f"[TouchInjector] init failed: {exc}")
 

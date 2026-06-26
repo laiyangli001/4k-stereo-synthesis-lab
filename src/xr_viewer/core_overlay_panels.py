@@ -24,7 +24,7 @@ class CoreOverlayPanelsMixin:
             self._cached_screen_width = self.screen_width
             self._cached_screen_height = self.screen_width * 9.0 / 16.0
             self._cached_screen_dist = self.screen_distance
-            self._cached_depth_ratio = self.depth_ratio
+            self._cached_depth_strength = float(getattr(self, 'depth_strength', 0.0) or 0.0)
             self._cached_vr_res = self._swapchain_sizes.get(0, (0, 0))
             self._cached_sbs_res = self.frame_size
             self._last_overlay_update = now
@@ -80,7 +80,7 @@ class CoreOverlayPanelsMixin:
                     f"{self._cached_screen_width:.2f}"
                     f" x {self._cached_screen_height:.2f} m"
                     f"  @  {self._cached_screen_dist:.2f} m"
-                    f"   Depth {self._cached_depth_ratio:.2f}"
+                    f"   Depth Strength {self._cached_depth_strength:.2f}"
                 )
                 _draw_row(row1, "[3D Display]", c_label, scr_str, c_cyan)
 
@@ -627,8 +627,9 @@ class CoreOverlayPanelsMixin:
                 fps_str = f"XR {self.actual_fps:.0f} FPS   SBS {self.sbs_fps:.0f} FPS   Latency {lat_str}"
                 _draw_row(rows_y[0], "[Performance]", fps_str, C_GREEN)
                 display_height_m = self.screen_width * 9.0 / 16.0
+                display_depth_strength = float(getattr(self, 'depth_strength', 0.0) or 0.0)
                 scr_str = (f"{self.screen_width:.2f} x {display_height_m:.2f} m"
-                           f"  @  {self.screen_distance:.2f} m   Depth {self.depth_ratio:.2f}")
+                           f"  @  {self.screen_distance:.2f} m   Depth Strength {display_depth_strength:.2f}")
                 _draw_row(rows_y[1], "[3D Display]", scr_str, C_CYAN)
                 vw, vh = self._swapchain_sizes.get(0, (0, 0))
                 sw, sh = self.frame_size

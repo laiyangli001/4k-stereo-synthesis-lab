@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import os
 import threading
 import time
 from ctypes import wintypes
@@ -119,11 +120,12 @@ class WindowsCaptureEventRunner:
             if self.config.capture_mode == "Window":
                 cap = WindowsCapture(window_name=self.config.window_title)
             else:
-                print(
-                    f"[capture_loop] WindowsCapture monitor_index={self.config.monitor_index} "
-                    f"tool={self.capture_tool}",
-                    flush=True,
-                )
+                if os.environ.get('D2S_DEBUG', '0') in ('1', 'true', 'yes', 'on'):
+                    print(
+                        f"[capture_loop] WindowsCapture monitor_index={self.config.monitor_index} "
+                        f"tool={self.capture_tool}",
+                        flush=True,
+                    )
                 cap = WindowsCapture(monitor_index=self.config.monitor_index)
             self._session = cap
             self._control = None

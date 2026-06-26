@@ -115,7 +115,7 @@ def run_viewer_mode(runtime_q, config: ViewerRuntimeConfig, callbacks: ViewerRun
         capture_mode=config.capture_mode,
         monitor_index=config.monitor_index,
         ipd=config.ipd,
-        depth_ratio=config.depth_strength,
+        depth_strength=config.depth_strength,
         convergence=config.convergence,
         display_mode=config.display_mode,
         fill_16_9=config.fill_16_9,

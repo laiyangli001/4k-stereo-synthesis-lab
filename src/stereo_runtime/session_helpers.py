@@ -83,7 +83,8 @@ class StereoRuntimeLogger:
             parts.append(f"video={float(samples.get('gpu_video_decode_util', 0.0)):.2f}")
             parts.append(f"input={float(samples.get('input_activity', 0.0)):.2f}")
             parts.append(f"idle={float(samples.get('idle_seconds', 0.0)):.1f}s")
-        print(" ".join(parts), flush=True)
+        if os.environ.get('D2S_DEBUG', '0') in ('1', 'true', 'yes', 'on'):
+            print(" ".join(parts), flush=True)
 
     def log_mode_once(self, reason="active") -> None:
         config = self.runtime.stereo_config
@@ -114,18 +115,19 @@ class StereoRuntimeLogger:
             if state == self.last_fused_state:
                 return
             self.last_fused_state = state
-            print(
-                "[Main] Stereo runtime output:"
-                f" backend={state[0]}"
-                f" output={state[1]}"
-                f" dtype={state[2]}"
-                f" eye={state[3]}"
-                f" depth_strength={float(debug.get('openxr_depth_strength', 0.0)):.3f}"
-                f" stereo_scale={float(debug.get('openxr_stereo_scale', 0.0)):.3f}"
-                f" max_shift={float(debug.get('openxr_max_shift_ratio', 0.0)):.3f}"
-                f" convergence={float(debug.get('openxr_convergence', 0.0)):.3f}",
-                flush=True,
-            )
+            if os.environ.get('D2S_DEBUG', '0') in ('1', 'true', 'yes', 'on'):
+                print(
+                    "[Main] Stereo runtime output:"
+                    f" backend={state[0]}"
+                    f" output={state[1]}"
+                    f" dtype={state[2]}"
+                    f" eye={state[3]}"
+                    f" depth_strength={float(debug.get('openxr_depth_strength', 0.0)):.3f}"
+                    f" stereo_scale={float(debug.get('openxr_stereo_scale', 0.0)):.3f}"
+                    f" max_shift={float(debug.get('openxr_max_shift_ratio', 0.0)):.3f}"
+                    f" convergence={float(debug.get('openxr_convergence', 0.0)):.3f}",
+                    flush=True,
+                )
             return
 
         state = (
@@ -140,18 +142,19 @@ class StereoRuntimeLogger:
         if state == self.last_fused_state:
             return
         self.last_fused_state = state
-        print(
-            "[Main] Stereo runtime output:"
-            f" backend={state[0]}"
-            f" output={state[1]}"
-            f" dtype={state[2]}"
-            f" pack={state[3]}"
-            f" fast_plus_fused={state[4]}"
-            f" fast_plus_fused_skip={state[5]}"
-            f" fast_plus_fused_temporal_bypass={state[6]}",
-            f" depth_strength={float(debug.get('openxr_depth_strength', 0.0)):.3f}"
-            f" stereo_scale={float(debug.get('openxr_stereo_scale', 0.0)):.3f}"
-            f" max_shift={float(debug.get('openxr_max_shift_ratio', 0.0)):.3f}"
-            f" convergence={float(debug.get('openxr_convergence', 0.0)):.3f}",
-            flush=True,
-        )
+        if os.environ.get('D2S_DEBUG', '0') in ('1', 'true', 'yes', 'on'):
+            print(
+                "[Main] Stereo runtime output:"
+                f" backend={state[0]}"
+                f" output={state[1]}"
+                f" dtype={state[2]}"
+                f" pack={state[3]}"
+                f" fast_plus_fused={state[4]}"
+                f" fast_plus_fused_skip={state[5]}"
+                f" fast_plus_fused_temporal_bypass={state[6]}",
+                f" depth_strength={float(debug.get('openxr_depth_strength', 0.0)):.3f}"
+                f" stereo_scale={float(debug.get('openxr_stereo_scale', 0.0)):.3f}"
+                f" max_shift={float(debug.get('openxr_max_shift_ratio', 0.0)):.3f}"
+                f" convergence={float(debug.get('openxr_convergence', 0.0)):.3f}",
+                flush=True,
+            )

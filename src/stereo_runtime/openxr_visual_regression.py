@@ -15,8 +15,8 @@ from .output import ensure_b1hw, ensure_bchw
 class OpenXRViewerShaderParams:
     ipd: float = 0.064
     stereo_scale: float = 0.4
-    depth_ratio: float = 2.0
-    shader_depth_strength: float = 0.1
+    depth_strength: float = 2.0
+    shader_depth_strength_scale: float = 0.1
     convergence: float = 0.0
     screen_roll: float = 0.0
     use_stereo_scale: bool = True
@@ -28,7 +28,7 @@ class OpenXRViewerShaderParams:
 
     @property
     def effective_depth_strength(self) -> float:
-        return float(self.shader_depth_strength) * float(self.depth_ratio)
+        return float(self.shader_depth_strength_scale) * float(self.depth_strength)
 
     @property
     def effective_ipd(self) -> float:

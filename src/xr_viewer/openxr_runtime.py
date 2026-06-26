@@ -60,7 +60,7 @@ def run_openxr_mode(runtime_q, config: OpenXRRuntimeConfig, callbacks: OpenXRRun
     try:
         viewer = OpenXRViewer(
             ipd=config.ipd,
-            depth_ratio=config.depth_strength,
+            depth_strength=config.depth_strength,
             convergence=config.convergence,
             frame_size=(width, height),
             fps=config.fps,

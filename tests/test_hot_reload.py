@@ -180,7 +180,7 @@ def test_hot_reload_pushes_all_openxr_stereo_controls(tmp_path):
 
     assert pushed == {
         "ipd": 0.064,
-        "depth_ratio": 2.0,
+        "depth_strength": 2.0,
         "convergence": 0.25,
         "stereo_scale": 0.35,
         "max_shift_ratio": 0.05,

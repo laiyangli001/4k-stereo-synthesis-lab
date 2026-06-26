@@ -434,6 +434,7 @@ class GUIHandlerMixin:
         self.target_fps_label.visible = show_timing
         self.target_fps_dd.visible = show_timing
         self.local_vsync_cb.visible = advanced and mode in ["Local Viewer", "3D Monitor"]
+        self.debug_mode_cb.visible = advanced
         self.upscaler_label.visible = show_enhance
         self.upscaler_dd.visible = show_enhance
         self.upscaler_sharpness_label.visible = show_enhance

@@ -192,32 +192,33 @@ class StereoHotReloader:
         )
         on_openxr_config_update(
             ipd=values["ipd"],
-            depth_ratio=values["depth_strength"],
+            depth_strength=values["depth_strength"],
             convergence=values["convergence"],
             stereo_scale=values["stereo_scale"],
             max_shift_ratio=values["max_shift_ratio"],
         )
         self.last_values = values
         self.last_mtime = mtime
-        print(
-            "[Main] Stereo hot reload:"
-            f" ipd_mm={values['ipd_mm']:.1f}"
-            f" stereo_scale={values['stereo_scale']:.3f}"
-            f" depth_strength={values['depth_strength']:.3f}"
-            f" convergence={values['convergence']:.3f}"
-            f" max_shift_ratio={values['max_shift_ratio']:.3f}"
-            f" temporal_strength={values['temporal_strength']:.3f}"
-            f" scene_reset={values['scene_reset_threshold']:.3f}"
-            f" reset_cooldown={values['reset_cooldown_frames']}"
-            f" foreground_scale={values['foreground_scale']:.3f}"
-            f" antialias={values['depth_antialias_strength']:.3f}"
-            f" edge_dilation={values['edge_dilation']}"
-            f" mask_feather={values['mask_feather_radius']}"
-            f" hole_fill={values['hole_fill_mode']}({values['hole_fill_radius']}/{values['hole_fill_strength']:.2f})"
-            f" edge_threshold={values['edge_threshold']:.3f}"
-            f" anaglyph={values['anaglyph_method']}"
-            f" cross_eyed={int(values['cross_eyed'])}",
-            flush=True,
-        )
+        if os.environ.get('D2S_DEBUG', '0') in ('1', 'true', 'yes', 'on'):
+            print(
+                "[Main] Stereo hot reload:"
+                f" ipd_mm={values['ipd_mm']:.1f}"
+                f" stereo_scale={values['stereo_scale']:.3f}"
+                f" depth_strength={values['depth_strength']:.3f}"
+                f" convergence={values['convergence']:.3f}"
+                f" max_shift_ratio={values['max_shift_ratio']:.3f}"
+                f" temporal_strength={values['temporal_strength']:.3f}"
+                f" scene_reset={values['scene_reset_threshold']:.3f}"
+                f" reset_cooldown={values['reset_cooldown_frames']}"
+                f" foreground_scale={values['foreground_scale']:.3f}"
+                f" antialias={values['depth_antialias_strength']:.3f}"
+                f" edge_dilation={values['edge_dilation']}"
+                f" mask_feather={values['mask_feather_radius']}"
+                f" hole_fill={values['hole_fill_mode']}({values['hole_fill_radius']}/{values['hole_fill_strength']:.2f})"
+                f" edge_threshold={values['edge_threshold']:.3f}"
+                f" anaglyph={values['anaglyph_method']}"
+                f" cross_eyed={int(values['cross_eyed'])}",
+                flush=True,
+            )
         on_mode_log("hot-reload")
         return True

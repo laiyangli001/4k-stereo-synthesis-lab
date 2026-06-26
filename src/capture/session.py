@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -55,7 +56,7 @@ class CaptureSessionLoop:
             self.callbacks.inc_source_stat("capture_dropped_paused")
 
     def _frame_arrived(self, frame_raw, size, capture_start_time: float) -> None:
-        if not self._logged_frame_shape:
+        if not self._logged_frame_shape and os.environ.get('D2S_DEBUG', '0') in ('1', 'true', 'yes', 'on'):
             self._logged_frame_shape = True
             print(
                 f"[capture_loop] frame raw={_frame_size_text(frame_raw)} target={size}",

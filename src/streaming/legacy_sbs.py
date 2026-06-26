@@ -33,7 +33,7 @@ def make_sbs(
     rgb_c,
     depth,
     ipd_uv=0.064,
-    depth_ratio=2.0,
+    depth_strength=2.0,
     convergence=0.0,
     fill_16_9=False,
     display_mode="Half-SBS",
@@ -70,7 +70,7 @@ def make_sbs(
         rgb=rgb,
         depth=depth_t,
         ipd_uv=ipd_uv,
-        depth_ratio=depth_ratio,
+        depth_strength=depth_strength,
         convergence=convergence,
         fill_16_9=fill_16_9,
         display_mode=display_mode,
@@ -82,18 +82,18 @@ def _make_sbs_core(
     rgb: torch.Tensor,
     depth: torch.Tensor,
     ipd_uv=0.064,
-    depth_ratio=2.0,
+    depth_strength=2.0,
     convergence=0.0,
     fill_16_9=False,
     display_mode="Half-SBS",
 ) -> torch.Tensor:
     c, h, w = rgb.shape
     img = rgb.unsqueeze(0).clamp(0, 255)
-    depth_strength = 0.05
+    depth_strength_scale = 0.05
     depth = depth - convergence
-    inv = -depth * depth_ratio
+    inv = -depth * depth_strength
     max_px = ipd_uv * w
-    shifts = inv * max_px * depth_strength
+    shifts = inv * max_px * depth_strength_scale
 
     xs = torch.linspace(-1.0, 1.0, w, device=rgb.device, dtype=rgb.dtype).view(1, 1, w).expand(1, h, w)
     ys = torch.linspace(-1.0, 1.0, h, device=rgb.device, dtype=rgb.dtype).view(1, h, 1).expand(1, h, w)

@@ -300,7 +300,7 @@ class GUIBuilderMixin:
         self.ipd_dd = CompactDropdown(options=[str(i) for i in range(50, 71)], value="64",
             width=S(130), on_select=self.on_stereo_hot_param_change)
         self.stereo_scale_label = ft.Text("Stereo Scale:", size=FONT_SIZE, width=S(130))
-        self.stereo_scale_dd = CompactDropdown(options=[f"{i / 10:.1f}" for i in range(0, 5)],
+        self.stereo_scale_dd = CompactDropdown(options=[f"{i / 10:.1f}" for i in range(0, 11)],
             value="0.4", width=S(130), on_select=self.on_stereo_hot_param_change)
         row3 = ft.Row([
             self.ipd_label, self.ipd_dd,
@@ -399,6 +399,7 @@ class GUIBuilderMixin:
         self.device_dd = CompactDropdown(options=[n for n in device_names],
             on_select=self.on_device_change, min_width=S(180))
         self.showfps_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="Show FPS")
+        self.debug_mode_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT, label="Debug Mode", value=False)
         self.local_vsync_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT,
             label="VSync", value=DEFAULTS.get("VSync", False))
         self.target_fps_label = ft.Text("Capture FPS:", size=FONT_SIZE, width=S(130))
@@ -415,7 +416,8 @@ class GUIBuilderMixin:
         self.capture_tool_dd = CompactDropdown(options=[o for o in ct_options],
             on_select=self.on_capture_tool_change, min_width=S(160))
         row6 = ft.Row([self.capture_tool_label, self.capture_tool_dd,
-            ft.Container(width=S(15)), self.showfps_cb], spacing=1)
+            ft.Container(width=S(15)), self.showfps_cb,
+            ft.Container(width=S(5)), self.debug_mode_cb], spacing=1)
         self.row6b = ft.Row([self.target_fps_label, self.target_fps_dd,
             ft.Container(width=S(20)), self.local_vsync_cb], spacing=1)
         self.upscaler_label = ft.Text("", size=FONT_SIZE, width=0, visible=False)

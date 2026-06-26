@@ -68,6 +68,7 @@ def test_gui_hot_stereo_params_auto_save_on_select():
     assert "self._schedule_stereo_hot_save()" in all_text
 
 
+
 def test_compact_dropdown_click_updates_internal_value_before_callback():
     source = _controls_source()
     text = source.read_text(encoding="utf-8")
