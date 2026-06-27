@@ -6,7 +6,7 @@ from dataclasses import replace
 from typing import Callable
 
 from stereo_runtime import stereo_config_for_preset
-from stereo_runtime.adapter import _normalize_hole_fill_mode, preset_for_runtime_mode
+from stereo_runtime.adapter import _normalize_hole_fill_mode, _normalize_output_format, preset_for_runtime_mode
 from stereo_runtime.settings_snapshot import RuntimeSettingsSnapshot
 
 def read_yaml(path: str) -> dict:
@@ -43,6 +43,7 @@ def runtime_stereo_overrides(runtime) -> dict:
         "screen_edge_mask_suppression": config.screen_edge_mask_suppression,
         "cross_eyed": config.cross_eyed,
         "anaglyph_method": config.anaglyph_method,
+        "debug_output": getattr(config, "debug_output", False),
         "fused": config.fused,
     }
 
@@ -57,6 +58,14 @@ def to_bool_hot_reload(value) -> bool:
 
 def clamp_foreground_scale_hot_reload(value) -> float:
     return max(-0.9, min(5.0, float(value)))
+
+
+def optional_float_hot_reload(value):
+    if value is None:
+        return None
+    if isinstance(value, str) and not value.strip():
+        return None
+    return float(value)
 
 
 def _is_fast_quality(settings_dict: dict, config) -> bool:
@@ -80,6 +89,9 @@ def hot_reload_value_snapshot(settings_dict: dict, config) -> dict:
     if not has_hole_fill_mode:
         hole_fill_radius = int(settings_dict.get("Hole Fill Radius", hole_fill_radius))
         hole_fill_strength = float(settings_dict.get("Hole Fill Strength", hole_fill_strength))
+    debug_output_enabled = to_bool_hot_reload(
+        settings_dict.get("Debug Stereo Output", getattr(config, "debug_output", False))
+    )
     values = {
         "depth_strength": float(settings_dict.get("Depth Strength", config.depth_strength)),
         "convergence": float(settings_dict.get("Convergence", config.convergence)),
@@ -92,6 +104,19 @@ def hot_reload_value_snapshot(settings_dict: dict, config) -> dict:
             )
         ),
         "max_shift_ratio": float(settings_dict.get("Max Shift Ratio", config.max_shift_ratio)),
+        "output_format": _normalize_output_format(settings_dict.get("Display Mode", config.output_format)),
+        "max_disparity_px": optional_float_hot_reload(
+            settings_dict.get(
+                "Max Disparity Px",
+                settings_dict.get("Max Disparity PX", getattr(config, "max_disparity_px", None)),
+            )
+        ),
+        "parallax_preset": str(
+            settings_dict.get(
+                "Parallax Preset",
+                settings_dict.get("Parallax Budget Preset", getattr(config, "parallax_preset", "standard")),
+            )
+        ),
         "temporal": float(settings_dict.get("Temporal Strength", config.temporal_strength)) > 0.0,
         "temporal_strength": float(settings_dict.get("Temporal Strength", config.temporal_strength)),
         "auto_reset_temporal": float(
@@ -118,9 +143,14 @@ def hot_reload_value_snapshot(settings_dict: dict, config) -> dict:
         "hole_fill_mode": hole_fill_mode,
         "hole_fill_radius": hole_fill_radius,
         "hole_fill_strength": hole_fill_strength,
+        "screen_edge_mask_suppression": int(
+            settings_dict.get("Screen Edge Mask Suppression", config.screen_edge_mask_suppression)
+        ),
         "edge_threshold": float(settings_dict.get("Edge Threshold", config.edge_threshold)),
         "anaglyph_method": str(settings_dict.get("Anaglyph Method", config.anaglyph_method)),
         "cross_eyed": to_bool_hot_reload(settings_dict.get("Cross Eyed", config.cross_eyed)),
+        "debug_output": debug_output_enabled,
+        "debug_flags": {"debug_output": debug_output_enabled},
     }
     if _is_fast_quality(settings_dict, config):
         values.update(
@@ -242,9 +272,11 @@ class StereoHotReloader:
                 f" edge_dilation={values['edge_dilation']}"
                 f" mask_feather={values['mask_feather_radius']}"
                 f" hole_fill={values['hole_fill_mode']}({values['hole_fill_radius']}/{values['hole_fill_strength']:.2f})"
+                f" screen_edge_mask={values['screen_edge_mask_suppression']}"
                 f" edge_threshold={values['edge_threshold']:.3f}"
                 f" anaglyph={values['anaglyph_method']}"
-                f" cross_eyed={int(values['cross_eyed'])}",
+                f" cross_eyed={int(values['cross_eyed'])}"
+                f" debug_output={int(values['debug_output'])}",
                 flush=True,
             )
         on_mode_log("hot-reload")

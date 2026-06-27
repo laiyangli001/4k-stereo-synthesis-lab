@@ -23,6 +23,9 @@ def make_config(**overrides):
         "ipd_mm": 32.0,
         "stereo_scale": 1.0,
         "max_shift_ratio": 0.03,
+        "output_format": "half_sbs",
+        "max_disparity_px": None,
+        "parallax_preset": "standard",
         "temporal": True,
         "foreground_scale": 1.0,
         "depth_antialias_strength": 0.25,
@@ -35,6 +38,7 @@ def make_config(**overrides):
         "screen_edge_mask_suppression": 0.0,
         "cross_eyed": False,
         "anaglyph_method": "dubois",
+        "debug_output": False,
         "fused": True,
         "temporal_strength": 0.5,
         "auto_reset_temporal": True,
@@ -55,6 +59,9 @@ def test_hot_reload_value_snapshot_parses_expected_fields():
         "IPD mm": "65",
         "Stereo Scale": "1.5",
         "Max Shift Ratio": "0.04",
+        "Display Mode": "Full-SBS",
+        "Max Disparity Px": "88",
+        "Parallax Preset": "strong",
         "Temporal Strength": "0",
         "Scene Reset Threshold": "0.3",
         "Reset Cooldown Frames": "7",
@@ -68,6 +75,8 @@ def test_hot_reload_value_snapshot_parses_expected_fields():
         "Edge Threshold": "0.2",
         "Anaglyph Method": "gray",
         "Cross Eyed": "yes",
+        "Screen Edge Mask Suppression": "2",
+        "Debug Stereo Output": "yes",
     }
 
     values = hot_reload_value_snapshot(settings, config)
@@ -78,6 +87,9 @@ def test_hot_reload_value_snapshot_parses_expected_fields():
     assert values["ipd_mm"] == 65.0
     assert values["stereo_scale"] == 1.5
     assert values["max_shift_ratio"] == 0.04
+    assert values["output_format"] == "full_sbs"
+    assert values["max_disparity_px"] == 88.0
+    assert values["parallax_preset"] == "strong"
     assert values["temporal"] is False
     assert values["scene_reset_threshold"] == 0.3
     assert values["reset_cooldown_frames"] == 7
@@ -91,6 +103,9 @@ def test_hot_reload_value_snapshot_parses_expected_fields():
     assert values["edge_threshold"] == 0.2
     assert values["anaglyph_method"] == "gray"
     assert values["cross_eyed"] is True
+    assert values["screen_edge_mask_suppression"] == 2
+    assert values["debug_output"] is True
+    assert values["debug_flags"] == {"debug_output": True}
 
 
 def test_runtime_stereo_overrides_maps_runtime_config():
@@ -110,6 +125,7 @@ def test_runtime_stereo_overrides_maps_runtime_config():
     assert overrides["hole_fill_radius"] == 3
     assert overrides["hole_fill_strength"] == 1.0
     assert overrides["cross_eyed"] is False
+    assert overrides["debug_output"] is False
     assert overrides["fused"] is True
 
 
@@ -149,9 +165,14 @@ def test_hot_reload_builds_runtime_settings_snapshot():
     settings = {
         "Depth Strength": "1.25",
         "IPD mm": "65",
+        "Display Mode": "Half-TAB",
+        "Max Disparity PX": "96",
+        "Parallax Budget Preset": "comfort",
         "Temporal Strength": "0.3",
         "Scene Reset Threshold": "0.4",
         "Reset Cooldown Frames": "8",
+        "Screen Edge Mask Suppression": "3",
+        "Debug Stereo Output": "true",
     }
 
     snapshot = hot_reload_runtime_settings_snapshot(
@@ -166,11 +187,17 @@ def test_hot_reload_builds_runtime_settings_snapshot():
     assert snapshot.source == "settings_yaml_hot_reload"
     assert snapshot.depth_strength == 1.25
     assert snapshot.ipd_mm == 65.0
+    assert snapshot.output_format == "half_tab"
+    assert snapshot.max_disparity_px == 96.0
+    assert snapshot.parallax_preset == "comfort"
     assert snapshot.temporal is True
     assert snapshot.temporal_strength == 0.3
     assert snapshot.auto_reset_temporal is True
     assert snapshot.scene_reset_threshold == 0.4
     assert snapshot.reset_cooldown_frames == 8
+    assert snapshot.screen_edge_mask_suppression == 3
+    assert snapshot.debug_output is True
+    assert snapshot.debug_flags == {"debug_output": True}
     assert snapshot.classify() is SnapshotChangeClass.HOT_RELOAD
 
 
@@ -200,6 +227,11 @@ def test_hot_reload_pushes_all_openxr_stereo_controls(tmp_path):
             "IPD mm": "64",
             "Stereo Scale": "0.35",
             "Max Shift Ratio": "0.05",
+            "Display Mode": "Full-TAB",
+            "Max Disparity Px": "72",
+            "Parallax Preset": "standard",
+            "Screen Edge Mask Suppression": "4",
+            "Debug Stereo Output": "on",
         },
         clock=lambda: 1.0,
     )
@@ -218,3 +250,9 @@ def test_hot_reload_pushes_all_openxr_stereo_controls(tmp_path):
     assert runtime.applied_snapshot.convergence == 0.25
     assert runtime.applied_snapshot.stereo_scale == 0.35
     assert runtime.applied_snapshot.max_shift_ratio == 0.05
+    assert runtime.applied_snapshot.output_format == "full_tab"
+    assert runtime.applied_snapshot.max_disparity_px == 72.0
+    assert runtime.applied_snapshot.parallax_preset == "standard"
+    assert runtime.applied_snapshot.screen_edge_mask_suppression == 4
+    assert runtime.applied_snapshot.debug_output is True
+    assert runtime.applied_snapshot.debug_flags == {"debug_output": True}

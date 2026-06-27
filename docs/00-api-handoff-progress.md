@@ -23,7 +23,7 @@ Desktop2Stereo engineering-spec refactor tasks from prompts/codex-refactor-promp
 Latest pushed task commit:
 
 ```text
-refactor: route runtime settings through snapshots
+refactor: enforce runtime temporal contracts
 ```
 
 Canonical specs for current work:
@@ -46,6 +46,62 @@ Canonical specs for current work:
 - None currently recorded for this handoff.
 
 ## Current Status
+
+### 2026-06-28 Hot Reload Debug And Mask Snapshot Follow-up
+
+Continued the `docs/25-2d-to-3d-runtime-specification.md` hot-reload compliance pass by aligning the remaining initial-settings fields with `RuntimeSettingsSnapshot` hot reload.
+
+Implemented in this follow-up:
+
+- Added structured `RuntimeSettingsSnapshot.debug_output` so `Debug Stereo Output` can update runtime config instead of remaining an initialization-only setting.
+- Added `debug_flags={"debug_output": ...}` to the hot-reload snapshot for spec-level debug flag tracing.
+- Added hot-reload parsing for `Screen Edge Mask Suppression` into `screen_edge_mask_suppression`.
+- Added `debug_output` to `runtime_stereo_overrides()` so the fallback path without `apply_settings_snapshot()` still preserves the setting.
+- Updated hot-reload tests covering raw values, snapshot construction, fallback overrides, and OpenXR stereo-control propagation.
+
+Verification:
+
+```powershell
+src\python3\python.exe -m py_compile src\stereo_runtime\hot_reload.py src\stereo_runtime\settings_snapshot.py tests\test_hot_reload.py
+src\python3\python.exe -m pytest tests\test_hot_reload.py -q
+src\python3\python.exe -m pytest tests\test_hot_reload.py tests\test_settings_snapshot.py tests\test_runtime_openxr.py tests\test_openxr_state.py -q
+src\python3\python.exe -m pytest tests\test_hot_reload.py tests\test_runtime.py tests\test_runtime_context.py tests\test_settings_snapshot.py tests\test_runtime_openxr.py tests\test_viewer_runtime.py tests\test_openxr_runtime.py tests\test_runtime_pipeline.py tests\test_session_helpers.py tests\test_breakdown.py tests\test_parallax.py tests\test_synthesis.py tests\test_openxr_state.py -q
+```
+
+Result:
+
+```text
+6 passed
+41 passed
+150 passed
+```
+
+### 2026-06-28 Hot Reload Parallax And Packing Snapshot Follow-up
+
+Continued the `docs/25-2d-to-3d-runtime-specification.md` hot-reload compliance pass by routing normalized parallax budget controls and output packing format from `settings.yaml` hot reload into `RuntimeSettingsSnapshot`.
+
+Implemented in this follow-up:
+
+- Added hot-reload parsing for `Max Disparity Px` / `Max Disparity PX` into `max_disparity_px`.
+- Added hot-reload parsing for `Parallax Preset` / `Parallax Budget Preset` into `parallax_preset`.
+- Added hot-reload parsing for `Display Mode` into normalized `output_format`, keeping Output Packing Format independent from runtime mode.
+- Preserved legacy `Max Shift Ratio` handling while allowing normalized parallax budget and packing fields to reach runtime and OpenXR snapshot consumers.
+- Updated hot-reload tests covering raw values, snapshot construction, and OpenXR stereo-control propagation.
+
+Verification:
+
+```powershell
+src\python3\python.exe -m py_compile src\stereo_runtime\hot_reload.py tests\test_hot_reload.py
+src\python3\python.exe -m pytest tests\test_hot_reload.py -q
+src\python3\python.exe -m pytest tests\test_hot_reload.py tests\test_settings_snapshot.py tests\test_runtime_openxr.py tests\test_openxr_state.py -q
+src\python3\python.exe -m pytest tests\test_hot_reload.py tests\test_runtime.py tests\test_runtime_context.py tests\test_settings_snapshot.py tests\test_runtime_openxr.py tests\test_viewer_runtime.py tests\test_openxr_runtime.py tests\test_runtime_pipeline.py tests\test_session_helpers.py tests\test_breakdown.py tests\test_parallax.py tests\test_synthesis.py tests\test_openxr_state.py -q
+```
+
+Result:
+
+```text
+150 passed
+```
 
 ### 2026-06-28 Pipeline Rebuild Snapshot Guard Follow-up
 

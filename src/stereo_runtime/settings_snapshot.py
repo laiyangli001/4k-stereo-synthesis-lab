@@ -19,6 +19,7 @@ _HOT_RELOAD_FIELDS = frozenset(
         "runtime_quality_mode",
         "presentation_flags",
         "debug_flags",
+        "debug_output",
         "stereo_quality",
         "output_format",
         "depth_strength",
@@ -91,6 +92,7 @@ _CONFIG_UPDATE_FIELDS = frozenset(
         "cross_eyed",
         "anaglyph_method",
         "fused",
+        "debug_output",
         "depth_backend",
         "model_id",
         "export_height",
@@ -115,6 +117,7 @@ class RuntimeSettingsSnapshot:
     capture_target: str | None = None
     presentation_flags: dict[str, Any] | None = None
     debug_flags: dict[str, Any] | None = None
+    debug_output: bool | None = None
     stereo_quality: StereoQuality | None = None
     output_format: OutputFormat | None = None
     depth_strength: float | None = None
