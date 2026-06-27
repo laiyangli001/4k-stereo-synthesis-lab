@@ -6,6 +6,7 @@ import torch
 from stereo_runtime import StereoRuntime, StereoRuntimeConfig
 from stereo_runtime.depth_provider import DepthProfileResult
 from stereo_runtime.settings_snapshot import (
+    RuntimeSettingsPipelineRebuildRequired,
     RuntimeSettingsRestartRequired,
     RuntimeSettingsSnapshot,
     SnapshotChangeClass,
@@ -143,6 +144,45 @@ def test_runtime_applies_hot_settings_snapshot_without_rebuild():
     assert runtime.active_settings_version == 12
 
 
+def test_runtime_settings_snapshot_temporal_change_resets_temporal_history():
+    runtime = StereoRuntime(
+        StereoRuntimeConfig(model_id="Distill-Any-Depth-Base", cache_dir="models"),
+        depth_provider=FakeDepthProvider(),
+        collect_memory_stats=False,
+    )
+    runtime.temporal_state.left = torch.ones((1, 3, 2, 2), dtype=torch.float32)
+    runtime.temporal_state.right = torch.ones((1, 3, 2, 2), dtype=torch.float32)
+    runtime._openxr_depth_temporal = torch.ones((1, 1, 2, 2), dtype=torch.float32)
+
+    runtime.apply_settings_snapshot(RuntimeSettingsSnapshot(version=12, timestamp=1.0, temporal=False))
+
+    assert runtime.temporal_state.left is None
+    assert runtime.temporal_state.right is None
+    assert runtime._openxr_depth_temporal is None
+
+    result = runtime.process_openxr_frame(torch.zeros((1, 3, 2, 2), dtype=torch.float32))
+
+    assert result.debug_info["temporal_reset_reason"] == "settings_changed"
+    second = runtime.process_openxr_frame(torch.zeros((1, 3, 2, 2), dtype=torch.float32))
+    assert "temporal_reset_reason" not in second.debug_info
+
+
+def test_runtime_rejects_pipeline_rebuild_snapshot_before_merging_active_settings():
+    runtime = StereoRuntime(
+        StereoRuntimeConfig(model_id="Distill-Any-Depth-Base", cache_dir="models"),
+        depth_provider=FakeDepthProvider(),
+        collect_memory_stats=False,
+    )
+    snapshot = RuntimeSettingsSnapshot(version=12, timestamp=1.0, render_size_policy="scaled")
+
+    with pytest.raises(RuntimeSettingsPipelineRebuildRequired) as exc_info:
+        runtime.apply_settings_snapshot(snapshot)
+
+    assert exc_info.value.changed_fields == ("render_size_policy",)
+    assert runtime.active_settings_version == 0
+    assert runtime.active_settings_snapshot.render_size_policy is None
+
+
 def test_runtime_result_debug_info_tracks_active_settings_snapshot_fields():
     runtime = StereoRuntime(
         StereoRuntimeConfig(model_id="Distill-Any-Depth-Base", cache_dir="models"),
@@ -155,10 +195,6 @@ def test_runtime_result_debug_info_tracks_active_settings_snapshot_fields():
             version=12,
             timestamp=1.0,
             runtime_quality_mode="movie",
-            stereo_synthesis_mode="full_synthesis_eyes",
-            render_size_policy="scaled",
-            stereo_render_scale=0.5,
-            output_transport="openxr_swapchain",
             presentation_flags={"eye_order": "left_first"},
             debug_flags={"timing": True},
         )
@@ -190,10 +226,6 @@ def test_runtime_result_debug_info_tracks_active_settings_snapshot_fields():
         "parallax_preset",
     ]
     assert result.debug_info["runtime_quality_mode"] == "movie"
-    assert result.debug_info["stereo_synthesis_mode"] == "full_synthesis_eyes"
-    assert result.debug_info["render_size_policy"] == "scaled"
-    assert result.debug_info["stereo_render_scale"] == 0.5
-    assert result.debug_info["output_transport"] == "openxr_swapchain"
     assert result.debug_info["presentation_flags"] == {"eye_order": "left_first"}
     assert result.debug_info["debug_flags"] == {"timing": True}
     assert result.debug_info["output_format"] == "half_sbs"

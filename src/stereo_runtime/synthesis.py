@@ -337,6 +337,8 @@ def synthesize_stereo(
         if temporal_state is not None:
             debug["scene_delta"] = float(temporal_state.last_scene_delta)
             debug["temporal_reset_count"] = int(temporal_state.reset_count)
+    if temporal_reset:
+        debug["temporal_reset_reason"] = "scene_reset"
     debug["cross_eyed"] = int(config.cross_eyed)
     debug["anaglyph_method"] = config.anaglyph_method
     debug["convergence"] = float(config.convergence)

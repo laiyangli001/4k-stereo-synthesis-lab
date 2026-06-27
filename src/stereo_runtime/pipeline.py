@@ -10,7 +10,7 @@ from capture.types import CapturedFrame
 
 from .render_size import RenderSizeConfig, resolve_render_size, runtime_output_size_text
 from .runtime import openxr_result_from_stereo_result
-from .settings_snapshot import RuntimeSettingsRestartRequired
+from .settings_snapshot import RuntimeSettingsPipelineRebuildRequired, RuntimeSettingsRestartRequired
 
 _OPENXR_FULL_SYNTHESIS_PRESETS = {"cinema", "game_low_latency", "still_image_hq", "debug_export"}
 
@@ -84,6 +84,42 @@ def _resolve_pipeline_render_size(size, config: RenderSizeConfig | None):
     if isinstance(size, (tuple, list)) and len(size) == 2:
         return resolve_render_size((int(size[0]), int(size[1])), config)
     return size
+
+
+def _reset_runtime_temporal_state(runtime) -> None:
+    temporal_state = getattr(runtime, "temporal_state", None)
+    reset_stereo = getattr(temporal_state, "reset_stereo", None)
+    if callable(reset_stereo):
+        reset_stereo()
+
+
+def _source_target_key(captured_frame: CapturedFrame | None):
+    if captured_frame is None:
+        return ("legacy",)
+    metadata = captured_frame.metadata if isinstance(captured_frame.metadata, dict) else {}
+    metadata_parts = tuple(
+        (key, str(metadata[key]))
+        for key in ("source_id", "source_key", "capture_source", "capture_target", "target_id", "window_handle", "hwnd")
+        if key in metadata and metadata[key] is not None
+    )
+    return (
+        "captured",
+        str(captured_frame.capture_mode or ""),
+        int(captured_frame.monitor_index or 0),
+        str(captured_frame.window_title or ""),
+        metadata_parts,
+    )
+
+
+def _append_temporal_reset_reason(debug_info: dict, reason: str) -> None:
+    current = debug_info.get("temporal_reset_reason")
+    if not current:
+        debug_info["temporal_reset_reason"] = reason
+        return
+    reasons = [part.strip() for part in str(current).split(",") if part.strip()]
+    if reason not in reasons:
+        reasons.append(reason)
+    debug_info["temporal_reset_reason"] = ",".join(reasons)
 
 
 def _rgb_size_text(frame) -> str:
@@ -165,6 +201,9 @@ class RuntimePipelineLoop:
     def __init__(self, context: RuntimePipelineContext):
         self.context = context
         self._logged_rgb_shape = False
+        self._last_render_size = None
+        self._last_source_target_key = None
+        self._has_source_target_key = False
 
     def run(self) -> None:
         ctx = self.context
@@ -217,6 +256,19 @@ class RuntimePipelineLoop:
 
                 process_start_time = time.perf_counter()
                 render_size = _resolve_pipeline_render_size(size, ctx.render_size_config)
+                render_size_changed = self._last_render_size is not None and render_size != self._last_render_size
+                source_target_key = _source_target_key(captured_frame)
+                source_target_changed = (
+                    self._has_source_target_key
+                    and source_target_key != self._last_source_target_key
+                )
+                if render_size_changed:
+                    _reset_runtime_temporal_state(ctx.stereo_runtime)
+                if source_target_changed:
+                    _reset_runtime_temporal_state(ctx.stereo_runtime)
+                self._last_render_size = render_size
+                self._last_source_target_key = source_target_key
+                self._has_source_target_key = True
                 frame_rgb = ctx.capture_frame_to_rgb(
                     frame_raw,
                     render_size,
@@ -274,6 +326,10 @@ class RuntimePipelineLoop:
                 )
                 debug_info = getattr(runtime_result, "debug_info", None)
                 if isinstance(debug_info, dict):
+                    if render_size_changed:
+                        _append_temporal_reset_reason(debug_info, "render_size_changed")
+                    if source_target_changed:
+                        _append_temporal_reset_reason(debug_info, "source_target_changed")
                     if ctx.application_runtime_target:
                         debug_info["application_runtime_target"] = ctx.application_runtime_target
                     if ctx.output_transport:
@@ -304,7 +360,7 @@ class RuntimePipelineLoop:
             except queue.Empty:
                 ctx.source_stat_inc("raw_queue_empty")
                 continue
-            except RuntimeSettingsRestartRequired:
+            except (RuntimeSettingsPipelineRebuildRequired, RuntimeSettingsRestartRequired):
                 raise
             except Exception as exc:
                 ctx.source_stat_inc(

@@ -800,6 +800,15 @@ GUI / API
 
 参数分级遵循 `docs/25-2d-to-3d-runtime-specification.md` 中的 Hot Reload / Pipeline Rebuild / Session Restart 表。
 
+RuntimeSettingsSnapshot 分级执行规则：
+
+```text
+Hot Reload 字段可由 StereoRuntime 在帧边界直接应用。
+Depth provider rebuild 字段可由 StereoRuntime 重建 provider 后继续运行。
+render_size_policy / stereo_render_scale / stereo_synthesis_mode / output_transport 等 pipeline-owned 字段不得在 StereoRuntime 内静默合并；必须抛出 pipeline rebuild 信号，由上层重建 pipeline/context 后再继续。
+Session Restart 字段必须抛出 restart 信号，由外层重启 capture/session/viewer。
+```
+
 ## 性能与资源管理
 
 ### GPU 优先级
@@ -861,6 +870,8 @@ capture_tool
 capture_size
 render_size
 runtime_depth_backend
+depth_provider_size
+depth_render_size
 sbs_backend
 packing_format
 transport
@@ -875,6 +886,7 @@ edge_dilation
 mask_feather_radius
 temporal_enabled
 temporal_strength
+temporal_reset_reason: scene_reset / settings_changed / render_size_changed / source_target_changed, comma-separated when multiple causes apply
 active_settings_version
 ```
 

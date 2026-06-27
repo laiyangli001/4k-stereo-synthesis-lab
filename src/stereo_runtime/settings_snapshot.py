@@ -174,3 +174,11 @@ class RuntimeSettingsRestartRequired(RuntimeError):
     def __init__(self, snapshot: RuntimeSettingsSnapshot):
         super().__init__(f"Runtime settings snapshot {snapshot.version} requires session restart")
         self.snapshot = snapshot
+
+
+class RuntimeSettingsPipelineRebuildRequired(RuntimeError):
+    def __init__(self, snapshot: RuntimeSettingsSnapshot, changed_fields: tuple[str, ...]):
+        fields = ", ".join(changed_fields)
+        super().__init__(f"Runtime settings snapshot {snapshot.version} requires pipeline rebuild: {fields}")
+        self.snapshot = snapshot
+        self.changed_fields = changed_fields

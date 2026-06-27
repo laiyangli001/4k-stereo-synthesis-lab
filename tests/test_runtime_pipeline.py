@@ -3,10 +3,16 @@ from __future__ import annotations
 import queue
 from types import SimpleNamespace
 
+import pytest
+
 from capture.types import CapturedFrame, FrameCopyMode
 from stereo_runtime.pipeline import RuntimePipelineContext, RuntimePipelineLoop
 from stereo_runtime.render_size import RenderSizeConfig, RenderSizePolicy
-from stereo_runtime.settings_snapshot import SnapshotChangeClass, RuntimeSettingsSnapshot
+from stereo_runtime.settings_snapshot import (
+    RuntimeSettingsPipelineRebuildRequired,
+    SnapshotChangeClass,
+    RuntimeSettingsSnapshot,
+)
 
 
 class OneShotShutdown:
@@ -18,12 +24,31 @@ class OneShotShutdown:
         return self.calls > 2
 
 
+class NFrameShutdown:
+    def __init__(self, frame_count):
+        self.calls = 0
+        self.frame_count = int(frame_count)
+
+    def is_set(self):
+        self.calls += 1
+        return self.calls > self.frame_count * 2
+
+
+class CountingTemporalState:
+    def __init__(self):
+        self.reset_count = 0
+
+    def reset_stereo(self):
+        self.reset_count += 1
+
+
 class FakeRuntime:
     def __init__(self):
         self.openxr_config = None
         self.rgb_calls = 0
         self.openxr_calls = 0
         self.snapshots = []
+        self.temporal_state = CountingTemporalState()
 
     def apply_settings_snapshot(self, snapshot, *, active_preset=None):
         self.snapshots.append((snapshot, active_preset))
@@ -49,6 +74,11 @@ class FakeRuntime:
             timing={"total_ms": 1.0},
             debug_info={"backend": "openxr_viewer_shader_dibr", "runtime_output_format": "openxr_rgb_depth"},
         )
+
+
+class PipelineRebuildRuntime(FakeRuntime):
+    def apply_settings_snapshot(self, snapshot, *, active_preset=None):
+        raise RuntimeSettingsPipelineRebuildRequired(snapshot, ("render_size_policy",))
 
 
 def test_runtime_pipeline_processes_one_frame():
@@ -122,6 +152,122 @@ def test_runtime_pipeline_processes_one_frame():
     assert ("warmup", "runtime-rgb") in calls
 
 
+def test_runtime_pipeline_resets_temporal_state_when_render_size_changes():
+    raw_q = queue.Queue(maxsize=2)
+    runtime_q = queue.Queue(maxsize=2)
+    raw_q.put(("raw-a", (2, 2), 10.0))
+    raw_q.put(("raw-b", (4, 4), 11.0))
+    runtime = FakeRuntime()
+
+    context = RuntimePipelineContext(
+        shutdown_event=NFrameShutdown(2),
+        raw_q=raw_q,
+        runtime_q=runtime_q,
+        time_sleep=0.01,
+        run_mode="Viewer",
+        openxr_runtime_direct=False,
+        stereo_active_preset=None,
+        device="cpu",
+        use_cudart=False,
+        thread_latencies={},
+        stereo_runtime=runtime,
+        capture_frame_to_rgb=lambda frame, size, **kwargs: SimpleNamespace(
+            _d2s_preprocess_backend="fake-preprocess"
+        ),
+        prepare_rgb_for_stereo_runtime=lambda frame, **kwargs: "runtime-rgb",
+        current_openxr_render_config=lambda: None,
+        is_hard_idle=lambda: False,
+        is_source_paused=lambda: False,
+        log_source_health=lambda: None,
+        source_stat_inc=lambda *args, **kwargs: None,
+        breakdown_inc=lambda *args, **kwargs: None,
+        breakdown_add_time=lambda *args, **kwargs: None,
+        breakdown_add_runtime_timing=lambda result: None,
+        set_preprocess_backend=lambda backend: None,
+        queue_clear=lambda q: None,
+        queue_drain_latest=lambda q, first_item: first_item,
+        queue_put_latest=lambda q, item: q.put_nowait(item),
+        log_stereo_runtime_mode_once=lambda: None,
+        apply_stereo_hot_reload_if_needed=lambda: None,
+        warmup_stereo_once_for_frame=lambda frame: None,
+        log_fast_plus_fused_runtime_state=lambda result: None,
+    )
+
+    RuntimePipelineLoop(context).run()
+
+    first_result, _first_ts = runtime_q.get_nowait()
+    second_result, _second_ts = runtime_q.get_nowait()
+    assert "temporal_reset_reason" not in first_result.debug_info
+    assert second_result.debug_info["temporal_reset_reason"] == "render_size_changed"
+    assert runtime.temporal_state.reset_count == 1
+
+
+def test_runtime_pipeline_resets_temporal_state_when_source_target_changes():
+    raw_q = queue.Queue(maxsize=2)
+    runtime_q = queue.Queue(maxsize=2)
+    raw_q.put(
+        CapturedFrame(
+            frame="raw-a",
+            target_height=(4, 4),
+            timestamp=10.0,
+            capture_mode="Monitor",
+            monitor_index=1,
+        )
+    )
+    raw_q.put(
+        CapturedFrame(
+            frame="raw-b",
+            target_height=(4, 4),
+            timestamp=11.0,
+            capture_mode="Monitor",
+            monitor_index=2,
+        )
+    )
+    runtime = FakeRuntime()
+
+    context = RuntimePipelineContext(
+        shutdown_event=NFrameShutdown(2),
+        raw_q=raw_q,
+        runtime_q=runtime_q,
+        time_sleep=0.01,
+        run_mode="Viewer",
+        openxr_runtime_direct=False,
+        stereo_active_preset=None,
+        device="cpu",
+        use_cudart=False,
+        thread_latencies={},
+        stereo_runtime=runtime,
+        capture_frame_to_rgb=lambda frame, size, **kwargs: SimpleNamespace(
+            _d2s_preprocess_backend="fake-preprocess"
+        ),
+        prepare_rgb_for_stereo_runtime=lambda frame, **kwargs: "runtime-rgb",
+        current_openxr_render_config=lambda: None,
+        is_hard_idle=lambda: False,
+        is_source_paused=lambda: False,
+        log_source_health=lambda: None,
+        source_stat_inc=lambda *args, **kwargs: None,
+        breakdown_inc=lambda *args, **kwargs: None,
+        breakdown_add_time=lambda *args, **kwargs: None,
+        breakdown_add_runtime_timing=lambda result: None,
+        set_preprocess_backend=lambda backend: None,
+        queue_clear=lambda q: None,
+        queue_drain_latest=lambda q, first_item: first_item,
+        queue_put_latest=lambda q, item: q.put_nowait(item),
+        log_stereo_runtime_mode_once=lambda: None,
+        apply_stereo_hot_reload_if_needed=lambda: None,
+        warmup_stereo_once_for_frame=lambda frame: None,
+        log_fast_plus_fused_runtime_state=lambda result: None,
+    )
+
+    RuntimePipelineLoop(context).run()
+
+    first_result, _first_ts = runtime_q.get_nowait()
+    second_result, _second_ts = runtime_q.get_nowait()
+    assert "temporal_reset_reason" not in first_result.debug_info
+    assert second_result.debug_info["temporal_reset_reason"] == "source_target_changed"
+    assert runtime.temporal_state.reset_count == 1
+
+
 def test_runtime_pipeline_applies_latest_settings_snapshot_before_frame():
     raw_q = queue.Queue(maxsize=1)
     runtime_q = queue.Queue(maxsize=1)
@@ -178,6 +324,52 @@ def test_runtime_pipeline_applies_latest_settings_snapshot_before_frame():
     assert stats["settings_updates"] == 1
     assert stats["last_settings_version"] == 2
     assert stats["last_settings_change_class"] == SnapshotChangeClass.HOT_RELOAD.value
+
+
+def test_runtime_pipeline_propagates_pipeline_rebuild_required():
+    raw_q = queue.Queue(maxsize=1)
+    runtime_q = queue.Queue(maxsize=1)
+    settings_update_q = queue.Queue(maxsize=1)
+    raw_q.put(("raw", (2, 2), 10.0))
+    settings_update_q.put(RuntimeSettingsSnapshot(version=1, timestamp=1.0, render_size_policy="scaled"))
+
+    context = RuntimePipelineContext(
+        shutdown_event=OneShotShutdown(),
+        raw_q=raw_q,
+        runtime_q=runtime_q,
+        time_sleep=0.01,
+        run_mode="Viewer",
+        openxr_runtime_direct=False,
+        stereo_active_preset="cinema",
+        device="cpu",
+        use_cudart=False,
+        thread_latencies={},
+        stereo_runtime=PipelineRebuildRuntime(),
+        capture_frame_to_rgb=lambda frame, size, **kwargs: SimpleNamespace(
+            _d2s_preprocess_backend="fake-preprocess"
+        ),
+        prepare_rgb_for_stereo_runtime=lambda frame, **kwargs: "runtime-rgb",
+        current_openxr_render_config=lambda: None,
+        is_hard_idle=lambda: False,
+        is_source_paused=lambda: False,
+        log_source_health=lambda: None,
+        source_stat_inc=lambda *args, **kwargs: None,
+        breakdown_inc=lambda *args, **kwargs: None,
+        breakdown_add_time=lambda *args, **kwargs: None,
+        breakdown_add_runtime_timing=lambda result: None,
+        set_preprocess_backend=lambda backend: None,
+        queue_clear=lambda q: None,
+        queue_drain_latest=lambda q, first_item: first_item,
+        queue_put_latest=lambda q, item: q.put_nowait(item),
+        log_stereo_runtime_mode_once=lambda: None,
+        apply_stereo_hot_reload_if_needed=lambda: None,
+        warmup_stereo_once_for_frame=lambda frame: None,
+        log_fast_plus_fused_runtime_state=lambda result: None,
+        settings_update_q=settings_update_q,
+    )
+
+    with pytest.raises(RuntimeSettingsPipelineRebuildRequired):
+        RuntimePipelineLoop(context).run()
 
 
 def test_runtime_pipeline_accepts_captured_frame_queue_item():

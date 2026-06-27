@@ -47,6 +47,159 @@ Canonical specs for current work:
 
 ## Current Status
 
+### 2026-06-28 Pipeline Rebuild Snapshot Guard Follow-up
+
+Continued the `docs/25-2d-to-3d-runtime-specification.md` hot-reload compliance pass by preventing pipeline-owned rebuild fields from being silently merged into `StereoRuntime` active settings when the current pipeline/context has not been rebuilt.
+
+Implemented in this follow-up:
+
+- Added `RuntimeSettingsPipelineRebuildRequired` for settings that require pipeline/context rebuild rather than in-place runtime apply.
+- Updated `StereoRuntime.apply_settings_snapshot()` to reject non-depth-provider `PIPELINE_REBUILD` fields such as `render_size_policy`, `stereo_render_scale`, `stereo_synthesis_mode`, and `output_transport`.
+- Kept depth-provider rebuild fields handled inside `StereoRuntime`.
+- Updated `RuntimePipelineLoop` so pipeline rebuild requests propagate to the lifecycle layer instead of being logged and swallowed as ordinary runtime errors.
+- Added regression tests for rejecting stale runtime merges and propagating pipeline rebuild exceptions.
+- Updated the engineering design spec with the runtime-vs-pipeline rebuild ownership rule.
+
+Verification:
+
+```powershell
+src\python3\python.exe -m py_compile src\stereo_runtime\settings_snapshot.py src\stereo_runtime\runtime.py src\stereo_runtime\pipeline.py src\stereo_runtime\__init__.py tests\test_settings_snapshot.py tests\test_runtime_pipeline.py
+src\python3\python.exe -m pytest tests\test_settings_snapshot.py tests\test_runtime_pipeline.py -q
+src\python3\python.exe -m pytest tests\test_runtime.py tests\test_runtime_context.py tests\test_settings_snapshot.py tests\test_runtime_openxr.py tests\test_viewer_runtime.py tests\test_openxr_runtime.py tests\test_runtime_pipeline.py tests\test_session_helpers.py tests\test_breakdown.py tests\test_parallax.py tests\test_synthesis.py -q
+```
+
+Result:
+
+```text
+136 passed
+```
+
+### 2026-06-28 Runtime Settings Temporal Reset Follow-up
+
+Continued the `docs/25-2d-to-3d-runtime-specification.md` hot-reload compliance pass by making temporal-affecting runtime settings clear temporal history instead of only updating runtime config values.
+
+Implemented in this follow-up:
+
+- Added a runtime hot-reload temporal-reset field set for settings that change temporal enablement or the active parallax/depth-response distribution.
+- Reset `StereoRuntime.temporal_state` and the OpenXR RGB+depth direct `_openxr_depth_temporal` cache when those fields change.
+- Added pending `debug_info["temporal_reset_reason"] = "settings_changed"` on the next runtime result, then consume it so later frames do not repeat the reason.
+- Added regression coverage for temporal setting changes resetting both stereo and OpenXR depth temporal history.
+- Updated the engineering debug contract to include `settings_changed` as a valid `temporal_reset_reason`.
+
+Verification:
+
+```powershell
+src\python3\python.exe -m py_compile src\stereo_runtime\runtime.py tests\test_settings_snapshot.py
+src\python3\python.exe -m pytest tests\test_settings_snapshot.py -q
+src\python3\python.exe -m pytest tests\test_runtime.py tests\test_runtime_context.py tests\test_settings_snapshot.py tests\test_runtime_openxr.py tests\test_viewer_runtime.py tests\test_openxr_runtime.py tests\test_runtime_pipeline.py tests\test_session_helpers.py tests\test_breakdown.py tests\test_parallax.py tests\test_synthesis.py -q
+```
+
+Result:
+
+```text
+134 passed
+```
+
+### 2026-06-28 Scene Reset Reason Debug Follow-up
+
+Continued the `docs/25-2d-to-3d-runtime-specification.md` temporal-state compliance pass by aligning scene-cut temporal resets with the same structured reset-reason debug field used by pipeline-level render-size and source-target resets.
+
+Implemented in this follow-up:
+
+- Added `debug_info["temporal_reset_reason"] = "scene_reset"` when synthesis auto scene-cut detection resets stereo temporal history.
+- Kept existing debug-only `temporal_reset`, `scene_delta`, and `temporal_reset_count` fields for detailed diagnostics.
+- Updated the scene-cut regression test to verify the structured reset reason.
+- Updated the engineering debug contract to include `scene_reset` as a valid `temporal_reset_reason`.
+
+Verification:
+
+```powershell
+src\python3\python.exe -m py_compile src\stereo_runtime\synthesis.py tests\test_synthesis.py
+src\python3\python.exe -m pytest tests\test_synthesis.py -q
+src\python3\python.exe -m pytest tests\test_runtime.py tests\test_runtime_context.py tests\test_settings_snapshot.py tests\test_runtime_openxr.py tests\test_viewer_runtime.py tests\test_openxr_runtime.py tests\test_runtime_pipeline.py tests\test_session_helpers.py tests\test_breakdown.py tests\test_parallax.py tests\test_synthesis.py -q
+```
+
+Result:
+
+```text
+133 passed
+```
+
+### 2026-06-28 Source Target Temporal Reset Follow-up
+
+Continued the `docs/25-2d-to-3d-runtime-specification.md` temporal-state compliance pass by making capture source/target changes explicitly reset stereo temporal history even when the resolved render size stays the same.
+
+Implemented in this follow-up:
+
+- Added source-target tracking to `RuntimePipelineLoop` using `CapturedFrame` source metadata (`capture_mode`, `monitor_index`, `window_title`, and stable source metadata keys).
+- Reset `stereo_runtime.temporal_state.reset_stereo()` when the source target changes between frames.
+- Added `debug_info["temporal_reset_reason"] = "source_target_changed"` on the affected runtime result; if multiple reset causes happen on the same frame, the field records comma-separated reasons.
+- Added a two-frame pipeline regression test covering same-size monitor target switching.
+
+Verification:
+
+```powershell
+src\python3\python.exe -m py_compile src\stereo_runtime\pipeline.py tests\test_runtime_pipeline.py
+src\python3\python.exe -m pytest tests\test_runtime_pipeline.py -q
+src\python3\python.exe -m pytest tests\test_runtime.py tests\test_runtime_context.py tests\test_settings_snapshot.py tests\test_runtime_openxr.py tests\test_viewer_runtime.py tests\test_openxr_runtime.py tests\test_runtime_pipeline.py tests\test_session_helpers.py tests\test_breakdown.py tests\test_parallax.py tests\test_synthesis.py -q
+```
+
+Result:
+
+```text
+133 passed
+```
+
+### 2026-06-28 Render Size Temporal Reset Follow-up
+
+Continued the `docs/25-2d-to-3d-runtime-specification.md` temporal-state compliance pass by making render-size changes explicitly reset stereo temporal history at the pipeline boundary.
+
+Implemented in this follow-up:
+
+- Added previous-render-size tracking to `RuntimePipelineLoop`.
+- Reset `stereo_runtime.temporal_state.reset_stereo()` when the resolved `render_size` changes between frames.
+- Added `debug_info["temporal_reset_reason"] = "render_size_changed"` on the affected runtime result.
+- Added a two-frame pipeline regression test covering the reset and debug metadata.
+
+Verification:
+
+```powershell
+src\python3\python.exe -m py_compile src\stereo_runtime\pipeline.py tests\test_runtime_pipeline.py
+src\python3\python.exe -m pytest tests\test_runtime_pipeline.py -q
+src\python3\python.exe -m pytest tests\test_runtime.py tests\test_runtime_context.py tests\test_settings_snapshot.py tests\test_runtime_openxr.py tests\test_viewer_runtime.py tests\test_openxr_runtime.py tests\test_runtime_pipeline.py tests\test_session_helpers.py tests\test_breakdown.py tests\test_parallax.py tests\test_synthesis.py -q
+```
+
+Result:
+
+```text
+132 passed
+```
+
+### 2026-06-27 Depth Size Contract Debug Follow-up
+
+Continued the `docs/25-2d-to-3d-runtime-specification.md` depth/render-size compliance pass by making provider-internal depth size and actual render-aligned depth size visible on runtime results.
+
+Implemented in this follow-up:
+
+- Added `depth_render_size` to RGB and OpenXR runtime `debug_info` from the actual depth tensor shape.
+- Added `depth_provider_size` to runtime `debug_info` from provider metadata, preferring explicit provider size fields and falling back to `depth_resolution` when that is the only stable provider contract.
+- Reused one `provider_report()` per frame for both result `provider_info` and depth-size debug metadata.
+- Updated runtime and OpenXR tests to verify provider size and render-aligned depth size.
+
+Verification:
+
+```powershell
+src\python3\python.exe -m py_compile src\stereo_runtime\runtime.py tests\test_runtime.py tests\test_runtime_openxr.py
+src\python3\python.exe -m pytest tests\test_runtime.py tests\test_runtime_openxr.py -q
+src\python3\python.exe -m pytest tests\test_runtime.py tests\test_runtime_context.py tests\test_settings_snapshot.py tests\test_runtime_openxr.py tests\test_viewer_runtime.py tests\test_openxr_runtime.py tests\test_runtime_pipeline.py tests\test_session_helpers.py tests\test_breakdown.py tests\test_parallax.py tests\test_synthesis.py -q
+```
+
+Result:
+
+```text
+131 passed
+```
+
 ### 2026-06-27 Host Target And Transport Contract Follow-up
 
 Continued the `docs/25-2d-to-3d-runtime-specification.md` runtime-result debug compliance pass by moving application target and transport labeling to the host/pipeline boundary, where the resolved GUI run mode is known.

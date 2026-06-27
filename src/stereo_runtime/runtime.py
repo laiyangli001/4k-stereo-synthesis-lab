@@ -15,7 +15,12 @@ from .depth_provider import DepthProfileResult, create_depth_provider
 from .openxr_render import OpenXRRenderConfig, render_openxr_stereo
 from .parallax import parallax_debug_info, resolve_parallax_budget
 from .render_size import runtime_output_size_text
-from .settings_snapshot import RuntimeSettingsRestartRequired, RuntimeSettingsSnapshot, SnapshotChangeClass
+from .settings_snapshot import (
+    RuntimeSettingsPipelineRebuildRequired,
+    RuntimeSettingsRestartRequired,
+    RuntimeSettingsSnapshot,
+    SnapshotChangeClass,
+)
 from .synthesis import StereoResult, synthesize_stereo
 from .temporal import TemporalState
 
@@ -381,6 +386,36 @@ def _merge_runtime_settings_snapshot(
 
 
 _DEPTH_PROVIDER_REBUILD_FIELDS = frozenset({"depth_backend", "model_id", "export_height", "export_width"})
+_RUNTIME_HANDLED_PIPELINE_REBUILD_FIELDS = _DEPTH_PROVIDER_REBUILD_FIELDS
+_TEMPORAL_RESET_HOT_RELOAD_FIELDS = frozenset(
+    {
+        "temporal",
+        "depth_strength",
+        "convergence",
+        "ipd_mm",
+        "stereo_scale",
+        "max_shift_ratio",
+        "max_disparity_px",
+        "parallax_preset",
+    }
+)
+
+
+def _append_temporal_reset_reason(debug: dict[str, Any], reason: str) -> None:
+    current = debug.get("temporal_reset_reason")
+    if not current:
+        debug["temporal_reset_reason"] = reason
+        return
+    reasons = [part.strip() for part in str(current).split(",") if part.strip()]
+    if reason not in reasons:
+        reasons.append(reason)
+    debug["temporal_reset_reason"] = ",".join(reasons)
+
+
+def _consume_pending_temporal_reset_reasons(runtime: "StereoRuntime", debug: dict[str, Any]) -> None:
+    for reason in runtime._pending_temporal_reset_reasons:
+        _append_temporal_reset_reason(debug, reason)
+    runtime._pending_temporal_reset_reasons = ()
 
 
 def _add_active_settings_debug_info(debug: dict[str, Any], snapshot: RuntimeSettingsSnapshot) -> None:
@@ -412,6 +447,46 @@ def _add_runtime_config_debug_info(debug: dict[str, Any], config: StereoConfig) 
     debug.setdefault("parallax_preset", str(config.parallax_preset))
 
 
+def _add_depth_contract_debug_info(
+    debug: dict[str, Any],
+    depth: torch.Tensor,
+    provider_info: dict[str, Any],
+) -> None:
+    debug["depth_render_size"] = runtime_output_size_text(_runtime_frame_size(depth))
+    provider_size = _provider_size_label(provider_info)
+    if provider_size is not None:
+        debug["depth_provider_size"] = provider_size
+
+
+def _provider_size_label(provider_info: dict[str, Any]) -> str | None:
+    provider_size = provider_info.get("depth_provider_size")
+    if provider_size is not None:
+        return _size_label(provider_size, height_width=False)
+    for key in ("input_size", "fixed_input_size"):
+        value = provider_info.get(key)
+        if value is not None:
+            return _size_label(value, height_width=True)
+    depth_resolution = provider_info.get("depth_resolution")
+    if depth_resolution is None:
+        return None
+    try:
+        size = int(depth_resolution)
+    except (TypeError, ValueError):
+        return str(depth_resolution)
+    return f"{size}x{size}"
+
+
+def _size_label(value, *, height_width: bool) -> str:
+    if isinstance(value, (tuple, list)) and len(value) == 2:
+        try:
+            first = int(value[0])
+            second = int(value[1])
+            return runtime_output_size_text((second, first) if height_width else (first, second))
+        except (TypeError, ValueError):
+            pass
+    return str(value)
+
+
 class StereoRuntime:
     """Persistent host-facing runtime for RGB frame -> depth -> stereo output."""
 
@@ -438,6 +513,7 @@ class StereoRuntime:
         self.active_settings_version = 0
         self.last_settings_change_class = SnapshotChangeClass.NO_CHANGE.value
         self.last_settings_changed_fields: tuple[str, ...] = ()
+        self._pending_temporal_reset_reasons: tuple[str, ...] = ()
         self.stats = RollingRuntimeStats(maxlen=stats_window)
         self.collect_memory_stats = bool(collect_memory_stats)
 
@@ -474,6 +550,11 @@ class StereoRuntime:
             return change_class
         if change_class is SnapshotChangeClass.SESSION_RESTART:
             raise RuntimeSettingsRestartRequired(snapshot)
+        if (
+            change_class is SnapshotChangeClass.PIPELINE_REBUILD
+            and not set(changed_fields).issubset(_RUNTIME_HANDLED_PIPELINE_REBUILD_FIELDS)
+        ):
+            raise RuntimeSettingsPipelineRebuildRequired(snapshot, changed_fields)
 
         updates = snapshot.to_config_updates()
         if active_preset is not None:
@@ -484,6 +565,11 @@ class StereoRuntime:
         self.active_settings_version = int(snapshot.version)
         self.last_settings_change_class = change_class.value
         self.last_settings_changed_fields = changed_fields
+
+        if _TEMPORAL_RESET_HOT_RELOAD_FIELDS.intersection(changed_fields):
+            self.temporal_state.reset_stereo()
+            self._openxr_depth_temporal = None
+            self._pending_temporal_reset_reasons = (*self._pending_temporal_reset_reasons, "settings_changed")
 
         if change_class is SnapshotChangeClass.PIPELINE_REBUILD and _DEPTH_PROVIDER_REBUILD_FIELDS.intersection(changed_fields):
             self._rebuild_depth_provider()
@@ -624,8 +710,11 @@ class StereoRuntime:
         debug["active_settings_version"] = int(self.active_settings_version)
         debug["hot_reload_class"] = self.last_settings_change_class
         debug["hot_reload_changed_fields"] = list(self.last_settings_changed_fields)
+        _consume_pending_temporal_reset_reasons(self, debug)
         _add_active_settings_debug_info(debug, self.active_settings_snapshot)
         _add_runtime_config_debug_info(debug, self.stereo_config)
+        provider_info = self.provider_report()
+        _add_depth_contract_debug_info(debug, depth, provider_info)
         _add_preprocess_debug_info(debug, rgb_frame)
         if memory:
             debug.update(memory)
@@ -686,7 +775,7 @@ class StereoRuntime:
             output_pack_backend=_optional_debug_str(debug.get("runtime_output_pack_backend")),
             debug_info=debug,
             timing=timing,
-            provider_info=self.provider_report(),
+            provider_info=provider_info,
         )
 
     def process_openxr_frame(
@@ -756,8 +845,11 @@ class StereoRuntime:
         debug["runtime_output_dtype"] = _runtime_eye_dtype(left_eye, right_eye)
         debug["hot_reload_class"] = self.last_settings_change_class
         debug["hot_reload_changed_fields"] = list(self.last_settings_changed_fields)
+        _consume_pending_temporal_reset_reasons(self, debug)
         _add_active_settings_debug_info(debug, self.active_settings_snapshot)
         _add_runtime_config_debug_info(debug, self.stereo_config)
+        provider_info = self.provider_report()
+        _add_depth_contract_debug_info(debug, depth, provider_info)
         output_eye_size, output_display_size = _add_runtime_output_size_debug_info(debug, left_eye, left_eye)
         debug["runtime_output_pack_backend"] = pack_backend
         if openxr_config is not None:
@@ -794,7 +886,7 @@ class StereoRuntime:
             output_pack_backend=_optional_debug_str(debug.get("runtime_output_pack_backend")),
             debug_info=debug,
             timing=timing,
-            provider_info=self.provider_report(),
+            provider_info=provider_info,
         )
 
     def _prepare_openxr_rgb_depth(self, depth: torch.Tensor) -> torch.Tensor:

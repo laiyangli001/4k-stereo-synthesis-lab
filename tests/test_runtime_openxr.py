@@ -20,6 +20,7 @@ class FakeDepthProvider:
         "provider": "fake",
         "model_name": "fake",
         "model_id": "fake",
+        "depth_resolution": 518,
         "depth_backend": "fake",
     }
 
@@ -61,6 +62,8 @@ def test_process_openxr_frame_defaults_to_rgb_depth_runtime_result():
     assert result.debug_info["runtime_output_dtype"] == "float32"
     assert result.debug_info["runtime_output_eye_size"] == "16x12"
     assert result.debug_info["runtime_output_display_size"] == "16x12"
+    assert result.debug_info["depth_provider_size"] == "518x518"
+    assert result.debug_info["depth_render_size"] == "16x12"
     assert result.debug_info["backend"] == "openxr_viewer_shader_dibr"
     assert result.output_format == "openxr_rgb_depth"
     assert result.output_dtype == "float32"

@@ -647,6 +647,7 @@ def test_auto_temporal_reset_detects_scene_cut_without_retriggering_during_coold
 
     assert first.debug_info["temporal_reset"] == 0
     assert second.debug_info["temporal_reset"] == 1
+    assert second.debug_info["temporal_reset_reason"] == "scene_reset"
     assert third.debug_info["temporal_reset"] == 0
     assert state.reset_count == 1
 

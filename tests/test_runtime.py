@@ -74,6 +74,8 @@ def test_runtime_process_rgb_frame_uses_persistent_provider_and_returns_report()
     assert first.debug_info["output_format"] == "half_sbs"
     assert first.debug_info["max_disparity_px"] == 18.0
     assert first.debug_info["parallax_preset"] == "comfort"
+    assert first.debug_info["depth_provider_size"] == "2x2"
+    assert first.debug_info["depth_render_size"] == "12x8"
     assert first.provider_info["provider"] == "fake"
     assert second.timing["total_ms"] >= 0.0
 
