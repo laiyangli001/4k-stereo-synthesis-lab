@@ -1,5 +1,7 @@
 import inspect
 import sys
+from dataclasses import fields
+from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
 from streaming.encoder_profile import EncoderProfile
@@ -17,8 +19,7 @@ def _config(**overrides):
     values = dict(
         capture_mode="monitor",
         monitor_index=0,
-        ipd=0.06,
-        depth_strength=1.0,
+        initial_depth_strength=2.5,
         convergence=0.0,
         display_mode="sbs",
         fill_16_9=False,
@@ -59,7 +60,27 @@ def _callbacks():
         rtmp_stream=lambda *args, **kwargs: None,
         is_window_visible_on_screen=lambda *args, **kwargs: True,
         set_rtmp_thread=lambda thread: None,
+        update_depth_strength=lambda value: None,
     )
+
+
+def test_viewer_runtime_config_does_not_expose_legacy_parallax_fields():
+    names = {field.name for field in fields(ViewerRuntimeConfig)}
+
+    assert "ipd" not in names
+    assert "initial_depth_strength" in names
+    assert "depth_strength" not in names
+
+
+def test_opengl_viewer_constructor_does_not_expose_legacy_parallax_fields():
+    source = Path("src/viewer/viewer.py").read_text(encoding="utf-8")
+    init_line = next(line for line in source.splitlines() if "def __init__(self, capture_mode=" in line)
+
+    assert "ipd=" not in init_line
+    assert " depth_strength=" not in init_line
+    assert "runtime_depth_strength=" in init_line
+    assert "show_runtime_depth_strength" in source
+    assert "Depth Strength:" in source
 
 
 def test_frame_size_from_output_scales_local_viewer_width():
@@ -130,15 +151,36 @@ def test_select_stereo_window_falls_back_when_metal_import_fails(monkeypatch, ca
 
 
 def test_metal_viewer_exposes_current_runtime_contract():
+    from viewer import metal_viewer
     from viewer.metal_viewer import StereoWindow
 
     signature = inspect.signature(StereoWindow)
+    update_source = inspect.getsource(StereoWindow.update_runtime_frame)
+    render_source = inspect.getsource(StereoWindow.render)
 
-    assert "depth_strength" in signature.parameters
+    assert "ipd" not in signature.parameters
+    assert "depth_strength" not in signature.parameters
     assert "depth_ratio" not in signature.parameters
     assert "kwargs" not in signature.parameters
     assert hasattr(StereoWindow, "update_runtime_frame")
     assert not hasattr(StereoWindow, "update_frame")
+    assert "runtime_result.sbs" in update_source
+    assert "self.depth_strength" not in update_source
+    assert "self.depth_ratio" not in update_source
+    assert "_runtime_direct_output = True" in update_source
+    assert "runtime_direct = bool(self._runtime_direct_output)" in render_source
+    assert "uniform_bytes = self._uniform_bytes(viewport, 0, 0.0)" in render_source
+    assert "self.depth_strength" not in render_source
+    assert "self.depth_ratio" not in render_source
+    assert "if runtime_direct:" in render_source
+    assert render_source.index("if runtime_direct:") < render_source.index(
+        'elif self.display_mode in ("Full-SBS", "Half-SBS", "Half-TAB", "Full-TAB")'
+    )
+    assert "displaced_uv(uv, u.parallaxOffset" in metal_viewer.METAL_SHADER
+    assert "float shift = (d - u.convergence) * eye * u.depthStrength;" in metal_viewer.METAL_SHADER
+    assert "uv.x - shift" in metal_viewer.METAL_SHADER
+    assert "u.convergence - d" not in metal_viewer.METAL_SHADER
+    assert "eyeOffset" not in metal_viewer.METAL_SHADER
 
 
 def test_start_viewer_streaming_returns_none_for_local_mode(capsys):

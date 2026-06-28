@@ -88,7 +88,8 @@ class GUIConfigMixin:
         self.stereo_preset_dd.value = self._preset_to_display(stereo_preset)
         self.stereo_quality_dd.value = self._stereo_quality_to_display(
             self._stereo_quality_for_preset(stereo_preset))
-        self.max_shift_dd.value = f'{self._parse_float(cfg.get("Max Shift Ratio", DEFAULTS["Max Shift Ratio"]), DEFAULTS["Max Shift Ratio"]):.2f}'
+        self.parallax_budget_dd.value = self._parallax_budget_to_display(
+            cfg.get("Parallax Budget Preset", cfg.get("Parallax Preset", "standard")))
         self.temporal_strength_dd.value = f'{self._parse_float(cfg.get("Temporal Strength", DEFAULTS["Temporal Strength"]), DEFAULTS["Temporal Strength"]):.2f}'
         self.edge_dilation_dd.value = str(cfg.get("Edge Dilation", DEFAULTS["Edge Dilation"]))
         self.mask_feather_dd.value = str(cfg.get("Mask Feather Radius", DEFAULTS["Mask Feather Radius"]))
@@ -99,9 +100,6 @@ class GUIConfigMixin:
         self.advanced_stereo_cb.value = False
         self._sync_advanced_stereo_visibility()
         self._sync_device_advanced_visibility(cfg.get("Run Mode", DEFAULTS.get("Run Mode", "Local Viewer")))
-        ipd_m = cfg.get("IPD", DEFAULTS["IPD"])
-        self.ipd_dd.value = str(self._runtime_ipd_to_display_mm(ipd_m))
-        self.stereo_scale_dd.value = f'{self._parse_float(cfg.get("Stereo Scale", cfg.get("Stereo Strength Scale", DEFAULTS["Stereo Scale"])), DEFAULTS["Stereo Scale"]):.1f}'
         self.fp16_cb.value = DEFAULTS["FP16"]
         self.showfps_cb.value = cfg.get("Show FPS", DEFAULTS["Show FPS"])
         self.fill_16_9_cb.value = cfg.get("Fill 16:9", DEFAULTS["Fill 16:9"])
@@ -200,6 +198,7 @@ class GUIConfigMixin:
 
         stereo_preset = self._display_to_preset(self.stereo_preset_dd.value)
         stereo_quality = self._stereo_quality_for_preset(stereo_preset)
+        parallax_budget = self._display_to_parallax_budget(self.parallax_budget_dd.value)
         render_fixed_width, render_fixed_height = self._parse_fixed_size(self.render_fixed_dd.value)
         self._config.pop("Debug Mode", None)
 
@@ -211,8 +210,7 @@ class GUIConfigMixin:
             "Stereo Preset": stereo_preset,
             "Stereo Quality": stereo_quality,
             "Synthetic View": stereo_quality,
-            "IPD": self._display_ipd_mm_to_runtime_m(self.ipd_dd.value),
-            "Stereo Scale": self._parse_float(self.stereo_scale_dd.value, DEFAULTS["Stereo Scale"]),
+            "Parallax Budget Preset": parallax_budget,
             "Convergence": self._parse_float(self.convergence_dd.value, DEFAULTS["Convergence"]),
             "Display Mode": self.display_mode_dd.value,
             "Model List": ALL_MODELS,
@@ -221,7 +219,6 @@ class GUIConfigMixin:
             "Depth Quick": self._display_to_depth_quick(self.depth_quick_dd.value),
             "Anti-aliasing": self._parse_int(self.antialiasing_dd.value, DEFAULTS["Anti-aliasing"]),
             "Depth Antialias Strength": self._parse_float(self.antialiasing_dd.value, DEFAULTS["Depth Antialias Strength"]),
-            "Max Shift Ratio": self._parse_float(self.max_shift_dd.value, DEFAULTS["Max Shift Ratio"]),
             "Temporal": temporal_strength > 0.0,
             "Temporal Strength": temporal_strength,
             "Auto Scene Reset": scene_reset_threshold > 0.0,
@@ -314,17 +311,16 @@ class GUIConfigMixin:
         self.foreground_scale_dd.value = f"{foreground_scale:.1f}"
         stereo_preset = self._display_to_preset(self.stereo_preset_dd.value)
         stereo_quality = self._stereo_quality_for_preset(stereo_preset)
+        parallax_budget = self._display_to_parallax_budget(self.parallax_budget_dd.value)
 
         cfg.update({
             "Stereo Preset": stereo_preset,
             "Stereo Quality": stereo_quality,
             "Synthetic View": stereo_quality,
-            "IPD": self._display_ipd_mm_to_runtime_m(self.ipd_dd.value),
-            "Stereo Scale": self._parse_float(self.stereo_scale_dd.value, DEFAULTS["Stereo Scale"]),
+            "Parallax Budget Preset": parallax_budget,
             "Convergence": self._parse_float(self.convergence_dd.value, DEFAULTS["Convergence"]),
             "Depth Strength": self._parse_float(self.depth_strength_dd.value, DEFAULTS["Depth Strength"]),
             "Depth Quick": self._display_to_depth_quick(self.depth_quick_dd.value),
-            "Max Shift Ratio": self._parse_float(self.max_shift_dd.value, DEFAULTS["Max Shift Ratio"]),
             "Temporal": temporal_strength > 0.0,
             "Temporal Strength": temporal_strength,
             "Auto Scene Reset": scene_reset_threshold > 0.0,
@@ -353,40 +349,40 @@ class GUIConfigMixin:
     def _stereo_preset_gui_values(preset):
         presets = {
             "traditional_fastest": {
-                "quality": "fast", "depth_strength": 2.5, "depth_quick": "Standard",
-                "convergence": 0.0, "max_shift_ratio": 0.03, "stereo_scale": 0.4,
+                "quality": "fast", "parallax_budget": "standard", "depth_strength": 2.5, "depth_quick": "Standard",
+                "convergence": 0.0,
                 "temporal_strength": 0.0, "scene_reset_threshold": 0.22, "reset_cooldown_frames": 3,
                 "foreground_scale": 0.0, "antialiasing": 0, "depth_antialias_strength": 0.0,
                 "edge_dilation": 0, "mask_feather_radius": 0, "hole_fill_mode": "balanced", "edge_threshold": 0.04,
                 "cross_eyed": False,
             },
             "cinema": {
-                "quality": "quality_4k", "depth_strength": 2.5, "depth_quick": "Standard",
-                "convergence": 0.0, "max_shift_ratio": 0.03, "stereo_scale": 0.4,
+                "quality": "quality_4k", "parallax_budget": "standard", "depth_strength": 2.5, "depth_quick": "Standard",
+                "convergence": 0.0,
                 "temporal_strength": 0.7, "scene_reset_threshold": 0.22, "reset_cooldown_frames": 3,
                 "foreground_scale": 0.0, "antialiasing": 1, "depth_antialias_strength": 1.0,
                 "edge_dilation": 2, "mask_feather_radius": 3, "hole_fill_mode": "balanced", "edge_threshold": 0.04,
                 "cross_eyed": False,
             },
             "game_low_latency": {
-                "quality": "fast_plus", "depth_strength": 2.0, "depth_quick": "Soft",
-                "convergence": 0.0, "max_shift_ratio": 0.03, "stereo_scale": 0.4,
+                "quality": "fast_plus", "parallax_budget": "comfort", "depth_strength": 2.0, "depth_quick": "Soft",
+                "convergence": 0.0,
                 "temporal_strength": 0.25, "scene_reset_threshold": 0.18, "reset_cooldown_frames": 2,
                 "foreground_scale": 0.0, "antialiasing": 0, "depth_antialias_strength": 0.0,
                 "edge_dilation": 1, "mask_feather_radius": 3, "hole_fill_mode": "soft_low_ghost", "edge_threshold": 0.04,
                 "cross_eyed": False,
             },
             "still_image_hq": {
-                "quality": "hq_4k", "depth_strength": 3.0, "depth_quick": "Enhanced",
-                "convergence": 0.0, "max_shift_ratio": 0.03, "stereo_scale": 0.4,
+                "quality": "hq_4k", "parallax_budget": "strong", "depth_strength": 3.0, "depth_quick": "Enhanced",
+                "convergence": 0.0,
                 "temporal_strength": 0.0, "scene_reset_threshold": 0.00, "reset_cooldown_frames": 3,
                 "foreground_scale": 0.0, "antialiasing": 2, "depth_antialias_strength": 2.0,
                 "edge_dilation": 3, "mask_feather_radius": 3, "hole_fill_mode": "sharp_test", "edge_threshold": 0.04,
                 "cross_eyed": False,
             },
             "debug_export": {
-                "quality": "quality_4k", "depth_strength": 3.0, "depth_quick": "Enhanced",
-                "convergence": 0.0, "max_shift_ratio": 0.03, "stereo_scale": 0.4,
+                "quality": "quality_4k", "parallax_budget": "standard", "depth_strength": 3.0, "depth_quick": "Enhanced",
+                "convergence": 0.0,
                 "temporal_strength": 0.7, "scene_reset_threshold": 0.22, "reset_cooldown_frames": 3,
                 "foreground_scale": 0.0, "antialiasing": 0, "depth_antialias_strength": 0.0,
                 "edge_dilation": 2, "mask_feather_radius": 3, "hole_fill_mode": "balanced", "edge_threshold": 0.04,
@@ -402,26 +398,6 @@ class GUIConfigMixin:
             return values["quality"]
         return DEFAULTS["Stereo Quality"]
 
-    _IPD_RUNTIME_PER_DISPLAY_MM = 30.0 / 60.0
-
-    @classmethod
-    def _runtime_ipd_to_display_mm(cls, value):
-        try:
-            runtime_mm = float(value) * 1000.0
-        except (TypeError, ValueError):
-            runtime_mm = float(DEFAULTS["IPD"]) * 1000.0
-        if runtime_mm > 45.0:
-            display_mm = runtime_mm
-        else:
-            display_mm = runtime_mm / cls._IPD_RUNTIME_PER_DISPLAY_MM
-        return max(50, min(70, int(round(display_mm))))
-
-    @classmethod
-    def _display_ipd_mm_to_runtime_m(cls, value):
-        display_mm = cls._parse_int(value, cls._runtime_ipd_to_display_mm(DEFAULTS["IPD"]))
-        display_mm = max(50, min(70, display_mm))
-        return display_mm * cls._IPD_RUNTIME_PER_DISPLAY_MM / 1000.0
-
     @staticmethod
     def _depth_strength_for_quick(value):
         return {"Soft": 2.0, "Standard": 2.5, "Enhanced": 3.0}.get(value, 2.5)
@@ -435,6 +411,14 @@ class GUIConfigMixin:
     def _stereo_quality_to_display(self, value):
         from .localization import stereo_quality_to_display
         return stereo_quality_to_display(value, self.locale)
+
+    def _parallax_budget_options(self):
+        from .localization import parallax_budget_options
+        return parallax_budget_options(self.locale)
+
+    def _parallax_budget_to_display(self, value):
+        from .localization import parallax_budget_to_display
+        return parallax_budget_to_display(value, self.locale)
 
     def _hole_fill_mode_options(self):
         from .localization import hole_fill_mode_options
@@ -453,6 +437,11 @@ class GUIConfigMixin:
     def _display_to_stereo_quality(value):
         from .localization import display_to_stereo_quality
         return display_to_stereo_quality(value)
+
+    @staticmethod
+    def _display_to_parallax_budget(value):
+        from .localization import display_to_parallax_budget
+        return display_to_parallax_budget(value)
 
     # ── static converters (no self.locale dependency) ──
 

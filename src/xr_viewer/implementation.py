@@ -183,7 +183,6 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
 
     def __init__(
         self,
-        ipd=0.064,
         depth_strength=1.0,
         convergence=0.0,
         frame_size=(1280, 720),
@@ -199,7 +198,6 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
         self._controller_model = controller_model
         self._capture_mode = capture_mode
         self._input_monitor_index = monitor_index
-        self.ipd_uv = ipd
         self.depth_strength = self._quantize_depth_strength(depth_strength)
         self._default_depth_strength = self.depth_strength
         self._depth_strength_adjust_raw = self.depth_strength
@@ -2080,8 +2078,7 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
     def _render_eye(self, eye_index, mgl_fbo, view_mat, proj_mat, flip_y=False):
         """Render one eye's parallax view into the swapchain FBO using world-space MVP.
 
-        Left eye:  u_eye_offset = -ipd/2
-        Right eye: u_eye_offset = +ipd/2
+        u_eye_offset is the resolved per-eye parallax offset from the runtime budget.
 
         If flip_y is True the projection is Y-flipped so glReadPixels produces
         top-down rows for D3D11, eliminating the CPU row-reversal copy.
@@ -2191,7 +2188,11 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
         screen_disparity_uv = 0.0
         if not self._runtime_direct_source and runtime_rgb_depth_render_width > 0:
             screen_disparity_uv = max(0.0, runtime_rgb_depth_max_disparity_px) / float(runtime_rgb_depth_render_width)
-        screen_depth_strength = 0.0 if self._runtime_direct_source else 1.0
+        screen_depth_strength = (
+            0.0
+            if self._runtime_direct_source
+            else max(0.0, float(getattr(self, '_runtime_rgb_depth_depth_strength', self.depth_strength) or 0.0))
+        )
         screen_eye_offset = 0.0 if self._runtime_direct_source else eye_sign * screen_disparity_uv / 2.0
         model = self._build_model_mat4()
         mvp = vp_mat @ model
@@ -4439,13 +4440,16 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
                                     screen_disparity_uv = 0.0
                                     if runtime_rgb_depth_render_width > 0:
                                         screen_disparity_uv = max(0.0, runtime_rgb_depth_max_disparity_px) / float(runtime_rgb_depth_render_width)
-                                    screen_depth_strength = 1.0
+                                    screen_depth_strength = max(
+                                        0.0,
+                                        float(getattr(self, '_runtime_rgb_depth_depth_strength', self.depth_strength) or 0.0),
+                                    )
                                     self._d3d11_native_renderer.render_eye(
                                         sc_image.texture,
                                         sc_w,
                                         sc_h,
                                         eye_index,
-                                        screen_disparity_uv,
+                                        eye_sign * screen_disparity_uv / 2.0,
                                         screen_depth_strength,
                                         float(self.convergence),
                                         mvp,

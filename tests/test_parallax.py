@@ -75,37 +75,29 @@ def test_compute_shift_px_uses_half_of_total_max_disparity_for_each_eye():
     shift = compute_shift_px(
         depth,
         1920,
-        ShiftParams(convergence=0.0, max_disparity_px=96.0),
+        ShiftParams(depth_strength=1.0, convergence=0.0, max_disparity_px=96.0),
     )
 
     assert shift.item() == pytest.approx(-48.0)
 
 
-def test_legacy_shift_params_preserve_existing_effective_ipd_formula():
+def test_compute_shift_px_scales_actual_displacement_by_depth_strength():
     depth = torch.ones(1, 1, 1, 1)
-    legacy = compute_shift_px(
-        depth,
-        1000,
-        ShiftParams(
-            depth_strength=1.0,
-            convergence=0.0,
-            ipd_mm=32.0,
-            stereo_scale=0.35,
-            max_shift_ratio=0.05,
-            parallax_preset="legacy",
-        ),
-    )
-    direct_effective_baseline = compute_shift_px(
-        depth,
-        1000,
-        ShiftParams(
-            depth_strength=1.0,
-            convergence=0.0,
-            ipd=0.0112,
-            ipd_mm=None,
-            max_shift_ratio=0.05,
-            parallax_preset="legacy",
-        ),
-    )
 
-    assert torch.allclose(legacy, direct_effective_baseline)
+    normal = compute_shift_px(depth, 1920, ShiftParams(depth_strength=1.0, convergence=0.0, max_disparity_px=40.0))
+    strong = compute_shift_px(depth, 1920, ShiftParams(depth_strength=2.5, convergence=0.0, max_disparity_px=40.0))
+    flat = compute_shift_px(depth, 1920, ShiftParams(depth_strength=0.0, convergence=0.0, max_disparity_px=40.0))
+
+    assert normal.item() == pytest.approx(-20.0)
+    assert strong.item() == pytest.approx(-50.0)
+    assert flat.item() == pytest.approx(0.0)
+
+
+def test_shift_params_do_not_expose_legacy_ipd_formula_fields():
+    fields = ShiftParams.__dataclass_fields__
+
+    assert "ipd" not in fields
+    assert "ipd_mm" not in fields
+    assert "stereo_scale" not in fields
+    assert "max_shift_ratio" not in fields
+

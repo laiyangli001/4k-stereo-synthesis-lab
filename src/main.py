@@ -1,10 +1,10 @@
-﻿# main.py
+# main.py
 import threading
 import time
 import subprocess
 import os
 
-from utils import OS_NAME, OUTPUT_RESOLUTION, RENDER_SIZE_CONFIG, CAPTURE_MODE, CAPTURE_TOOL, MONITOR_INDEX, FPS, WINDOW_TITLE, IPD, DEPTH_STRENGTH, CONVERGENCE, RUN_MODE, STEREOMIX_DEVICE, STREAM_KEY, AUDIO_DELAY, CRF, DEVICE_INFO, DEVICE, CACHE_PATH, shutdown_event, SHOW_FPS, _get_settings
+from utils import OS_NAME, OUTPUT_RESOLUTION, RENDER_SIZE_CONFIG, CAPTURE_MODE, CAPTURE_TOOL, MONITOR_INDEX, FPS, WINDOW_TITLE, DEPTH_STRENGTH, CONVERGENCE, RUN_MODE, STEREOMIX_DEVICE, STREAM_KEY, AUDIO_DELAY, CRF, DEVICE_INFO, DEVICE, CACHE_PATH, shutdown_event, SHOW_FPS, _get_settings
 from capture import capture_frame_to_rgb, prepare_rgb_for_stereo_runtime
 from capture.session import CaptureSessionLoop
 from stereo_runtime.pipeline import RuntimePipelineLoop
@@ -32,7 +32,6 @@ context = create_runtime_context(
     capture_tool=CAPTURE_TOOL,
     os_name=OS_NAME,
     run_mode=RUN_MODE,
-    ipd=IPD,
     depth_strength=DEPTH_STRENGTH,
     convergence=CONVERGENCE,
 )
@@ -139,6 +138,7 @@ def main(mode="Viewer"):
             set_rtmp_thread=_set_rtmp_thread,
             rtmp_stream=rtmp_stream,
             update_openxr_runtime_config=runtime_callbacks.update_openxr_runtime_config,
+            send_settings_snapshot=runtime_callbacks.send_settings_snapshot,
             render_active_event=context.openxr_state.render_active,
             source_active_event=context.openxr_state.source_active,
             idle_active_event=context.openxr_state.wait_idle_active,

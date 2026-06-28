@@ -45,13 +45,8 @@ def resolve_parallax_budget(
     render_width: int,
     render_height: int,
     preset: str,
-    depth_strength: float = 1.0,
-    stereo_scale: float = 1.0,
     convergence: float = 0.0,
-    ipd_mm: float | None = None,
-    max_shift_ratio: float = 0.05,
     *,
-    ipd: float = 0.064,
     max_disparity_px: float | None = None,
 ) -> ParallaxBudget:
     normalized_preset = _normalize_strength_preset(preset)
@@ -60,15 +55,6 @@ def resolve_parallax_budget(
 
     if max_disparity_px is not None:
         resolved_max_disparity = max(0.0, float(max_disparity_px))
-    elif normalized_preset == "legacy":
-        resolved_max_disparity = _legacy_max_disparity_px(
-            width=width,
-            depth_strength=depth_strength,
-            stereo_scale=stereo_scale,
-            ipd=ipd,
-            ipd_mm=ipd_mm,
-            max_shift_ratio=max_shift_ratio,
-        )
     else:
         resolved_max_disparity = _resolve_table_budget(width, height, normalized_preset)
 
@@ -94,8 +80,6 @@ def parallax_debug_info(budget: ParallaxBudget) -> dict[str, float | int | str]:
 
 def _normalize_strength_preset(preset: str | None) -> str:
     key = str(preset or "standard").strip().lower().replace("-", "_").replace(" ", "_")
-    if key == "legacy":
-        return "legacy"
     key = _STRENGTH_ALIASES.get(key, key)
     if key in PARALLAX_BUDGET_TABLE:
         return key
@@ -129,23 +113,3 @@ def _aspect_protection_factor(width: int, height: int) -> float:
     if aspect <= 2.0:
         return 1.0
     return max(0.70, min(1.0, 2.0 / aspect))
-
-
-def _legacy_max_disparity_px(
-    *,
-    width: int,
-    depth_strength: float,
-    stereo_scale: float,
-    ipd: float,
-    ipd_mm: float | None,
-    max_shift_ratio: float,
-) -> float:
-    if ipd_mm is None:
-        effective_ipd_m = max(0.0, float(ipd))
-    else:
-        effective_ipd_m = max(0.0, float(ipd_mm)) / 1000.0 * max(0.0, float(stereo_scale))
-    legacy_eye_shift_px = float(width) * effective_ipd_m * max(0.0, float(max_shift_ratio)) * max(
-        0.0,
-        float(depth_strength),
-    )
-    return 2.0 * legacy_eye_shift_px

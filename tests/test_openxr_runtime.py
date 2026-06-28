@@ -127,7 +127,6 @@ def test_run_openxr_mode_passes_depth_strength_to_viewer(monkeypatch):
         )
     )
     config = OpenXRRuntimeConfig(
-        ipd=0.064,
         depth_strength=2.4,
         convergence=0.1,
         fps=72,
@@ -152,6 +151,7 @@ def test_run_openxr_mode_passes_depth_strength_to_viewer(monkeypatch):
     assert isinstance(viewer, FakeViewer)
     assert calls[0]["depth_strength"] == 2.4
     assert "depth_ratio" not in calls[0]
+    assert "ipd" not in calls[0]
     assert calls[0]["frame_size"] == (3840, 2160)
 
 
@@ -207,18 +207,32 @@ def test_runtime_eye_stats_log_prefers_structured_output_fields(monkeypatch, cap
     assert "legacy_pack" not in output
 
 
-def test_d3d11_rgb_depth_shader_uses_screen_roll_for_parallax_direction(monkeypatch):
+def test_openxr_rgb_depth_shaders_use_consistent_parallax_formula(monkeypatch):
     monkeypatch.chdir(SRC)
     source = (SRC / "xr_viewer" / "d3d11_native_renderer.py").read_text(encoding="utf-8")
     implementation = (SRC / "xr_viewer" / "implementation.py").read_text(encoding="utf-8")
+    viewer_source = (SRC / "viewer" / "viewer.py").read_text(encoding="utf-8")
 
     assert "#define roll params.w" in source
     assert "float2 shiftedUv = uv - float2(shift * cos(roll), shift * sin(roll));" in source
-    assert "def render_eye(self, swapchain_texture, width, height, eye_index, ipd, depth_strength, convergence, mvp, roll=0.0):" in source
-    assert "constants[16:20] = np.array([eye_sign * ipd * 0.5, depth_strength, convergence, roll]" in source
+    assert "#define parallaxOffset params.x" in source
+    assert "float depthResponse = depth - convergence;" in source
+    assert "float shift = depthResponse * parallaxOffset * depthStrength;" in source
+    assert "depthInv" not in source
+    assert "def render_eye(self, swapchain_texture, width, height, eye_index, eye_offset, depth_strength, convergence, mvp, roll=0.0):" in source
+    assert "constants[16:20] = np.array([eye_offset, depth_strength, convergence, roll]" in source
+    assert "eye_sign * ipd * 0.5" not in source
     assert "self.runtime_eye_srv[eye_index], 0.0, 0.0, 0.0, mvp, roll=0.0" in source
     assert "screen_disparity_uv = max(0.0, runtime_rgb_depth_max_disparity_px) / float(runtime_rgb_depth_render_width)" in implementation
     assert "roll=self.screen_roll" in implementation
+    assert "float depth_response = depth - u_convergence;" in viewer_source
+    assert "float shift = depth_response;" in viewer_source
+    assert "float px = u_eye_offset * shift * u_depth_strength * edge_falloff;" in viewer_source
+    assert "float shift_amount = (depth - u_convergence) * u_depth_strength;" in viewer_source
+    assert "float shift_amount = (depth - u_convergence);" in viewer_source
+    assert "depth_shaped" not in viewer_source
+    assert "float depth_inv = -depth;" not in viewer_source
+    assert "depth_inv + u_convergence" not in viewer_source
 
 
 def test_runtime_rgb_depth_config_prefers_structured_shader_uniforms(monkeypatch):
@@ -230,6 +244,7 @@ def test_runtime_rgb_depth_config_prefers_structured_shader_uniforms(monkeypatch
         {
             "openxr_shader_uniforms": {
                 "convergence": 9.0,
+                "depth_strength": 9.0,
                 "max_disparity_px": 9.0,
                 "render_size": (9, 9),
             },
@@ -239,12 +254,14 @@ def test_runtime_rgb_depth_config_prefers_structured_shader_uniforms(monkeypatch
         },
         shader_uniforms={
             "convergence": 0.25,
+            "depth_strength": 2.4,
             "max_disparity_px": 18.0,
             "render_size": (1920, 1080),
         },
     )
 
     assert viewer.convergence == 0.25
+    assert viewer._runtime_rgb_depth_depth_strength == 2.4
     assert viewer._runtime_rgb_depth_max_disparity_px == 18.0
     assert viewer._runtime_rgb_depth_render_width == 1920
 
@@ -258,6 +275,7 @@ def test_runtime_rgb_depth_config_keeps_debug_uniform_fallback(monkeypatch):
         {
             "openxr_shader_uniforms": {
                 "convergence": 0.25,
+                "depth_strength": 1.7,
                 "max_disparity_px": 18.0,
                 "render_size": (1920, 1080),
             },
@@ -268,5 +286,6 @@ def test_runtime_rgb_depth_config_keeps_debug_uniform_fallback(monkeypatch):
     )
 
     assert viewer.convergence == 0.25
+    assert viewer._runtime_rgb_depth_depth_strength == 1.7
     assert viewer._runtime_rgb_depth_max_disparity_px == 18.0
     assert viewer._runtime_rgb_depth_render_width == 1920

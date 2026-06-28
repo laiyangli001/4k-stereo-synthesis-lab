@@ -54,7 +54,7 @@ struct VertexOut {
 };
 
 struct Uniforms {
-    float eyeOffset;
+    float parallaxOffset;
     float depthStrength;
     float convergence;
     float depthExponent;
@@ -110,8 +110,8 @@ fragment float4 overlay_fragment_main(
 static float2 displaced_uv(float2 uv, float eye, texture2d<float> depthTex, sampler s, constant Uniforms& u) {
     float d = depthTex.sample(s, uv).r;
     d = pow(clamp(d, 0.0, 1.0), u.depthExponent);
-    float shift = (u.convergence - d) * u.depthStrength * eye;
-    return float2(clamp(uv.x + shift, 0.0, 1.0), uv.y);
+    float shift = (d - u.convergence) * eye * u.depthStrength;
+    return float2(clamp(uv.x - shift, 0.0, 1.0), uv.y);
 }
 
 static float3 spectral_r_ultrafast(float t) {
@@ -167,7 +167,7 @@ fragment float4 fragment_main(
     }
 
     if (mode == 7) {
-        float4 color = colorTex.sample(s, displaced_uv(uv, u.eyeOffset, depthTex, s, u));
+        float4 color = colorTex.sample(s, displaced_uv(uv, u.parallaxOffset, depthTex, s, u));
         if (u.featherEnabled > 0.5) {
             float left = uv.x;
             float right = 1.0 - uv.x;
@@ -190,23 +190,23 @@ fragment float4 fragment_main(
 
     float4 color;
     if (mode == 4) {
-        float2 luv = displaced_uv(uv, -u.eyeOffset, depthTex, s, u);
-        float2 ruv = displaced_uv(uv,  u.eyeOffset, depthTex, s, u);
+        float2 luv = displaced_uv(uv, -u.parallaxOffset, depthTex, s, u);
+        float2 ruv = displaced_uv(uv,  u.parallaxOffset, depthTex, s, u);
         float4 lc = colorTex.sample(s, luv);
         float4 rc = colorTex.sample(s, ruv);
         color = float4(lc.r, rc.g, rc.b, 1.0);
     } else if (mode == 5) {
-        float eye = (fmod(floor(in.position.y), 2.0) < 1.0) ? -u.eyeOffset : u.eyeOffset;
+        float eye = (fmod(floor(in.position.y), 2.0) < 1.0) ? -u.parallaxOffset : u.parallaxOffset;
         color = colorTex.sample(s, displaced_uv(uv, eye, depthTex, s, u));
     } else if (mode == 6) {
-        float eye = (fmod(floor(in.position.x), 2.0) < 1.0) ? -u.eyeOffset : u.eyeOffset;
+        float eye = (fmod(floor(in.position.x), 2.0) < 1.0) ? -u.parallaxOffset : u.parallaxOffset;
         color = colorTex.sample(s, displaced_uv(uv, eye, depthTex, s, u));
     } else if (mode == 2) {
-        float eye = uv.y < 0.5 ? u.eyeOffset : -u.eyeOffset;
+        float eye = uv.y < 0.5 ? u.parallaxOffset : -u.parallaxOffset;
         float2 src = float2(uv.x, uv.y < 0.5 ? uv.y * 2.0 : (uv.y - 0.5) * 2.0);
         color = colorTex.sample(s, displaced_uv(src, eye, depthTex, s, u));
     } else {
-        float eye = uv.x < 0.5 ? -u.eyeOffset : u.eyeOffset;
+        float eye = uv.x < 0.5 ? -u.parallaxOffset : u.parallaxOffset;
         float2 src = float2(uv.x < 0.5 ? uv.x * 2.0 : (uv.x - 0.5) * 2.0, uv.y);
         color = colorTex.sample(s, displaced_uv(src, eye, depthTex, s, u));
     }
@@ -269,9 +269,9 @@ class StereoWindow:
         self,
         capture_mode="Monitor",
         monitor_index=0,
-        ipd=0.064,
-        depth_strength=1.0,
         convergence=0.0,
+        runtime_depth_strength=2.0,
+        on_runtime_depth_strength_change=None,
         display_mode="Half-SBS",
         fill_16_9=True,
         show_fps=True,
@@ -300,13 +300,15 @@ class StereoWindow:
         self.use_3d = use_3d
         self.capture_mode = capture_mode
         self.input_monitor_index = monitor_index
-        self.ipd_uv = ipd
-        self.depth_strength = depth_strength
-        self.depth_ratio = 1.0
-        self.depth_ratio_original = 1.0
         self.depth_exponent = 1.45
         self.convergence = convergence
+        self.runtime_depth_strength = float(runtime_depth_strength)
+        self.runtime_depth_strength_original = float(runtime_depth_strength)
+        self.parallax_budget_uv = 0.064
+        self.on_runtime_depth_strength_change = on_runtime_depth_strength_change
         self.display_mode = display_mode
+        self._runtime_direct_output = False
+        self._runtime_output_format = None
         self.fill_16_9 = fill_16_9
         self.show_fps = show_fps
         self.actual_fps = 0.0
@@ -334,7 +336,7 @@ class StereoWindow:
         self.feather_width = 0.02
         self.show_original_in_depth_mode = False
         self.last_depth_change_time = 0.0
-        self.show_depth_ratio = False
+        self.show_runtime_depth_strength = False
         self.depth_display_duration = 2.0
         self.last_mouse_toggle_time = 0.0
         self.show_mouse_state = False
@@ -530,7 +532,7 @@ class StereoWindow:
         if self.show_fps and self.total_latency > 0:
             latency_text = f"Latency: {self.total_latency:.0f} ms"
             lines.append(latency_text)
-        if self.show_depth_ratio and depth_text:
+        if self.show_runtime_depth_strength and depth_text:
             lines.append(depth_text)
         if self.show_mouse_state and mouse_text:
             lines.append(mouse_text)
@@ -563,7 +565,7 @@ class StereoWindow:
                 color = (0, 255, 0, 255)
             elif "Latency:" in line:
                 color = (0, 255, 255, 255)
-            elif "Depth:" in line:
+            elif "Depth Strength:" in line:
                 color = (255, 255, 255, 255)
             elif "Mouse:" in line:
                 color = (255, 255, 0, 255)
@@ -595,14 +597,14 @@ class StereoWindow:
         if self.font is None:
             self._upload_overlay_texture(None)
             return
-        if not (self.show_fps or self.show_depth_ratio or self.show_mouse_state):
+        if not (self.show_fps or self.show_runtime_depth_strength or self.show_mouse_state):
             self._upload_overlay_texture(None)
             return
 
         current_time = time.perf_counter()
-        self.show_depth_ratio = current_time - self.last_depth_change_time < self.depth_display_duration
+        self.show_runtime_depth_strength = current_time - self.last_depth_change_time < self.depth_display_duration
         self.show_mouse_state = current_time - self.last_mouse_toggle_time < self.mouse_display_duration
-        if not (self.show_fps or self.show_depth_ratio or self.show_mouse_state):
+        if not (self.show_fps or self.show_runtime_depth_strength or self.show_mouse_state):
             self._upload_overlay_texture(None)
             return
 
@@ -614,7 +616,7 @@ class StereoWindow:
 
         fps_text = f"FPS: {cache['disp_fps']:.1f}" if self.show_fps else ""
         latency_text = f"Latency: {cache['disp_latency']:.1f} ms" if self.show_fps else ""
-        depth_text = f"Depth: {self.depth_ratio:.1f}" if self.show_depth_ratio else ""
+        depth_text = f"Depth Strength: {self.runtime_depth_strength:.1f}" if self.show_runtime_depth_strength else ""
         mouse_text = f"Mouse: {'Pass' if self.mouse_pass_through else 'Normal'}" if self.show_mouse_state else ""
 
         if (
@@ -636,6 +638,8 @@ class StereoWindow:
         self._upload_overlay_texture(overlay_arr)
 
     def update_runtime_frame(self, runtime_result, current_fps=None, current_latency=None):
+        debug_info = getattr(runtime_result, "debug_info", {}) or {}
+        self._runtime_output_format = getattr(runtime_result, "output_format", None) or debug_info.get("runtime_output_format")
         if current_fps is not None:
             self.actual_fps = current_fps
         if current_latency is not None:
@@ -653,6 +657,7 @@ class StereoWindow:
         rgba = _rgba_from_rgb(rgb_np)
         self._upload_texture(self._color_tex, rgba, w * 4)
         self._upload_texture(self._depth_tex, depth_np, w * 4)
+        self._runtime_direct_output = True
 
         if not self._has_real_frame:
             self._has_real_frame = True
@@ -691,11 +696,11 @@ class StereoWindow:
         return 1
 
     def _uniform_bytes(self, viewport, mode_id, eye_offset=None):
-        eye = self.ipd_uv * 0.5 if eye_offset is None else eye_offset
+        eye = 0.0 if eye_offset is None else eye_offset
         uniforms = np.array(
             [
                 eye,
-                self.depth_strength * self.depth_ratio,
+                0.0,
                 self.convergence,
                 self.depth_exponent,
                 float(viewport[0]),
@@ -726,6 +731,9 @@ class StereoWindow:
         elif self._texture_size:
             glfw.set_window_aspect_ratio(self.window, glfw.DONT_CARE, glfw.DONT_CARE)
 
+        runtime_direct = bool(self._runtime_direct_output)
+        packed_output = self._runtime_output_format in {"half_sbs", "full_sbs", "half_tab", "full_tab"}
+
         self._resize_drawable()
         drawable = self._metal_layer.nextDrawable()
         if drawable is None:
@@ -743,7 +751,15 @@ class StereoWindow:
         enc.setRenderPipelineState_(self.pipeline)
         enc.setFragmentTexture_atIndex_(self._color_tex, 0)
         enc.setFragmentTexture_atIndex_(self._depth_tex, 1)
-        if self.display_mode in ("Full-SBS", "Half-SBS", "Half-TAB", "Full-TAB"):
+        if runtime_direct:
+            if self.fill_16_9 and not packed_output:
+                viewport = self._calculate_viewport(win_w, win_h, tex_w, tex_h)
+            else:
+                viewport = (0, 0, win_w, win_h)
+            uniform_bytes = self._uniform_bytes(viewport, 0, 0.0)
+            enc.setFragmentBytes_length_atIndex_(uniform_bytes, len(uniform_bytes), 0)
+            enc.drawPrimitives_vertexStart_vertexCount_(MTLPrimitiveTypeTriangleStrip, 0, 4)
+        elif self.display_mode in ("Full-SBS", "Half-SBS", "Half-TAB", "Full-TAB"):
             for viewport, eye_offset in self._stereo_viewports(win_w, win_h, tex_w, tex_h):
                 uniform_bytes = self._uniform_bytes(viewport, 7, eye_offset)
                 enc.setFragmentBytes_length_atIndex_(uniform_bytes, len(uniform_bytes), 0)
@@ -855,14 +871,11 @@ class StereoWindow:
         elif key == glfw.KEY_ESCAPE:
             glfw.set_window_should_close(window, True)
         elif key == glfw.KEY_DOWN:
-            self.depth_ratio = max(0.0, self.depth_ratio - 0.5)
-            self.last_depth_change_time = time.perf_counter()
+            self._set_runtime_depth_strength(self.runtime_depth_strength - 0.5)
         elif key == glfw.KEY_UP:
-            self.depth_ratio = min(10.0, self.depth_ratio + 0.5)
-            self.last_depth_change_time = time.perf_counter()
+            self._set_runtime_depth_strength(self.runtime_depth_strength + 0.5)
         elif key == glfw.KEY_0:
-            self.depth_ratio = self.depth_ratio_original
-            self.last_depth_change_time = time.perf_counter()
+            self._set_runtime_depth_strength(self.runtime_depth_strength_original)
         elif key == glfw.KEY_TAB:
             idx = self._modes.index(self.display_mode) if self.display_mode in self._modes else 0
             self.display_mode = self._modes[(idx + 1) % len(self._modes)]
@@ -942,6 +955,14 @@ class StereoWindow:
         glfw.set_window_pos(self.window, x, y)
         self._resize_drawable()
 
+    def _set_runtime_depth_strength(self, value):
+        self.runtime_depth_strength = max(0.0, min(10.0, float(value)))
+        self.last_depth_change_time = time.perf_counter()
+        self.show_runtime_depth_strength = True
+        self._overlay_cache["last_update"] = 0.0
+        if callable(self.on_runtime_depth_strength_change):
+            self.on_runtime_depth_strength_change(self.runtime_depth_strength)
+
     def _display_frame_size(self, tex_w, tex_h):
         if self.display_mode == "Full-SBS":
             return 2 * tex_w, tex_h
@@ -986,8 +1007,8 @@ class StereoWindow:
                 render_w, render_h = self._compute_render_size(max_w, max_h, src_w, src_h)
                 center_y = win_h / 2.0
                 return [
-                    ((int(win_w / 4.0 - render_w / 2), int(center_y - render_h / 2), render_w, render_h), -self.ipd_uv / 2.0),
-                    ((int(3 * win_w / 4.0 - render_w / 2), int(center_y - render_h / 2), render_w, render_h), self.ipd_uv / 2.0),
+                    ((int(win_w / 4.0 - render_w / 2), int(center_y - render_h / 2), render_w, render_h), -self.parallax_budget_uv / 2.0),
+                    ((int(3 * win_w / 4.0 - render_w / 2), int(center_y - render_h / 2), render_w, render_h), self.parallax_budget_uv / 2.0),
                 ]
             if self.display_mode == "Half-SBS":
                 src_w, src_h = tex_w / 2.0, tex_h
@@ -995,24 +1016,24 @@ class StereoWindow:
                 render_w, render_h = self._compute_render_size(max_w, max_h, src_w, src_h)
                 center_y = win_h / 2.0
                 return [
-                    ((int(win_w / 4.0 - render_w / 2), int(center_y - render_h / 2), render_w, render_h), -self.ipd_uv / 2.0),
-                    ((int(3 * win_w / 4.0 - render_w / 2), int(center_y - render_h / 2), render_w, render_h), self.ipd_uv / 2.0),
+                    ((int(win_w / 4.0 - render_w / 2), int(center_y - render_h / 2), render_w, render_h), -self.parallax_budget_uv / 2.0),
+                    ((int(3 * win_w / 4.0 - render_w / 2), int(center_y - render_h / 2), render_w, render_h), self.parallax_budget_uv / 2.0),
                 ]
             if self.display_mode == "Half-TAB":
                 src_w, src_h = tex_w, tex_h / 2.0
                 max_w, max_h = win_w, win_h / 2.0
                 render_w, render_h = self._compute_render_size(max_w, max_h, src_w, src_h)
                 return [
-                    ((int(win_w / 2.0 - render_w / 2), int(win_h / 4.0 - render_h / 2), render_w, render_h), -self.ipd_uv / 2.0),
-                    ((int(win_w / 2.0 - render_w / 2), int(3 * win_h / 4.0 - render_h / 2), render_w, render_h), self.ipd_uv / 2.0),
+                    ((int(win_w / 2.0 - render_w / 2), int(win_h / 4.0 - render_h / 2), render_w, render_h), -self.parallax_budget_uv / 2.0),
+                    ((int(win_w / 2.0 - render_w / 2), int(3 * win_h / 4.0 - render_h / 2), render_w, render_h), self.parallax_budget_uv / 2.0),
                 ]
             if self.display_mode == "Full-TAB":
                 src_w, src_h = tex_w, tex_h
                 max_w, max_h = win_w, win_h / 2.0
                 render_w, render_h = self._compute_render_size(max_w, max_h, src_w, src_h)
                 return [
-                    ((int(win_w / 2.0 - render_w / 2), int(win_h / 4.0 - render_h / 2), render_w, render_h), -self.ipd_uv / 2.0),
-                    ((int(win_w / 2.0 - render_w / 2), int(3 * win_h / 4.0 - render_h / 2), render_w, render_h), self.ipd_uv / 2.0),
+                    ((int(win_w / 2.0 - render_w / 2), int(win_h / 4.0 - render_h / 2), render_w, render_h), -self.parallax_budget_uv / 2.0),
+                    ((int(win_w / 2.0 - render_w / 2), int(3 * win_h / 4.0 - render_h / 2), render_w, render_h), self.parallax_budget_uv / 2.0),
                 ]
 
         disp_w, disp_h = self._display_frame_size(tex_w, tex_h)
@@ -1031,12 +1052,12 @@ class StereoWindow:
         offset_y = (win_h - view_h) // 2
         if self.display_mode in ("Full-SBS", "Half-SBS"):
             return [
-                ((offset_x, offset_y, view_w // 2, view_h), -self.ipd_uv / 2.0),
-                ((offset_x + view_w // 2, offset_y, view_w // 2, view_h), self.ipd_uv / 2.0),
+                ((offset_x, offset_y, view_w // 2, view_h), -self.parallax_budget_uv / 2.0),
+                ((offset_x + view_w // 2, offset_y, view_w // 2, view_h), self.parallax_budget_uv / 2.0),
             ]
         return [
-            ((offset_x, offset_y + view_h // 2, view_w, view_h // 2), -self.ipd_uv / 2.0),
-            ((offset_x, offset_y, view_w, view_h // 2), self.ipd_uv / 2.0),
+            ((offset_x, offset_y + view_h // 2, view_w, view_h // 2), -self.parallax_budget_uv / 2.0),
+            ((offset_x, offset_y, view_w, view_h // 2), self.parallax_budget_uv / 2.0),
         ]
 
     def update_monitor_size(self):

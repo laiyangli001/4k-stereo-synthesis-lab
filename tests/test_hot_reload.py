@@ -19,10 +19,6 @@ def make_config(**overrides):
         "stereo_quality": "fast_plus",
         "depth_strength": 1.0,
         "convergence": 0.5,
-        "ipd": 0.032,
-        "ipd_mm": 32.0,
-        "stereo_scale": 1.0,
-        "max_shift_ratio": 0.03,
         "output_format": "half_sbs",
         "max_disparity_px": None,
         "parallax_preset": "standard",
@@ -58,9 +54,6 @@ def test_hot_reload_value_snapshot_parses_expected_fields():
     settings = {
         "Depth Strength": "1.25",
         "Convergence": "0.75",
-        "IPD mm": "65",
-        "Stereo Scale": "1.5",
-        "Max Shift Ratio": "0.04",
         "Stereo Quality": "Quality",
         "Stereo Preset": "Game / Low Latency",
         "Runtime Quality Mode": "Still Image / HQ",
@@ -88,10 +81,10 @@ def test_hot_reload_value_snapshot_parses_expected_fields():
 
     assert values["depth_strength"] == 1.25
     assert values["convergence"] == 0.75
-    assert values["ipd"] == 0.065
-    assert values["ipd_mm"] == 65.0
-    assert values["stereo_scale"] == 1.5
-    assert values["max_shift_ratio"] == 0.04
+    assert "ipd" not in values
+    assert "ipd_mm" not in values
+    assert "stereo_scale" not in values
+    assert "max_shift_ratio" not in values
     assert values["stereo_quality"] == "quality_4k"
     assert values["stereo_preset"] == "game_low_latency"
     assert values["runtime_quality_mode"] == "image"
@@ -246,7 +239,6 @@ def test_hot_reload_builds_runtime_settings_snapshot():
     config = make_config()
     settings = {
         "Depth Strength": "1.25",
-        "IPD mm": "65",
         "Synthetic View": "HQ",
         "Stereo Mode Preset": "Still Image / HQ",
         "Display Mode": "Half-TAB",
@@ -270,7 +262,7 @@ def test_hot_reload_builds_runtime_settings_snapshot():
     assert snapshot.timestamp == 3.5
     assert snapshot.source == "settings_yaml_hot_reload"
     assert snapshot.depth_strength == 1.25
-    assert snapshot.ipd_mm == 65.0
+    assert not hasattr(snapshot, "ipd_mm")
     assert snapshot.stereo_quality == "hq_4k"
     assert snapshot.stereo_preset == "still_image_hq"
     assert snapshot.output_format == "half_tab"
@@ -355,9 +347,6 @@ def test_hot_reload_pushes_all_openxr_stereo_controls(tmp_path):
             "Stereo Preset": "Game / Low Latency",
             "Depth Strength": "2.0",
             "Convergence": "0.25",
-            "IPD mm": "64",
-            "Stereo Scale": "0.35",
-            "Max Shift Ratio": "0.05",
             "Display Mode": "Full-TAB",
             "Max Disparity Px": "72",
             "Parallax Preset": "standard",
@@ -376,11 +365,11 @@ def test_hot_reload_pushes_all_openxr_stereo_controls(tmp_path):
 
     assert pushed["snapshot"] is runtime.applied_snapshot
     assert runtime.applied_snapshot.source == "settings_yaml_hot_reload"
-    assert runtime.applied_snapshot.ipd_mm == 64.0
+    assert not hasattr(runtime.applied_snapshot, "ipd_mm")
     assert runtime.applied_snapshot.depth_strength == 2.0
     assert runtime.applied_snapshot.convergence == 0.25
-    assert runtime.applied_snapshot.stereo_scale == 0.35
-    assert runtime.applied_snapshot.max_shift_ratio == 0.05
+    assert not hasattr(runtime.applied_snapshot, "stereo_scale")
+    assert not hasattr(runtime.applied_snapshot, "max_shift_ratio")
     assert runtime.applied_snapshot.stereo_quality == "fast"
     assert runtime.applied_snapshot.stereo_preset == "game_low_latency"
     assert runtime.applied_active_preset == "game_low_latency"

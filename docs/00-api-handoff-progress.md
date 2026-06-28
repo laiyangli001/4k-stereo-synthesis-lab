@@ -54,11 +54,55 @@ Current task queue:
 1. Complete GUI live hot-save direct emission of `RuntimeSettingsSnapshot`; keep settings.yaml polling as an explicit compatibility path.
 2. Bring D3D11 native OpenXR RGB+depth direct shader to parity with the OpenGL direct shader's core DIBR quality semantics.
 3. Validate CUDA/ROCm capture zero-copy on real hardware before any path reports `zero_copy=True`.
-4. Remove compatibility redundancy after all consumers use the docs/28 contract: old snapshot/API aliases, debug-only fallback keys, legacy parallax multiplier fields, and historical render-scale numeric thresholds.
+4. Remove remaining compatibility redundancy after all consumers use the docs/28 contract: old snapshot/API aliases and debug-only fallback keys. Legacy parallax multiplier fields and historical render-scale numeric thresholds have been cleaned from the current runtime/config path and should now be guarded against regressions.
 5. Continue network_stream encoder transport work, especially RTMP / low-latency paths, without redefining stereo synthesis semantics.
 6. Keep `docs/26-desktop2stereo-engineering-design-specification.md` aligned to the `docs/28-Realtime-2d-to-3d-specification.md` eleven-step runtime flow.
 
 ## Current Status
+
+### 2026-06-29 Legacy IPD / Parallax Multiplier Cleanup
+
+Continued compliance against `docs/26-desktop2stereo-engineering-design-specification.md`, with runtime semantics governed by `docs/28-Realtime-2d-to-3d-specification.md`. This pass removed the remaining runtime/config/test protection for the old physical-IPD-style parallax chain.
+
+Implemented in this follow-up:
+
+- Removed `ipd` from `AppModeSettings`, OpenXR mode config, runtime context creation, `OpenXRRuntimeConfig`, and `OpenXRViewerCore` construction.
+- Removed `IPD` lazy export from `utils`, removed `ipd` from `RuntimeExports` and `ViewerSettings`, and deleted `IPD` from `src/settings.yaml`.
+- Changed the D3D11 RGB+depth fallback shader path so `D3D11NativeRenderer.render_eye()` consumes a resolved per-eye `eye_offset`; the shader uniform is now `parallaxOffset`, not `eyeOffset`, and no D3D11 fallback code computes `eye_sign * ipd * 0.5`.
+- Renamed local/Metal viewer residuals from `ipd_uv` / `eyeOffset` to `parallax_budget_uv` / `parallaxOffset` while preserving the current viewer fallback displacement behavior.
+- Renamed legacy MJPEG SBS helper parameter `ipd_uv` to `parallax_budget_uv` without changing its output math.
+- Removed `IPD`, `Stereo Scale`, and `Max Shift Ratio` from active `src/settings.yaml` and removed old-field compatibility inputs from adapter/hot-reload tests.
+- Updated `docs/26-desktop2stereo-engineering-design-specification.md` so it no longer says IPD / Stereo Scale / Max Shift Ratio continue to be read as compatibility inputs; the engineering spec now records that those compatibility entries are cleaned.
+
+Compliance scan result:
+
+```text
+rg -n "\bipd\b|IPD|ipd_uv|eyeOffset" src tests
+```
+
+The scan now returns only test negative assertions. Production `src` has no positive `ipd`, `IPD`, `ipd_uv`, or `eyeOffset` runtime/config reference.
+
+Verification:
+
+```powershell
+src\python3\python.exe -m py_compile src\app_runtime\app_runner.py src\app_runtime\mode_configs.py src\app_runtime\runtime_context.py src\main.py src\streaming\legacy_sbs.py src\utils\__init__.py src\utils\runtime_exports.py src\viewer\metal_viewer.py src\viewer\settings.py src\xr_viewer\d3d11_native_renderer.py src\xr_viewer\implementation.py src\xr_viewer\openxr_runtime.py src\xr_viewer\overlay.py
+src\python3\python.exe -m pytest tests\test_app_runner.py tests\test_mode_configs.py tests\test_openxr_runtime.py tests\test_viewer_settings.py tests\test_viewer_runtime.py tests\test_openxr_state.py tests\test_adapter_config.py tests\test_hot_reload.py tests\test_legacy_sbs.py
+src\python3\python.exe -m pytest
+```
+
+Result:
+
+```text
+py_compile passed
+81 passed
+514 passed, 1 warning
+```
+
+Handoff notes:
+
+- `Depth Strength` remains intentionally user-facing and still participates as depth response strength; it is not treated as part of the removed physical IPD multiplier chain.
+- D3D11 native OpenXR direct shader parity with the richer OpenGL DIBR shader remains a separate follow-up. This pass only removed stale IPD semantics from the D3D11 fallback and constructor flow.
+- Remaining compatibility cleanup should focus on old snapshot/API aliases and debug-only fallback keys, not on IPD / Stereo Scale / Max Shift Ratio runtime inputs.
 
 ### 2026-06-28 GUI Render Size Policy User-Layer Convergence
 

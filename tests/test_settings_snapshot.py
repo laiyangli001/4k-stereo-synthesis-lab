@@ -81,14 +81,13 @@ def test_settings_snapshot_maps_runtime_quality_mode_to_runtime_config_mode():
     assert updates == {"depth_strength": 1.25, "mode": "game"}
 
 
-def test_settings_snapshot_maps_ipd_mm_to_runtime_ipd():
-    snapshot = RuntimeSettingsSnapshot(version=5, timestamp=1.0, ipd_mm=64.0, depth_strength=1.25)
+def test_settings_snapshot_does_not_expose_legacy_ipd_fields():
+    fields = RuntimeSettingsSnapshot.__dataclass_fields__
 
-    updates = snapshot.to_config_updates()
-
-    assert updates["ipd_mm"] == 64.0
-    assert updates["ipd"] == 0.064
-    assert updates["depth_strength"] == 1.25
+    assert "ipd" not in fields
+    assert "ipd_mm" not in fields
+    assert "stereo_scale" not in fields
+    assert "max_shift_ratio" not in fields
 
 
 def test_settings_snapshot_maps_parallax_budget_fields():
@@ -186,7 +185,7 @@ def test_runtime_applies_hot_settings_snapshot_without_rebuild():
         timestamp=1.0,
         depth_strength=1.5,
         temporal_strength=0.4,
-        ipd_mm=60.0,
+        parallax_preset="strong",
     )
 
     change_class = runtime.apply_settings_snapshot(snapshot, active_preset="cinema")
@@ -194,7 +193,8 @@ def test_runtime_applies_hot_settings_snapshot_without_rebuild():
     assert change_class is SnapshotChangeClass.HOT_RELOAD
     assert runtime.config.depth_strength == 1.5
     assert runtime.config.temporal_strength == 0.4
-    assert runtime.config.ipd == pytest.approx(0.06)
+    assert runtime.config.parallax_preset == "strong"
+    assert not hasattr(runtime.config, "ipd")
     assert runtime.active_settings_version == 12
 
 

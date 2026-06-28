@@ -16,9 +16,8 @@ from streaming.encoder_profile import EncoderProfile
 class ViewerRuntimeConfig:
     capture_mode: str
     monitor_index: int
-    ipd: float
-    depth_strength: float
     convergence: float
+    initial_depth_strength: float
     display_mode: str
     fill_16_9: bool
     show_fps: bool
@@ -50,6 +49,7 @@ class ViewerRuntimeCallbacks:
     rtmp_stream: Callable
     is_window_visible_on_screen: Callable
     set_rtmp_thread: Callable
+    update_depth_strength: Callable
 
 
 def frame_size_from_output(output_frame, *, stream_mode):
@@ -167,9 +167,9 @@ def run_viewer_mode(runtime_q, config: ViewerRuntimeConfig, callbacks: ViewerRun
     window_kwargs = dict(
         capture_mode=config.capture_mode,
         monitor_index=config.monitor_index,
-        ipd=config.ipd,
-        depth_strength=config.depth_strength,
         convergence=config.convergence,
+        runtime_depth_strength=config.initial_depth_strength,
+        on_runtime_depth_strength_change=callbacks.update_depth_strength,
         display_mode=config.display_mode,
         fill_16_9=config.fill_16_9,
         show_fps=config.show_fps,

@@ -17,10 +17,6 @@ PaddingMode = Literal["zeros", "border", "reflection"]
 class OpenXRRenderConfig:
     depth_strength: float = 2.0
     convergence: float = 0.0
-    ipd: float = 0.064
-    max_shift_ratio: float = 0.05
-    ipd_mm: float | None = 32.0
-    stereo_scale: float = 0.4
     max_disparity_px: float | None = None
     parallax_preset: str = "standard"
     screen_roll: float = 0.0
@@ -299,10 +295,6 @@ def _shift_params(config: OpenXRRenderConfig) -> ShiftParams:
     return ShiftParams(
         depth_strength=config.depth_strength,
         convergence=config.convergence,
-        ipd=config.ipd,
-        max_shift_ratio=config.max_shift_ratio,
-        ipd_mm=config.ipd_mm,
-        stereo_scale=config.stereo_scale,
         max_disparity_px=config.max_disparity_px,
         parallax_preset=config.parallax_preset,
     )

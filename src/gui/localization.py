@@ -11,8 +11,6 @@ MESSAGE_CATALOGS = {
         "Refresh": "Refresh",
         "Show FPS": "Show FPS",
         "Debug Mode": "Debug Mode",
-        "IPD (m):": "IPD (mm):",
-        "Stereo Scale:": "Stereo Scale:",
         "Convergence:": "Convergence:",
         "Display Mode:": "Display Mode:",
         "Depth Model:": "Depth Model:",
@@ -28,11 +26,15 @@ MESSAGE_CATALOGS = {
         "Image  / High Quality": "Image  / High Quality",
         "Debug / Export": "Debug / Export",
         "Synthetic View:": "Synthetic View:",
+        "Parallax Budget:": "Parallax Budget:",
+        "comfort": "Comfort",
+        "standard": "Standard",
+        "strong": "Strong",
+        "extreme": "Extreme",
         "fast": "Lowest",
         "fast_plus": "Medium",
         "quality_4k": "High",
         "hq_4k": "Highest",
-        "Max Shift Ratio:": "Shift Ratio:",
         "Temporal Strength:": "Temporal Strength:",
         "Temporal": "Temporal",
         "Scene Threshold:": "Scene Threshold:",
@@ -146,6 +148,7 @@ MESSAGE_CATALOGS = {
         "tooltip_depth_quick": "Quick fixed depth presets for everyday use: Soft, Standard, or Enhanced",
         "tooltip_stereo_preset": "Stereo preset. Traditional is fastest, Cinema uses quality_4k, Game uses fast_plus, and Image uses hq_4k; selecting a preset loads its advanced parameters.",
         "tooltip_stereo_quality": "Internal stereo synthesis backend derived from Stereo Mode.",
+        "tooltip_parallax_budget": "Maximum stereo parallax budget resolved from render size. Comfort is safest, Standard is the default, Strong and Extreme increase separation.",
         "tooltip_max_shift": "Maximum horizontal shift as a ratio of image width; higher values increase stereo separation",
         "tooltip_temporal_strength": "Temporal smoothing strength for stereo output; higher values reduce flicker but can add lag",
         "tooltip_temporal": "Enable temporal stabilization between frames",
@@ -162,8 +165,6 @@ MESSAGE_CATALOGS = {
         "tooltip_advanced_device_options": "Show capture frame pacing and image enhancement controls.",
         "tooltip_foreground_scale": "Adjust foreground depth shaping. Use 0 for no change; positive values strengthen near/far separation for still images, while negative values compress depth toward the middle for realtime use and fewer foreground artifacts.",
         "tooltip_antialiasing": "Depth-map smoothing level. Higher values reduce jagged depth edges and flicker, but can soften fine geometry; keep low for games/realtime, raise when object edges shimmer or produce broken stereo borders.",
-        "tooltip_ipd": "Binocular IPD, displayed in mm. Average human IPD is 64 mm. Adjust for your eyes if needed; the default usually works well.",
-        "tooltip_stereo_scale": "Stereo strength multiplier; lower values reduce parallax, higher values increase depth",
         "tooltip_device": "Inference device",
         "tooltip_capture_tool": "Capture backend",
         "tooltip_run_mode": "Output mode",
@@ -208,8 +209,6 @@ MESSAGE_CATALOGS = {
         "Refresh": "刷新",
         "Show FPS": "显示帧率",
         "Debug Mode": "调试模式",
-        "IPD (m):": "双眼瞳距:",
-        "Stereo Scale:": "立体缩放:",
         "Convergence:": "会聚位置:",
         "Display Mode:": "显示模式:",
         "Depth Model:": "深度模型:",
@@ -225,11 +224,15 @@ MESSAGE_CATALOGS = {
         "Image  / High Quality": "图片 / 高质量",
         "Debug / Export": "调试 / 导出",
         "Synthetic View:": "立体质量:",
+        "Parallax Budget:": "视差预算:",
+        "comfort": "舒适",
+        "standard": "标准",
+        "strong": "强",
+        "extreme": "极强",
         "fast": "最低",
         "fast_plus": "中等",
         "quality_4k": "较高",
         "hq_4k": "最高",
-        "Max Shift Ratio:": "位移比例:",
         "Temporal Strength:": "时域强度:",
         "Temporal": "时域稳定",
         "Scene Threshold:": "场景阈值:",
@@ -351,6 +354,7 @@ MESSAGE_CATALOGS = {
         "tooltip_depth_quick": "给普通用户使用的固定深度档位：柔和、标准、增强",
         "tooltip_stereo_preset": "立体预设模式。传统速度快，电影使用 quality_4k，游戏使用 fast_plus，图片使用 hq_4k；选择模式会加载对应高级参数。",
         "tooltip_stereo_quality": "内部立体合成后端，由立体模式自动决定。",
+        "tooltip_parallax_budget": "根据渲染尺寸解析最大视差预算。舒适最稳，标准为默认，强和极强会增加立体分离。",
         "tooltip_max_shift": "水平位移占画面宽度的比例；越高立体分离越强",
         "tooltip_temporal_strength": "时域平滑强度；越高越稳定，但可能增加拖影或延迟",
         "tooltip_temporal": "启用帧间时域稳定",
@@ -367,8 +371,6 @@ MESSAGE_CATALOGS = {
         "tooltip_advanced_device_options": "显示捕获帧率、本地垂直同步、画面增强和增强锐度。",
         "tooltip_foreground_scale": "调整前景深度形状。0 表示不处理；正值增强近远层次，适合图片和高质量模式；负值把深度压向中间，适合实时模式，可降低前景突出和重影。",
         "tooltip_antialiasing": "深度图平滑级别。数值越高越能减少深度边缘锯齿和闪烁，但会软化细节；游戏和实时观看保持较低，物体边缘闪烁或立体边界破碎时再上调。",
-        "tooltip_ipd": "双眼瞳距，单位 mm。人眼瞳距平均值是 64mm，可根据个人情况设置，一般默认即可。",
-        "tooltip_stereo_scale": "立体强度倍率；数值越低视差越小，数值越高深度越强",
         "tooltip_device": "计算设备",
         "tooltip_capture_tool": "捕获后端",
         "tooltip_run_mode": "输出模式",
@@ -472,6 +474,7 @@ def gettext_for(locale, message):
     return get_translation(locale).gettext(message)
 
 STEREO_QUALITY_KEYS = ("fast", "fast_plus", "quality_4k", "hq_4k")
+PARALLAX_BUDGET_KEYS = ("comfort", "standard", "strong", "extreme")
 
 
 def stereo_quality_options(locale=DEFAULT_LOCALE):
@@ -493,6 +496,28 @@ def display_to_stereo_quality(value):
             if text == get_messages(locale).get(key):
                 return key
     return "quality_4k"
+
+
+def parallax_budget_options(locale=DEFAULT_LOCALE):
+    messages = get_messages(locale)
+    return [messages[key] for key in PARALLAX_BUDGET_KEYS]
+
+
+def parallax_budget_to_display(value, locale=DEFAULT_LOCALE):
+    key = str(value or "standard")
+    messages = get_messages(locale)
+    return messages.get(key, messages.get("standard", "Standard"))
+
+
+def display_to_parallax_budget(value):
+    text = str(value or "")
+    for key in PARALLAX_BUDGET_KEYS:
+        if text == key:
+            return key
+        for locale in SUPPORTED_LOCALES:
+            if text == get_messages(locale).get(key):
+                return key
+    return "standard"
 
 
 HOLE_FILL_MODE_KEYS = ("balanced", "soft_low_ghost", "sharp_test", "quality")

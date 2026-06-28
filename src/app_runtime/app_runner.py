@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import time
 from dataclasses import dataclass
@@ -10,6 +10,7 @@ from app_runtime.mode_configs import (
     build_viewer_runtime_config,
 )
 from stereo_runtime.frame_stats import FrameStats
+from stereo_runtime.settings_snapshot import RuntimeSettingsSnapshot
 from streaming.legacy_runtime import LegacyStreamCallbacks, run_legacy_stream_mode
 from viewer.viewer_runtime import ViewerRuntimeCallbacks, run_viewer_mode
 from xr_viewer.openxr_runtime import OpenXRRuntimeCallbacks, run_openxr_mode
@@ -19,7 +20,6 @@ from xr_viewer.openxr_runtime import OpenXRRuntimeCallbacks, run_openxr_mode
 class AppModeSettings:
     capture_mode: str
     monitor_index: int
-    ipd: float
     depth_strength: float
     convergence: float
     display_mode: str
@@ -56,6 +56,7 @@ class AppModeCallbacks:
     set_rtmp_thread: Callable
     rtmp_stream: Callable
     update_openxr_runtime_config: Callable
+    send_settings_snapshot: Callable
     render_active_event: object
     source_active_event: object
     idle_active_event: object
@@ -72,7 +73,6 @@ def build_app_mode_settings(
     *,
     capture_mode,
     monitor_index,
-    ipd,
     depth_strength,
     convergence,
     display_mode,
@@ -101,7 +101,6 @@ def build_app_mode_settings(
     return AppModeSettings(
         capture_mode=capture_mode,
         monitor_index=monitor_index,
-        ipd=ipd,
         depth_strength=depth_strength,
         convergence=convergence,
         display_mode=display_mode,
@@ -143,7 +142,6 @@ def build_current_app_mode_settings(*, use_cudart, time_sleep):
         FILL_16_9,
         FIX_VIEWER_ASPECT,
         FPS,
-        IPD,
         LOCAL_VSYNC,
         LOSSLESS_SCALING_SUPPORT,
         MONITOR_INDEX,
@@ -163,7 +161,6 @@ def build_current_app_mode_settings(*, use_cudart, time_sleep):
     return build_app_mode_settings(
         capture_mode=CAPTURE_MODE,
         monitor_index=MONITOR_INDEX,
-        ipd=IPD,
         depth_strength=DEPTH_STRENGTH,
         convergence=CONVERGENCE,
         display_mode=DISPLAY_MODE,
@@ -200,6 +197,7 @@ def build_app_mode_callbacks(
     set_rtmp_thread,
     rtmp_stream,
     update_openxr_runtime_config,
+    send_settings_snapshot,
     render_active_event,
     source_active_event,
     idle_active_event,
@@ -218,6 +216,7 @@ def build_app_mode_callbacks(
         set_rtmp_thread=set_rtmp_thread,
         rtmp_stream=rtmp_stream,
         update_openxr_runtime_config=update_openxr_runtime_config,
+        send_settings_snapshot=send_settings_snapshot,
         render_active_event=render_active_event,
         source_active_event=source_active_event,
         idle_active_event=idle_active_event,
@@ -241,7 +240,6 @@ def run_app_mode(mode, *, runtime_q, thread_latencies, settings: AppModeSettings
         viewer_config = build_viewer_runtime_config(
             capture_mode=settings.capture_mode,
             monitor_index=settings.monitor_index,
-            ipd=settings.ipd,
             depth_strength=settings.depth_strength,
             convergence=settings.convergence,
             display_mode=settings.display_mode,
@@ -264,6 +262,16 @@ def run_app_mode(mode, *, runtime_q, thread_latencies, settings: AppModeSettings
             stream_quality=settings.stream_quality,
             time_sleep=settings.time_sleep,
         )
+        def update_viewer_depth_strength(value):
+            callbacks.send_settings_snapshot(
+                RuntimeSettingsSnapshot(
+                    version=time.time_ns(),
+                    timestamp=time.time(),
+                    source="viewer_hotkey",
+                    depth_strength=float(value),
+                )
+            )
+
         viewer_callbacks = ViewerRuntimeCallbacks(
             shutdown_is_set=callbacks.shutdown_is_set,
             breakdown_inc=callbacks.breakdown_inc,
@@ -272,6 +280,7 @@ def run_app_mode(mode, *, runtime_q, thread_latencies, settings: AppModeSettings
             rtmp_stream=callbacks.rtmp_stream,
             is_window_visible_on_screen=callbacks.is_window_visible_on_screen,
             set_rtmp_thread=callbacks.set_rtmp_thread,
+            update_depth_strength=update_viewer_depth_strength,
         )
         stats, streamer, window = run_viewer_mode(
             runtime_q,
@@ -283,7 +292,6 @@ def run_app_mode(mode, *, runtime_q, thread_latencies, settings: AppModeSettings
 
     if mode == "OpenXR":
         openxr_config = build_openxr_runtime_config(
-            ipd=settings.ipd,
             depth_strength=settings.depth_strength,
             convergence=settings.convergence,
             fps=settings.fps,

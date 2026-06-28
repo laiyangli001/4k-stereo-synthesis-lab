@@ -1,4 +1,4 @@
-﻿from types import SimpleNamespace
+from types import SimpleNamespace
 
 from app_runtime.shutdown import build_cleanup_handler, build_signal_handler, register_signal_handlers
 

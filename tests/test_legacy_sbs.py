@@ -10,6 +10,15 @@ sys.path.insert(0, str(ROOT / "src"))
 from streaming.legacy_sbs import make_sbs
 
 
+def test_legacy_make_sbs_uses_canonical_shift_formula():
+    source = (ROOT / "src" / "streaming" / "legacy_sbs.py").read_text(encoding="utf-8")
+
+    assert "compute_shift_px(" in source
+    assert "ShiftParams(" in source
+    assert "depth_strength_scale" not in source
+    assert "inv = -depth" not in source
+
+
 def test_legacy_make_sbs_half_sbs_keeps_source_size():
     rgb = torch.full((3, 8, 12), 128.0)
     depth = torch.linspace(0, 1, steps=8 * 12).view(8, 12)

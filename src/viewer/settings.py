@@ -18,7 +18,6 @@ class ViewerSettings:
     render_size_config: RenderSizeConfig
     show_fps: bool
     depth_strength: float
-    ipd: float
     convergence: float
     capture_mode: str
     window_title: str | None
@@ -71,7 +70,6 @@ def resolve_viewer_settings(settings: dict) -> ViewerSettings:
         render_size_config=render_size_config,
         show_fps=settings["Show FPS"],
         depth_strength=settings["Depth Strength"],
-        ipd=settings["IPD"],
         convergence=settings["Convergence"],
         capture_mode=capture_mode,
         window_title=window_title,

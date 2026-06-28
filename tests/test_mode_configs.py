@@ -1,4 +1,4 @@
-﻿from app_runtime.mode_configs import (
+from app_runtime.mode_configs import (
     build_legacy_stream_config,
     build_openxr_runtime_config,
     build_viewer_runtime_config,
@@ -9,8 +9,7 @@ def test_build_viewer_runtime_config_maps_expected_fields():
     config = build_viewer_runtime_config(
         capture_mode="monitor",
         monitor_index=1,
-        ipd=0.06,
-        depth_strength=1.2,
+        depth_strength=2.5,
         convergence=0.1,
         display_mode="sbs",
         fill_16_9=True,
@@ -43,7 +42,6 @@ def test_build_viewer_runtime_config_maps_expected_fields():
 
 def test_build_openxr_runtime_config_maps_expected_fields():
     config = build_openxr_runtime_config(
-        ipd=0.06,
         depth_strength=1.2,
         convergence=0.1,
         fps=72,

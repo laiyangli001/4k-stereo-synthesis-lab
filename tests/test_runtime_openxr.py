@@ -245,13 +245,14 @@ def test_openxr_rgb_depth_debug_info_carries_structured_shader_uniforms():
 
     result = runtime.process_openxr_frame(
         rgb,
-        OpenXRRenderConfig(ipd=0.064, stereo_scale=0.35, depth_strength=2.0, max_shift_ratio=0.0),
+        OpenXRRenderConfig(depth_strength=2.0, parallax_preset="standard"),
     )
 
     assert result.shader_uniforms == {
         "max_disparity_px": 0.6,
         "parallax_preset": "standard",
         "depth_response": "linear_clamp_convergence_v1",
+        "depth_strength": 2.0,
         "convergence": 0.0,
         "render_size": (16, 12),
         "screen_roll": 0.0,
@@ -277,9 +278,6 @@ def test_openxr_rgb_depth_debug_info_records_resolved_max_disparity_px():
         OpenXRRenderConfig(
             depth_strength=2.0,
             convergence=0.0,
-            ipd_mm=32.0,
-            stereo_scale=0.4,
-            max_shift_ratio=0.05,
             max_disparity_px=18.0,
             parallax_preset="standard",
         ),
@@ -291,6 +289,7 @@ def test_openxr_rgb_depth_debug_info_records_resolved_max_disparity_px():
     assert result.debug_info["parallax_resolver_version"] == 1
     assert result.shader_uniforms["max_disparity_px"] == 18.0
     assert result.shader_uniforms["parallax_preset"] == "standard"
+    assert result.shader_uniforms["depth_strength"] == 2.0
     assert result.shader_uniforms["render_size"] == (16, 12)
     assert result.debug_info["openxr_max_disparity_px"] == 18.0
     assert result.debug_info["openxr_parallax_preset"] == "standard"
@@ -306,6 +305,7 @@ def test_openxr_rgb_depth_viewer_uses_structured_shader_uniforms():
     assert 'debug_info.get("openxr_shader_uniforms")' in source
     assert 'render_width = _runtime_shader_render_width(output_eye_size)' in source
     assert 'render_width = _runtime_shader_render_width(debug_info.get("runtime_output_eye_size"))' in source
+    assert 'self._runtime_rgb_depth_depth_strength = max(0.0, float(uniforms["depth_strength"]))' in source
     assert 'self._runtime_rgb_depth_max_disparity_px = max(0.0, float(max_disparity_px or 0.0))' in source
     assert "self._runtime_rgb_depth_render_width = render_width" in source
     assert "legacy_shader_uniforms" not in source

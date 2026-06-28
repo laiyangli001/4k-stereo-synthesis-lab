@@ -563,16 +563,12 @@ FRAGMENT_SHADER = """
         float dm = texture(tex_depth, flipped_uv - ds_dir).r;
         float dp = texture(tex_depth, flipped_uv + ds_dir).r;
         float depth = d0 * 0.5 + dm * 0.25 + dp * 0.25;
-        float depth_inv = -depth;
-
-        // Enhanced 3D: mild non-linear depth curve boosts perceived pop
-        // for nearer objects without pushing parallax into artifact-heavy ranges.
-        float depth_shaped = depth_inv * (1.0 + 0.25 * (1.0 - depth));
+        float depth_response = depth - u_convergence;
 
         // Calculate parallax shift with edge-aware border constraint.
         // Smoothly reduces parallax near left/right edges to prevent sampling
         // beyond image boundaries (standard DIBR border handling).
-        float shift = (depth_shaped + u_convergence);
+        float shift = depth_response;
         float edge_margin = 0.05;
         float edge_falloff = smoothstep(0.0, edge_margin, flipped_uv.x)
                            * smoothstep(1.0, 1.0 - edge_margin, flipped_uv.x);
@@ -586,8 +582,8 @@ FRAGMENT_SHADER = """
         vec4 color = texture(tex_color, shifted_uv);
         if (conf > 0.001) {
             // Disoccluded region → optimized inpainting, blended by confidence
-            vec4 filled = push_pull_inpaint(flipped_uv, depth_inv);
-            // Alternative: vec4 filled = separable_inpaint(flipped_uv, depth_inv);
+            vec4 filled = push_pull_inpaint(flipped_uv, -depth);
+            // Alternative: vec4 filled = separable_inpaint(flipped_uv, -depth);
             color = mix(color, filled, conf);
         }
 
@@ -803,8 +799,8 @@ ANAGLYPH_FRAGMENT = """
         float dm = texture(tex_depth, flipped_uv - ds_dir).r;
         float dp = texture(tex_depth, flipped_uv + ds_dir).r;
         float depth = d0 * 0.5 + dm * 0.25 + dp * 0.25;
-        float depth_inv = -depth;
-        float shift_amount = (depth_inv + u_convergence) * u_depth_strength;
+        float center_depth_inv = -depth;
+        float shift_amount = (depth - u_convergence) * u_depth_strength;
         // Edge-aware border constraint: both eyes rendered in one pass
         float edge_margin = 0.05;
         float edge_falloff = smoothstep(0.0, edge_margin, flipped_uv.x)
@@ -816,12 +812,12 @@ ANAGLYPH_FRAGMENT = """
 
         vec4 left_color, right_color;
         if (is_disoccluded(flipped_uv, left_uv, depth, -1.0))
-            left_color = push_pull_inpaint(flipped_uv, depth_inv, -1.0);
+            left_color = push_pull_inpaint(flipped_uv, center_depth_inv, -1.0);
         else
             left_color = texture(tex_color, left_uv);
 
         if (is_disoccluded(flipped_uv, right_uv, depth, 1.0))
-            right_color = push_pull_inpaint(flipped_uv, depth_inv, 1.0);
+            right_color = push_pull_inpaint(flipped_uv, center_depth_inv, 1.0);
         else
             right_color = texture(tex_color, right_uv);
 
@@ -964,8 +960,8 @@ INTERLEAVED_FRAGMENT = """
         float dm = texture(tex_depth, flipped_uv - ds_dir).r;
         float dp = texture(tex_depth, flipped_uv + ds_dir).r;
         float depth = d0 * 0.5 + dm * 0.25 + dp * 0.25;
-        float depth_inv = -depth;
-        float shift_amount = (depth_inv + u_convergence);
+        float center_depth_inv = -depth;
+        float shift_amount = (depth - u_convergence);
         // Edge-aware border constraint for interleaved (pixels alternate eyes)
         float edge_margin = 0.05;
         float edge_falloff = smoothstep(0.0, edge_margin, flipped_uv.x)
@@ -975,7 +971,7 @@ INTERLEAVED_FRAGMENT = """
 
         vec4 color;
         if (is_disoccluded(flipped_uv, shifted_uv, depth))
-            color = push_pull_inpaint(flipped_uv, depth_inv);
+            color = push_pull_inpaint(flipped_uv, center_depth_inv);
         else
             color = texture(tex_color, shifted_uv);
 
@@ -1109,8 +1105,8 @@ LEIA_FRAGMENT = """
 
         vec2 flipped_uv = vec2(uv.x, 1.0 - uv.y);
         float depth = texture(tex_depth, flipped_uv).r;
-        float depth_inv = -depth;
-        float shift_amount = (depth_inv + u_convergence);
+        float center_depth_inv = -depth;
+        float shift_amount = (depth - u_convergence);
         float c = cos(u_roll);
         float s = sin(u_roll);
         vec2 shifted_uv = flipped_uv - vec2(my_offset * shift_amount * u_depth_strength * c,
@@ -1118,7 +1114,7 @@ LEIA_FRAGMENT = """
 
         vec4 color;
         if (is_disoccluded(flipped_uv, shifted_uv, depth))
-            color = push_pull_inpaint(flipped_uv, depth_inv);
+            color = push_pull_inpaint(flipped_uv, center_depth_inv);
         else
             color = texture(tex_color, shifted_uv);
 
@@ -1278,20 +1274,19 @@ class OverlayTextureRenderer:
 class StereoWindow:
     """Optimized stereo viewer with performance improvements"""
 
-    def __init__(self, capture_mode="Monitor", monitor_index=0, ipd=0.064, depth_strength=1.0, convergence=0.0, display_mode="Half-SBS", fill_16_9=True, show_fps=True, use_3d=False, fix_aspect=False, stream_mode=None, lossless_scaling=False, specify_display=False, stereo_display_index=0, feather_enabled=False, frame_size=(1280, 720), use_cuda=False, cuda_device_id=0, local_vsync=True, **kwargs):
+    def __init__(self, capture_mode="Monitor", monitor_index=0, convergence=0.0, runtime_depth_strength=2.0, on_runtime_depth_strength_change=None, display_mode="Half-SBS", fill_16_9=True, show_fps=True, use_3d=False, fix_aspect=False, stream_mode=None, lossless_scaling=False, specify_display=False, stereo_display_index=0, feather_enabled=False, frame_size=(1280, 720), use_cuda=False, cuda_device_id=0, local_vsync=True, **kwargs):
         # Initialize with default values
         self._has_real_frame = False
         self.use_3d = use_3d
         self.title = "Stereo Viewer"
         self.capture_mode = capture_mode
         self.input_monitor_index = monitor_index
-        self.ipd_uv = ipd
-        self._depth_strength_scale = 0.1
         self._last_window_position = None
         self._last_window_size = None
         self._fullscreen = False
-        self.depth_strength = depth_strength
-        self.depth_strength_original = depth_strength
+        self.runtime_depth_strength = float(runtime_depth_strength)
+        self.runtime_depth_strength_original = float(runtime_depth_strength)
+        self.on_runtime_depth_strength_change = on_runtime_depth_strength_change
         self._modes = ["Full-SBS", "Half-SBS", "Half-TAB", "Depth Map", "Full-TAB", "Anaglyph", "Interleaved", "Mono", "Leia"]
         # Edge feathering toggle
         self.feather_enabled = feather_enabled
@@ -1329,12 +1324,12 @@ class StereoWindow:
         
         # Cache for uniforms to avoid redundant updates
         self._last_eye_offset_set = 0.0
-        self._last_depth_strength_set = 0.0
-        
-        # Depth strength display variables
+        self._last_zero_depth_strength_set = 0.0
+
+        # Runtime depth strength display variables
         self.last_depth_change_time = 0
-        self.show_depth_strength = False
-        self.depth_display_duration = 2.0  # Show depth strength for 2 seconds after change
+        self.show_runtime_depth_strength = False
+        self.depth_display_duration = 2.0
         
         # Font and text sizing
         self.font = None
@@ -1912,7 +1907,7 @@ class StereoWindow:
         if self.show_fps and self.total_latency > 0:
             latency_text = f"Latency: {self.total_latency:.0f} ms"
             lines.append(latency_text)
-        if self.show_depth_strength and depth_text:
+        if self.show_runtime_depth_strength and depth_text:
             lines.append(depth_text)
         if self.show_mouse_state and mouse_text:  # Add mouse state line
             lines.append(mouse_text)
@@ -1957,7 +1952,7 @@ class StereoWindow:
             elif "Latency:" in line:
                 color = (0, 255, 255, 255)        # Blue for Latency
             elif "Depth Strength:" in line:
-                color = (255, 255, 255, 255)      # White for depth strength
+                color = (255, 255, 255, 255)
             elif "Mouse:" in line:
                 color = (255, 255, 0, 255)      # Yellow for Mouse
             else:
@@ -1970,13 +1965,13 @@ class StereoWindow:
         return overlay_arr
 
     def _add_overlay(self, rgb_frame):
-        """Add FPS and depth strength overlay to the frame with minimal allocations."""
+        """Add FPS overlay to the frame with minimal allocations."""
         # Skip overlay for depth map mode
         if self.display_mode == "Depth Map":
             return rgb_frame
         
         # If nothing to show or no font available, do nothing fast
-        if not (self.show_fps or self.show_depth_strength or self.show_mouse_state) or self.font is None:
+        if not (self.show_fps or self.show_runtime_depth_strength or self.show_mouse_state) or self.font is None:
             return rgb_frame
 
         h, w, _ = rgb_frame.shape
@@ -1986,13 +1981,8 @@ class StereoWindow:
             w = 2 * w
         self.frame_size = (w, h)
                 
-        # Depth strength visibility check
         current_time = time.perf_counter()
-        if current_time - self.last_depth_change_time < self.depth_display_duration:
-            self.show_depth_strength = True
-        else:
-            self.show_depth_strength = False
-        
+        self.show_runtime_depth_strength = current_time - self.last_depth_change_time < self.depth_display_duration
         # Mouse state visibility check
         if current_time - self.last_mouse_toggle_time < self.mouse_display_duration:
             self.show_mouse_state = True
@@ -2015,7 +2005,7 @@ class StereoWindow:
         # Compose the strings to display (from the throttled snapshot values)
         fps_text = f"FPS: {cache['disp_fps']:.1f}" if self.show_fps else ""
         latency_text = f"Latency: {cache['disp_latency']:.1f} ms" if self.show_fps else ""
-        depth_text = f"Depth Strength: {self.depth_strength:.1f}" if self.show_depth_strength else ""
+        depth_text = f"Depth Strength: {self.runtime_depth_strength:.1f}" if self.show_runtime_depth_strength else ""
         mouse_text = f"Mouse: {'Pass' if self.mouse_pass_through else 'Normal'}" if self.show_mouse_state else ""
 
         # Decide whether to regenerate the rasterized overlay. Because the numbers
@@ -2082,15 +2072,15 @@ class StereoWindow:
             if self.overlay_renderer is not None:
                 self.overlay_renderer.clear()
             return
-        if not (self.show_fps or self.show_depth_strength or self.show_mouse_state):
+        if not (self.show_fps or self.show_runtime_depth_strength or self.show_mouse_state):
             if self.overlay_renderer is not None:
                 self.overlay_renderer.clear()
             return
 
         current_time = time.perf_counter()
-        self.show_depth_strength = current_time - self.last_depth_change_time < self.depth_display_duration
+        self.show_runtime_depth_strength = current_time - self.last_depth_change_time < self.depth_display_duration
         self.show_mouse_state = current_time - self.last_mouse_toggle_time < self.mouse_display_duration
-        if not (self.show_fps or self.show_depth_strength or self.show_mouse_state):
+        if not (self.show_fps or self.show_runtime_depth_strength or self.show_mouse_state):
             if self.overlay_renderer is not None:
                 self.overlay_renderer.clear()
             return
@@ -2104,7 +2094,7 @@ class StereoWindow:
 
         fps_text = f"FPS: {cache['disp_fps']:.1f}" if self.show_fps else ""
         latency_text = f"Latency: {cache['disp_latency']:.1f} ms" if self.show_fps else ""
-        depth_text = f"Depth Strength: {self.depth_strength:.1f}" if self.show_depth_strength else ""
+        depth_text = f"Depth Strength: {self.runtime_depth_strength:.1f}" if self.show_runtime_depth_strength else ""
         mouse_text = f"Mouse: {'Pass' if getattr(self, 'mouse_pass_through', False) else 'Normal'}" if self.show_mouse_state else ""
 
         if (fps_text == cache.get('fps_text') and
@@ -2360,14 +2350,11 @@ class StereoWindow:
             elif key == glfw.KEY_ESCAPE:
                 glfw.set_window_should_close(window, True)
             elif key == glfw.KEY_DOWN:
-                self.depth_strength = max(0, self.depth_strength - 0.5)
-                self.last_depth_change_time = time.perf_counter()
+                self._set_runtime_depth_strength(self.runtime_depth_strength - 0.5)
             elif key == glfw.KEY_UP:
-                self.depth_strength = min(10, self.depth_strength + 0.5)
-                self.last_depth_change_time = time.perf_counter()
+                self._set_runtime_depth_strength(self.runtime_depth_strength + 0.5)
             elif key == glfw.KEY_0:
-                self.depth_strength = self.depth_strength_original
-                self.last_depth_change_time = time.perf_counter()
+                self._set_runtime_depth_strength(self.runtime_depth_strength_original)
             elif key == glfw.KEY_TAB:
                 idx = self._modes.index(self.display_mode)
                 self.display_mode = self._modes[(idx + 1) % len(self._modes)]
@@ -2704,6 +2691,14 @@ class StereoWindow:
                 )
             self._runtime_output_size_logged = True
 
+    def _set_runtime_depth_strength(self, value):
+        self.runtime_depth_strength = max(0.0, min(10.0, float(value)))
+        self.last_depth_change_time = time.perf_counter()
+        self.show_runtime_depth_strength = True
+        self._overlay_cache['last_update'] = 0.0
+        if callable(self.on_runtime_depth_strength_change):
+            self.on_runtime_depth_strength_change(self.runtime_depth_strength)
+
     def _compute_render_size(self, max_w, max_h, src_w, src_h):
         """Calculate render size maintaining aspect ratio"""
         if src_w == 0 or src_h == 0:
@@ -2874,7 +2869,7 @@ class StereoWindow:
                 viewport = (offset_x, offset_y, view_w, view_h)
 
             self.ctx.viewport = viewport
-            half_ipd = self.ipd_uv / 2.0
+            half_ipd = 0.0
 
             if self.display_mode == "Mono":
                 self.color_tex.use(location=0)
@@ -2889,7 +2884,7 @@ class StereoWindow:
                 self.color_tex.use(location=0)
                 self.depth_tex.use(location=1)
                 self.anaglyph_prog['u_eye_offset'].value = half_ipd
-                self.anaglyph_prog['u_depth_strength'].value = self._depth_strength_scale * self.depth_strength
+                self.anaglyph_prog['u_depth_strength'].value = 0.0
                 self.anaglyph_prog['u_feather_enabled'].value = self.feather_enabled
                 self.anaglyph_prog['u_feather_width'].value = self.feather_width
                 self.anaglyph_prog['u_viewport'].value = viewport
@@ -2898,7 +2893,7 @@ class StereoWindow:
                 self.color_tex.use(location=0)
                 self.depth_tex.use(location=1)
                 self.interleaved_prog['u_eye_offset'].value = half_ipd
-                self.interleaved_prog['u_depth_strength'].value = self._depth_strength_scale * self.depth_strength
+                self.interleaved_prog['u_depth_strength'].value = 0.0
                 self.interleaved_prog['u_feather_enabled'].value = self.feather_enabled
                 self.interleaved_prog['u_feather_width'].value = self.feather_width
                 self.interleaved_prog['u_viewport'].value = viewport
@@ -2907,7 +2902,7 @@ class StereoWindow:
                 self.color_tex.use(location=0)
                 self.depth_tex.use(location=1)
                 self.leia_prog['u_eye_offset'].value = half_ipd
-                self.leia_prog['u_depth_strength'].value = self._depth_strength_scale * self.depth_strength
+                self.leia_prog['u_depth_strength'].value = 0.0
                 self.leia_prog['u_feather_enabled'].value = self.feather_enabled
                 self.leia_prog['u_feather_width'].value = self.feather_width
                 self.leia_prog['u_viewport'].value = viewport
@@ -2938,7 +2933,7 @@ class StereoWindow:
             if self.display_mode in ["Full-SBS", "Half-SBS", "Half-TAB", "Full-TAB"]:
                 self.color_tex.use(location=0)
                 self.depth_tex.use(location=1)
-                self.prog['u_depth_strength'].value = self._depth_strength_scale * self.depth_strength
+                self.prog['u_depth_strength'].value = 0.0
 
                 if self.display_mode == "Full-SBS":
                     src_w, src_h = tex_w, tex_h
@@ -2953,7 +2948,7 @@ class StereoWindow:
                         render_w, render_h
                     )
                     self.ctx.viewport = left_vp
-                    self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
+                    self.prog['u_eye_offset'].value = 0.0
                     self.prog['u_feather_enabled'].value = self.feather_enabled
                     self.prog['u_feather_width'].value = self.feather_width
                     self.prog['u_viewport'].value = left_vp
@@ -2966,7 +2961,7 @@ class StereoWindow:
                         render_w, render_h
                     )
                     self.ctx.viewport = right_vp
-                    self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
+                    self.prog['u_eye_offset'].value = 0.0
                     self.prog['u_feather_enabled'].value = self.feather_enabled
                     self.prog['u_feather_width'].value = self.feather_width
                     self.prog['u_viewport'].value = right_vp
@@ -2985,7 +2980,7 @@ class StereoWindow:
                         render_w, render_h
                     )
                     self.ctx.viewport = left_vp
-                    self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
+                    self.prog['u_eye_offset'].value = 0.0
                     self.prog['u_feather_enabled'].value = self.feather_enabled
                     self.prog['u_feather_width'].value = self.feather_width
                     self.prog['u_viewport'].value = left_vp
@@ -2998,11 +2993,11 @@ class StereoWindow:
                         render_w, render_h
                     )
                     self.ctx.viewport = right_vp
-                    self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
+                    self.prog['u_eye_offset'].value = 0.0
                     self.prog['u_feather_enabled'].value = self.feather_enabled
                     self.prog['u_feather_width'].value = self.feather_width
                     self.prog['u_viewport'].value = right_vp
-                    self._last_eye_offset_set = self.ipd_uv / 2.0
+                    self._last_eye_offset_set = 0.0
                     self.quad_vao.render(moderngl.TRIANGLE_STRIP)
 
                 elif self.display_mode in ["Half-TAB"]:
@@ -3017,7 +3012,7 @@ class StereoWindow:
                         render_w, render_h
                     )
                     self.ctx.viewport = top_vp
-                    self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
+                    self.prog['u_eye_offset'].value = 0.0
                     self.prog['u_feather_enabled'].value = self.feather_enabled
                     self.prog['u_feather_width'].value = self.feather_width
                     self.prog['u_viewport'].value = top_vp
@@ -3030,7 +3025,7 @@ class StereoWindow:
                         render_w, render_h
                     )
                     self.ctx.viewport = bottom_vp
-                    self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
+                    self.prog['u_eye_offset'].value = 0.0
                     self.prog['u_feather_enabled'].value = self.feather_enabled
                     self.prog['u_feather_width'].value = self.feather_width
                     self.prog['u_viewport'].value = bottom_vp
@@ -3048,7 +3043,7 @@ class StereoWindow:
                         render_w, render_h
                     )
                     self.ctx.viewport = top_vp
-                    self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
+                    self.prog['u_eye_offset'].value = 0.0
                     self.prog['u_feather_enabled'].value = self.feather_enabled
                     self.prog['u_feather_width'].value = self.feather_width
                     self.prog['u_viewport'].value = top_vp
@@ -3061,7 +3056,7 @@ class StereoWindow:
                         render_w, render_h
                     )
                     self.ctx.viewport = bottom_vp
-                    self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
+                    self.prog['u_eye_offset'].value = 0.0
                     self.prog['u_feather_enabled'].value = self.feather_enabled
                     self.prog['u_feather_width'].value = self.feather_width
                     self.prog['u_viewport'].value = bottom_vp
@@ -3104,13 +3099,13 @@ class StereoWindow:
             if self.display_mode in ["Full-SBS", "Half-SBS", "Half-TAB", "Full-TAB"]:
                 self.color_tex.use(0)
                 self.depth_tex.use(1)
-                self.prog['u_depth_strength'].value = self._depth_strength_scale * self.depth_strength
+                self.prog['u_depth_strength'].value = 0.0
 
                 if self.display_mode == "Full-SBS":
                     # Left eye
                     left_vp = (offset_x, offset_y, view_w // 2, view_h)
                     self.ctx.viewport = left_vp
-                    self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
+                    self.prog['u_eye_offset'].value = 0.0
                     self.prog['u_feather_enabled'].value = self.feather_enabled
                     self.prog['u_feather_width'].value = self.feather_width
                     self.prog['u_viewport'].value = left_vp
@@ -3119,7 +3114,7 @@ class StereoWindow:
                     # Right eye
                     right_vp = (offset_x + view_w // 2, offset_y, view_w // 2, view_h)
                     self.ctx.viewport = right_vp
-                    self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
+                    self.prog['u_eye_offset'].value = 0.0
                     self.prog['u_feather_enabled'].value = self.feather_enabled
                     self.prog['u_feather_width'].value = self.feather_width
                     self.prog['u_viewport'].value = right_vp
@@ -3129,7 +3124,7 @@ class StereoWindow:
                     # Left eye
                     left_vp = (offset_x, offset_y, view_w // 2, view_h)
                     self.ctx.viewport = left_vp
-                    self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
+                    self.prog['u_eye_offset'].value = 0.0
                     self.prog['u_feather_enabled'].value = self.feather_enabled
                     self.prog['u_feather_width'].value = self.feather_width
                     self.prog['u_viewport'].value = left_vp
@@ -3138,7 +3133,7 @@ class StereoWindow:
                     # Right eye
                     right_vp = (offset_x + view_w // 2, offset_y, view_w // 2, view_h)
                     self.ctx.viewport = right_vp
-                    self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
+                    self.prog['u_eye_offset'].value = 0.0
                     self.prog['u_feather_enabled'].value = self.feather_enabled
                     self.prog['u_feather_width'].value = self.feather_width
                     self.prog['u_viewport'].value = right_vp
@@ -3148,7 +3143,7 @@ class StereoWindow:
                     # Top eye (left)
                     top_vp = (offset_x, offset_y + view_h // 2, view_w, view_h // 2)
                     self.ctx.viewport = top_vp
-                    self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
+                    self.prog['u_eye_offset'].value = 0.0
                     self.prog['u_feather_enabled'].value = self.feather_enabled
                     self.prog['u_feather_width'].value = self.feather_width
                     self.prog['u_viewport'].value = top_vp
@@ -3157,7 +3152,7 @@ class StereoWindow:
                     # Bottom eye (right)
                     bottom_vp = (offset_x, offset_y, view_w, view_h // 2)
                     self.ctx.viewport = bottom_vp
-                    self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
+                    self.prog['u_eye_offset'].value = 0.0
                     self.prog['u_feather_enabled'].value = self.feather_enabled
                     self.prog['u_feather_width'].value = self.feather_width
                     self.prog['u_viewport'].value = bottom_vp
@@ -3167,7 +3162,7 @@ class StereoWindow:
                     # Top eye (left)
                     top_vp = (offset_x, offset_y + view_h // 2, view_w, view_h // 2)
                     self.ctx.viewport = top_vp
-                    self.prog['u_eye_offset'].value = -self.ipd_uv / 2.0
+                    self.prog['u_eye_offset'].value = 0.0
                     self.prog['u_feather_enabled'].value = self.feather_enabled
                     self.prog['u_feather_width'].value = self.feather_width
                     self.prog['u_viewport'].value = top_vp
@@ -3176,7 +3171,7 @@ class StereoWindow:
                     # Bottom eye (right)
                     bottom_vp = (offset_x, offset_y, view_w, view_h // 2)
                     self.ctx.viewport = bottom_vp
-                    self.prog['u_eye_offset'].value = self.ipd_uv / 2.0
+                    self.prog['u_eye_offset'].value = 0.0
                     self.prog['u_feather_enabled'].value = self.feather_enabled
                     self.prog['u_feather_width'].value = self.feather_width
                     self.prog['u_viewport'].value = bottom_vp

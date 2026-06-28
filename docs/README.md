@@ -16,6 +16,7 @@
 |---|---|
 | [11-visual-regression-guide.md](11-visual-regression-guide.md) | 视觉回归输出图片含义、检查方法和固定样例说明 |
 | [12-openxr-stereo-runtime-plan.md](12-openxr-stereo-runtime-plan.md) | OpenXR per-eye core 与未来 runtime 集成计划 |
+| [13-realtime-stereo-parameter-guide.md](13-realtime-stereo-parameter-guide.md) | 当前实时立体参数测试与视觉回归调参指南 |
 | [17-multiplatform-provider-layout.md](17-multiplatform-provider-layout.md) | 多平台 depth provider 目录分层和 artifact 规划 |
 | [18-host-bootstrap-device-flow.md](18-host-bootstrap-device-flow.md) | Host/GUI/capture bootstrap 设备检测与 runtime 参数传递流程 |
 | [20-openxr-gpu-glow-guide.md](20-openxr-gpu-glow-guide.md) | OpenXR GPU glow 的原理、调用链、配置和复杂效果扩展方法 |
@@ -39,7 +40,6 @@
 - [archive/03-iw3-comparison.md](archive/03-iw3-comparison.md)
 - [archive/04-implementation-plan.md](archive/04-implementation-plan.md)
 - [archive/05-model-boundary.md](archive/05-model-boundary.md)
-- [archive/implementation-experience/13-realtime-stereo-parameter-guide.md](archive/implementation-experience/13-realtime-stereo-parameter-guide.md)
 - [archive/implementation-experience/14-host-api-preset-examples.md](archive/implementation-experience/14-host-api-preset-examples.md)
 - [archive/implementation-experience/15-host-api-contract.md](archive/implementation-experience/15-host-api-contract.md)
 - [archive/implementation-experience/21-openxr-ghosting-test-report.md](archive/implementation-experience/21-openxr-ghosting-test-report.md)

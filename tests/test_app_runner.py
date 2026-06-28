@@ -1,11 +1,10 @@
-﻿from app_runtime.app_runner import AppModeCallbacks, AppModeSettings, build_app_mode_callbacks, build_app_mode_settings, build_current_app_mode_settings, run_app_mode
+from app_runtime.app_runner import AppModeCallbacks, AppModeSettings, build_app_mode_callbacks, build_app_mode_settings, build_current_app_mode_settings, run_app_mode
 
 
 def _settings():
     return AppModeSettings(
         capture_mode="monitor",
         monitor_index=0,
-        ipd=0.06,
         depth_strength=1.0,
         convergence=0.0,
         display_mode="sbs",
@@ -43,6 +42,7 @@ def _callbacks():
         set_rtmp_thread=lambda thread: None,
         rtmp_stream=lambda *args, **kwargs: None,
         update_openxr_runtime_config=lambda **kwargs: None,
+        send_settings_snapshot=lambda snapshot: None,
         render_active_event=object(),
         source_active_event=object(),
         idle_active_event=object(),
@@ -103,7 +103,6 @@ def test_build_app_mode_settings_maps_core_fields():
     settings = build_app_mode_settings(
         capture_mode="monitor",
         monitor_index=1,
-        ipd=0.06,
         depth_strength=1.1,
         convergence=0.2,
         display_mode="sbs",
@@ -148,6 +147,7 @@ def test_build_app_mode_callbacks_maps_callables():
         set_rtmp_thread=lambda thread: None,
         rtmp_stream=lambda *args, **kwargs: None,
         update_openxr_runtime_config=lambda **kwargs: None,
+        send_settings_snapshot=lambda snapshot: None,
         render_active_event=object(),
         source_active_event=object(),
         idle_active_event=object(),
@@ -176,7 +176,6 @@ def test_build_current_app_mode_settings_reads_utils_lazily(monkeypatch):
         FILL_16_9=False,
         FIX_VIEWER_ASPECT=False,
         FPS=60,
-        IPD=0.06,
         LOCAL_VSYNC=False,
         LOSSLESS_SCALING_SUPPORT=False,
         MONITOR_INDEX=0,

@@ -25,9 +25,6 @@ _HOT_RELOAD_FIELDS = frozenset(
         "output_format",
         "depth_strength",
         "convergence",
-        "ipd_mm",
-        "stereo_scale",
-        "max_shift_ratio",
         "max_disparity_px",
         "parallax_preset",
         "parallax_budget_preset",
@@ -75,9 +72,6 @@ _CONFIG_UPDATE_FIELDS = frozenset(
         "output_format",
         "depth_strength",
         "convergence",
-        "ipd_mm",
-        "stereo_scale",
-        "max_shift_ratio",
         "max_disparity_px",
         "parallax_preset",
         "temporal",
@@ -129,9 +123,6 @@ class RuntimeSettingsSnapshot:
     output_format: OutputFormat | None = None
     depth_strength: float | None = None
     convergence: float | None = None
-    ipd_mm: float | None = None
-    stereo_scale: float | None = None
-    max_shift_ratio: float | None = None
     max_disparity_px: float | None = None
     parallax_preset: str | None = None
     parallax_budget_preset: str | None = None
@@ -181,8 +172,6 @@ class RuntimeSettingsSnapshot:
             updates["temporal"] = self.temporal_enabled
         if self.runtime_quality_mode is not None:
             updates["mode"] = _normalize_runtime_mode(self.runtime_quality_mode)
-        if "ipd_mm" in updates:
-            updates["ipd"] = float(updates["ipd_mm"]) / 1000.0
         return updates
 
     def _has_any(self, field_names: frozenset[str]) -> bool:

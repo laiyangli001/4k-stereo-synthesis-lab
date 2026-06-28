@@ -52,10 +52,6 @@ class StereoRuntimeConfig:
     depth_upsample_edge_strength: float = 0.35
     depth_strength: float = 2.0
     convergence: float = 0.0
-    ipd: float = 0.064
-    max_shift_ratio: float = 0.05
-    ipd_mm: float | None = 32.0
-    stereo_scale: float = 0.4
     max_disparity_px: float | None = None
     parallax_preset: str = "standard"
     layers: int = 2
@@ -192,7 +188,6 @@ def runtime_config_from_d2s_settings(
     mode = _normalize_runtime_mode(mode_source)
     output_format = _normalize_output_format(settings.get("Display Mode", "half_sbs"))
     stereo_quality = _normalize_stereo_quality(settings.get("Stereo Quality", settings.get("Synthetic View", "fast" if depth_only else "quality_4k")))
-    ipd_mm = _normalize_ipd_mm(settings)
 
     has_hole_fill_mode = "Hole Fill Mode" in settings
     hole_fill_mode, hole_fill_radius, hole_fill_strength = _normalize_hole_fill_mode(
@@ -221,12 +216,8 @@ def runtime_config_from_d2s_settings(
         export_width=export_width,
         depth_strength=float(settings.get("Depth Strength", 2.0)),
         convergence=float(settings.get("Convergence", 0.0)),
-        ipd=ipd_mm / 1000.0,
-        max_shift_ratio=float(settings.get("Max Shift Ratio", 0.05)),
-        ipd_mm=ipd_mm,
-        stereo_scale=float(settings.get("Stereo Scale", settings.get("Stereo Strength Scale", 0.4))),
         max_disparity_px=_optional_float_setting(settings, "Max Disparity Px", "Max Disparity PX"),
-        parallax_preset=str(settings.get("Parallax Preset", settings.get("Parallax Budget Preset", "standard"))),
+        parallax_preset=str(settings.get("Parallax Budget Preset", settings.get("Parallax Preset", "standard"))),
         temporal=_to_bool(settings.get("Temporal", True)),
         temporal_strength=float(settings.get("Temporal Strength", 0.75)),
         auto_reset_temporal=_to_bool(settings.get("Auto Scene Reset", settings.get("Auto Reset Temporal", True))),
@@ -282,14 +273,6 @@ def _depth_export_size_from_settings(
         height = int(default_height)
     return max(1, int(height)), max(1, int(width))
 
-
-def _normalize_ipd_mm(settings: dict[str, Any]) -> float:
-    raw = settings.get("IPD mm", settings.get("IPD (mm)", settings.get("IPD", 0.032)))
-    value = float(raw)
-    # Legacy Desktop2Stereo settings stored IPD in meters, e.g. 0.064.
-    if value <= 1.0:
-        value *= 1000.0
-    return max(1.0, value)
 
 def _normalize_depth_backend(value: Any) -> DepthBackend:
     key = str(value).strip().lower().replace("-", "_")
@@ -489,9 +472,6 @@ def openxr_render_config_from_snapshot(
 
     depth_strength = 2.0 if snapshot.depth_strength is None else float(snapshot.depth_strength)
     convergence = 0.0 if snapshot.convergence is None else float(snapshot.convergence)
-    ipd_mm = 32.0 if snapshot.ipd_mm is None else float(snapshot.ipd_mm)
-    stereo_scale = 0.4 if snapshot.stereo_scale is None else float(snapshot.stereo_scale)
-    max_shift_ratio = 0.05 if snapshot.max_shift_ratio is None else float(snapshot.max_shift_ratio)
     parallax_preset = str(snapshot.parallax_preset or preset or "standard")
     max_disparity_px = snapshot.max_disparity_px
     if max_disparity_px is None and render_size is not None:
@@ -499,21 +479,13 @@ def openxr_render_config_from_snapshot(
             render_width=int(render_size[0]),
             render_height=int(render_size[1]),
             preset=parallax_preset,
-            depth_strength=depth_strength,
-            stereo_scale=stereo_scale,
             convergence=convergence,
-            ipd_mm=ipd_mm,
-            max_shift_ratio=max_shift_ratio,
         )
         max_disparity_px = float(budget.max_disparity_px)
 
     return OpenXRRenderConfig(
         depth_strength=depth_strength,
         convergence=convergence,
-        ipd=ipd_mm / 1000.0,
-        max_shift_ratio=max_shift_ratio,
-        ipd_mm=ipd_mm,
-        stereo_scale=stereo_scale,
         max_disparity_px=max_disparity_px,
         parallax_preset=parallax_preset,
         screen_roll=float(screen_roll),
@@ -557,10 +529,6 @@ def stereo_config_from_runtime(config: StereoRuntimeConfig) -> "StereoConfig":
             "temporal": temporal,
             "depth_strength": config.depth_strength,
             "convergence": config.convergence,
-            "ipd": config.ipd,
-            "max_shift_ratio": config.max_shift_ratio,
-            "ipd_mm": config.ipd_mm,
-            "stereo_scale": config.stereo_scale,
             "max_disparity_px": config.max_disparity_px,
             "parallax_preset": config.parallax_preset,
             "temporal_strength": temporal_strength,

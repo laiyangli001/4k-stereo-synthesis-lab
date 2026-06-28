@@ -100,7 +100,6 @@ def create_runtime_context(
     capture_tool,
     os_name,
     run_mode,
-    ipd,
     depth_strength,
     convergence,
 ):
@@ -126,11 +125,8 @@ def create_runtime_context(
 
     openxr_state = OpenXRStateController(
         run_mode=run_mode,
-        ipd=ipd,
         depth_strength=depth_strength,
         convergence=convergence,
-        stereo_scale=runtime_config.stereo_scale,
-        max_shift_ratio=runtime_config.max_shift_ratio,
     )
     source_health_log = env_flag(
         "D2S_SOURCE_HEALTH_LOG",

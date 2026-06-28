@@ -542,6 +542,10 @@ class CoreRuntimeEyeMixin:
             self.convergence = float(uniforms["convergence"])
         elif "openxr_convergence" in debug_info:
             self.convergence = float(debug_info["openxr_convergence"])
+        if "depth_strength" in uniforms:
+            self._runtime_rgb_depth_depth_strength = max(0.0, float(uniforms["depth_strength"]))
+        else:
+            self._runtime_rgb_depth_depth_strength = max(0.0, float(getattr(self, "depth_strength", 1.0) or 0.0))
         max_disparity_px = uniforms.get("max_disparity_px", debug_info.get("resolved_max_disparity_px", 0.0))
         self._runtime_rgb_depth_max_disparity_px = max(0.0, float(max_disparity_px or 0.0))
         render_width = _runtime_shader_render_width(uniforms.get("render_size"))

@@ -4,6 +4,8 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from stereo_runtime.baseline_shift import ShiftParams, compute_shift_px
+
 DEVICE_INFO = "unknown"
 
 _FONT_CACHE = {}
@@ -32,7 +34,7 @@ _FONT = {
 def make_sbs(
     rgb_c,
     depth,
-    ipd_uv=0.064,
+    parallax_budget_uv=0.064,
     depth_strength=2.0,
     convergence=0.0,
     fill_16_9=False,
@@ -69,7 +71,7 @@ def make_sbs(
     sbs_tensor = _make_sbs_core(
         rgb=rgb,
         depth=depth_t,
-        ipd_uv=ipd_uv,
+        parallax_budget_uv=parallax_budget_uv,
         depth_strength=depth_strength,
         convergence=convergence,
         fill_16_9=fill_16_9,
@@ -81,7 +83,7 @@ def make_sbs(
 def _make_sbs_core(
     rgb: torch.Tensor,
     depth: torch.Tensor,
-    ipd_uv=0.064,
+    parallax_budget_uv=0.064,
     depth_strength=2.0,
     convergence=0.0,
     fill_16_9=False,
@@ -89,11 +91,16 @@ def _make_sbs_core(
 ) -> torch.Tensor:
     c, h, w = rgb.shape
     img = rgb.unsqueeze(0).clamp(0, 255)
-    depth_strength_scale = 0.05
-    depth = depth - convergence
-    inv = -depth * depth_strength
-    max_px = ipd_uv * w
-    shifts = inv * max_px * depth_strength_scale
+    max_disparity_px = max(0.0, float(parallax_budget_uv)) * float(w)
+    shifts = compute_shift_px(
+        depth.view(1, 1, h, w),
+        w,
+        ShiftParams(
+            depth_strength=depth_strength,
+            convergence=convergence,
+            max_disparity_px=max_disparity_px,
+        ),
+    )[0, 0]
 
     xs = torch.linspace(-1.0, 1.0, w, device=rgb.device, dtype=rgb.dtype).view(1, 1, w).expand(1, h, w)
     ys = torch.linspace(-1.0, 1.0, h, device=rgb.device, dtype=rgb.dtype).view(1, h, 1).expand(1, h, w)

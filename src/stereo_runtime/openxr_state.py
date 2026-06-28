@@ -13,12 +13,9 @@ class OpenXRStateController:
         self,
         *,
         run_mode: str,
-        ipd: float,
         depth_ratio: float | None = None,
         depth_strength: float | None = None,
         convergence: float = 0.0,
-        stereo_scale: float | None = None,
-        max_shift_ratio: float | None = None,
     ):
         self.run_mode = run_mode
         self.render_active = threading.Event()
@@ -35,10 +32,7 @@ class OpenXRStateController:
             timestamp=0.0,
             depth_strength=float(depth_ratio),
             convergence=float(convergence),
-            stereo_scale=None if stereo_scale is None else float(stereo_scale),
-            max_shift_ratio=None if max_shift_ratio is None else float(max_shift_ratio),
         )
-        self.legacy_ipd = float(ipd)
         self.screen_roll = 0.0
         self.source_pause_notice_lock = threading.Lock()
         self.source_pause_noticed = None
@@ -81,12 +75,9 @@ class OpenXRStateController:
         self,
         *,
         snapshot=None,
-        ipd=None,
         depth_ratio=None,
         depth_strength=None,
         convergence=None,
-        stereo_scale=None,
-        max_shift_ratio=None,
         max_disparity_px=None,
         parallax_preset=None,
         screen_roll=None,
@@ -95,20 +86,12 @@ class OpenXRStateController:
             current = self.runtime_settings_snapshot
             if snapshot is not None:
                 current = _merge_snapshot(current, snapshot)
-                if snapshot.ipd_mm is not None:
-                    self.legacy_ipd = None
-            if ipd is not None:
-                self.legacy_ipd = float(ipd)
             if depth_ratio is None:
                 depth_ratio = depth_strength
             if depth_ratio is not None:
                 current = replace(current, depth_strength=float(depth_ratio))
             if convergence is not None:
                 current = replace(current, convergence=float(convergence))
-            if stereo_scale is not None:
-                current = replace(current, stereo_scale=float(stereo_scale))
-            if max_shift_ratio is not None:
-                current = replace(current, max_shift_ratio=float(max_shift_ratio))
             if max_disparity_px is not None:
                 current = replace(current, max_disparity_px=float(max_disparity_px))
             if parallax_preset is not None:
@@ -121,14 +104,11 @@ class OpenXRStateController:
         with self.runtime_config_lock:
             snapshot = _snapshot_with_runtime_fallbacks(self.runtime_settings_snapshot, runtime)
             screen_roll = self.screen_roll
-            legacy_ipd = self.legacy_ipd
         config = openxr_render_config_from_snapshot(
             snapshot,
             preset=getattr(runtime.stereo_config, "parallax_preset", "standard"),
             screen_roll=screen_roll,
         )
-        if legacy_ipd is not None:
-            return replace(config, ipd=float(legacy_ipd))
         return config
 
 
@@ -147,21 +127,6 @@ def _snapshot_with_runtime_fallbacks(snapshot: RuntimeSettingsSnapshot, runtime)
     stereo_config = runtime.stereo_config
     return replace(
         snapshot,
-        ipd_mm=(
-            float(stereo_config.ipd_mm)
-            if snapshot.ipd_mm is None and stereo_config.ipd_mm is not None
-            else snapshot.ipd_mm
-        ),
-        stereo_scale=(
-            float(stereo_config.stereo_scale)
-            if snapshot.stereo_scale is None
-            else snapshot.stereo_scale
-        ),
-        max_shift_ratio=(
-            float(stereo_config.max_shift_ratio)
-            if snapshot.max_shift_ratio is None
-            else snapshot.max_shift_ratio
-        ),
         max_disparity_px=(
             getattr(stereo_config, "max_disparity_px", None)
             if snapshot.max_disparity_px is None

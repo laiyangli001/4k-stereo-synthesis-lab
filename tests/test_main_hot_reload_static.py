@@ -1,4 +1,4 @@
-﻿
+
 from pathlib import Path
 
 
@@ -21,9 +21,10 @@ def test_main_has_limited_stereo_hot_reload_path():
     assert "def hot_reload_value_snapshot" in text
     assert '"depth_strength"' in text
     assert '"convergence"' in text
-    assert '"ipd_mm"' in text
-    assert '"stereo_scale"' in text
-    assert '"max_shift_ratio"' in text
+    assert '"parallax_preset"' in text
+    assert '"ipd_mm"' not in text
+    assert '"stereo_scale"' not in text
+    assert '"max_shift_ratio"' not in text
     assert '"cross_eyed"' in text
     assert '"temporal_strength"' in text
     assert '"scene_reset_threshold"' in text
@@ -42,7 +43,7 @@ def test_main_has_limited_stereo_hot_reload_path():
     assert '"depth_safety"' not in text
     assert "def to_bool_hot_reload" in text
     assert "def to_optional_bool_hot_reload" not in text
-    assert "runtime.config = replace(runtime.config, **values)" in text
+    assert "runtime.config = replace(runtime.config, **config_values)" in text
     assert "reset_temporal=False" in text
 def test_stereo_warmup_uses_runtime_frame_shape_and_dedup_key():
     root = Path(__file__).resolve().parents[1]

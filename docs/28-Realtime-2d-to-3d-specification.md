@@ -40,7 +40,8 @@
 | **渲染尺寸（render_size）** | 立体合成管线内部的唯一工作分辨率 |
 | **4K缩放档位（4K Scale Tier）** | 4K级输入按 4K/3K/2K/1K 稳定 scale 档位缩放，并保持输入宽高比的规则 |
 | **最大视差（max_disparity_px）** | 软件层面允许的左右眼总视差像素预算，用于控制立体感强度（非物理测量值） |
-| **视差预算（Parallax Budget）** | 根据 `render_size` 和用户强度档位解析出的 `max_disparity_px` 及其响应曲线 |
+| **视差预算（Parallax Budget）** | 根据 `render_size` 和用户强度档位解析出的名义 `max_disparity_px` 及其响应曲线 |
+| **深度强度（Depth Strength）** | 用户连续调节立体深度强弱的 gain，作用于实际视差位移，不参与旧 IPD 物理乘法链 |
 | **深度响应（depth_response）** | normalized depth 到相对视差权重的映射函数 |
 | **OpenXR** | Khronos Group发布的XR应用开放API标准 |
 | **时域稳定化** | 利用历史帧信息减少帧间闪烁和抖动的处理技术 |
@@ -139,8 +140,9 @@ debug_flags
 
 | 参数 | Hot Reload | Reset Temporal | Rebuild Resources | 说明 |
 |------|:----------:|:--------------:|:-----------------:|------|
-| `max_disparity_px` / `parallax_budget_preset` | 是 | 可选 | 否 | 强度突变时可 reset temporal |
-| `convergence` | 是 | 可选 | 否 | 大幅变化建议 reset temporal |
+| `max_disparity_px` / `parallax_budget_preset` | 是 | 可选 | 否 | 预算档位突变时可 reset temporal |
+| `depth_strength` | 是 | 可选 | 否 | 用户连续调节实际视差强度，大幅变化建议 reset temporal |
+| `convergence` | 是 | 可选 | 否 | 调整零视差/汇聚平面，大幅变化建议 reset temporal |
 | `depth_response` | 是 | 是 | 否 | 曲线变化会改变全局视差分布 |
 | `hole_fill_mode` / mask 参数 | 是 | 否 | 否 | 影响 mask 与 hole fill 行为 |
 | `temporal_enabled` | 是 | 是 | 否 | 开关变化需要清理历史状态 |
@@ -454,7 +456,7 @@ provider 输出必须回到 render_size。
 
 #### 4.6.2 处理语义
 
-本步骤根据 `render_size` 和用户选择的 Parallax Budget 档位解析 `max_disparity_px`。`max_disparity_px` 是左右眼总视差预算，不是单眼位移，也不是物理 IPD。
+本步骤根据 `render_size` 和用户选择的 Parallax Budget 档位解析名义 `max_disparity_px`。`max_disparity_px` 是左右眼总视差预算基准，不是单眼位移，也不是物理 IPD。用户连续调节立体深度强弱时使用 `depth_strength`，它在步骤7作用于实际视差位移，不改变本步骤的预算档位解析规则。
 
 推荐基础表：
 
@@ -487,11 +489,13 @@ max_disparity_px = base_budget * aspect_factor
 
 窗口捕捉的预算不得每帧重算。只有在用户切换质量档、OpenXR render scale 改变并导致 4K scale 档位变化、输入源跨入/离开 4K级判断条件、最终 `render_size` 短边变化超过 10%、最终 aspect 跨过 2.0 保护阈值或用户重新选择显示器/窗口时，才重新解析预算。
 
-normalized-depth 路径不得使用下面的经验乘法链作为核心强度公式：
+normalized-depth 路径不得使用下面的旧经验乘法链作为核心强度公式：
 
 ```text
 IPD * stereo_scale * depth_strength * max_shift_ratio
 ```
+
+其中 `depth_strength` 只允许作为独立的用户强度 gain 使用，不能再和 `IPD`、`stereo_scale`、`max_shift_ratio` 组合成旧物理/经验强度链。
 
 #### 4.6.3 行业依据
 
@@ -531,17 +535,19 @@ IPD * stereo_scale * depth_strength * max_shift_ratio
 
 | 项目 | 规格 |
 |------|------|
-| **输入** | `depth_response_input`（归一化深度响应）、`convergence`（汇聚平面深度，软件可配置）、`max_disparity_px`（来自步骤6） |
+| **输入** | `depth_response_input`（归一化深度响应）、`convergence`（汇聚平面深度，软件可配置）、`max_disparity_px`（来自步骤6）、`depth_strength`（用户连续强度 gain） |
 | **输出** | `disparity_px` / `shift_px`（`render_size`，浮点视差图） |
 
 #### 4.7.2 处理语义
 
 **核心公式**：
-```
-disparity_px = depth_response(depth, convergence) × max_disparity_px
+```text
+disparity_px = depth_response(depth, convergence) × max_disparity_px × depth_strength
+left_shift_px = +disparity_px / 2
+right_shift_px = -disparity_px / 2
 ```
 
-其中 `depth_response(depth, convergence)` 将 normalized / relative depth 映射到相对视差权重，建议范围为 `[-1, 1]`，并在 convergence 附近接近 0。near/far 方向由 provider 输出约定和 depth_response 曲线共同决定，必须在 debug metadata 中可追踪，不得在下游阶段重新猜测。
+其中 `depth_response(depth, convergence)` 将 normalized / relative depth 映射到相对视差权重，建议范围为 `[-1, 1]`，并在 convergence 附近接近 0。`depth_strength` 是用户连续调节立体深度强弱的 gain；`convergence` 只负责移动零视差/汇聚平面，不能替代 depth strength 当作全局强度滑杆。near/far 方向由 provider 输出约定和 depth_response 曲线共同决定，必须在 debug metadata 中可追踪，不得在下游阶段重新猜测。
 
 #### 4.7.3 行业依据
 
@@ -557,9 +563,9 @@ disparity_px = depth_response(depth, convergence) × max_disparity_px
 
 #### 4.7.5 前沿技术说明
 
-**当前项目采用**：`depth_response(depth, convergence) * max_disparity_px` 的显式视差预算模型。当前默认响应曲线是可追踪的规范曲线名称，后续可替换为更复杂曲线，但输出仍必须是 `render_size` 对齐的 `disparity_px`。
+**当前项目采用**：`depth_response(depth, convergence) * max_disparity_px * depth_strength` 的显式视差控制模型。当前默认响应曲线是可追踪的规范曲线名称，后续可替换为更复杂曲线，但输出仍必须是 `render_size` 对齐的 `disparity_px`。
 
-**未来候选**：非线性 depth response、场景自适应 convergence、前景保护曲线可以加入，但必须保持 `max_disparity_px` 是唯一最终强度上限。
+**未来候选**：非线性 depth response、场景自适应 convergence、前景保护曲线可以加入，但必须保持 Parallax Budget 负责档位预算、Depth Strength 负责用户连续强度 gain、Convergence 负责零视差平面的分层语义。
 
 **淘汰方案对比**：
 
@@ -734,7 +740,7 @@ disparity_px = depth_response(depth, convergence) × max_disparity_px
 
 **C. OpenXR RGB+D Depth Direct**：
 - 输出RGB + Depth，由Viewer Shader消费
-- Viewer Shader 消费 RuntimeSettingsSnapshot 派生出的 shader uniform snapshot。该 snapshot 必须表达 `max_disparity_px`、`depth_response`、`convergence`、`render_size`、`screen_roll` 等规范语义；viewer 不得把 IPD、depth_strength、stereo_scale、max_shift_ratio 当作 normalized-depth 强度链重新解释。
+- Viewer Shader 消费 RuntimeSettingsSnapshot 派生出的 shader uniform snapshot。该 snapshot 必须表达 `max_disparity_px`、`depth_strength`、`depth_response`、`convergence`、`render_size`、`screen_roll` 等规范语义；viewer 不得把 IPD、stereo_scale、max_shift_ratio 当作 normalized-depth 强度链重新解释。
 
 #### 4.11.3 行业依据
 
@@ -797,7 +803,8 @@ disparity_px = depth_response(depth, convergence) × max_disparity_px
 ### 5.5 视差控制约束（新增）
 
 - `max_disparity_px` 完全由软件层按 `render_size` 和 Parallax Budget 档位解析，不依赖任何物理测量值。
-- normalized-depth 路径不得把 `IPD`、`stereo_scale`、`depth_strength`、`max_shift_ratio` 作为核心强度链。
+- normalized-depth 路径不得把 `IPD`、`stereo_scale`、`depth_strength`、`max_shift_ratio` 作为旧核心强度链。
+- `depth_strength` 保留为独立用户 gain，用于连续调节实际视差位移；它不得重新引入 IPD / Stereo Scale / Max Shift Ratio。
 - 应用层可根据具体显示设备特性选择不同 `parallax_budget_preset`，但管线内部不做硬件参数解析。
 
 
@@ -811,7 +818,7 @@ disparity_px = depth_response(depth, convergence) × max_disparity_px
 | 图像缩放 | 对比缩放前后分辨率 | 精确匹配render_size |
 | 深度估计 | 验证 provider 输出尺寸、dtype、range metadata、timing/provider_info | `depth_render.shape[-2:] == render_size`，并可追踪 provider 信息 |
 | 视差预算计算 | 输入不同 `render_size` / preset / aspect，验证 `max_disparity_px` | 符合4.6.2节预算表、插值和超宽保护规则 |
-| 视差计算 | 验证公式 `disparity_px = depth_response × max_disparity_px` | 数值误差 < 0.01px |
+| 视差计算 | 验证公式 `disparity_px = depth_response × max_disparity_px × depth_strength` | 数值误差 < 0.01px |
 | 立体扭曲 | 验证左右眼位移方向与幅度 | left_shift = +d/2, right_shift = -d/2 |
 
 ### 6.2 集成测试

@@ -407,9 +407,6 @@ _TEMPORAL_RESET_HOT_RELOAD_FIELDS = frozenset(
         "temporal_enabled",
         "depth_strength",
         "convergence",
-        "ipd_mm",
-        "stereo_scale",
-        "max_shift_ratio",
         "max_disparity_px",
         "parallax_preset",
         "parallax_budget_preset",
@@ -1015,12 +1012,7 @@ class StereoRuntime:
             render_width=int(rgb_frame.shape[-1]),
             render_height=int(rgb_frame.shape[-2]),
             preset=getattr(stereo_config, "parallax_preset", "standard"),
-            depth_strength=float(getattr(stereo_config, "depth_strength", 2.0)),
-            stereo_scale=float(getattr(stereo_config, "stereo_scale", 0.4)),
             convergence=float(getattr(stereo_config, "convergence", 0.0)),
-            ipd_mm=getattr(stereo_config, "ipd_mm", None),
-            max_shift_ratio=float(getattr(stereo_config, "max_shift_ratio", 0.05)),
-            ipd=float(getattr(stereo_config, "ipd", 0.064)),
             max_disparity_px=getattr(stereo_config, "max_disparity_px", None),
         )
         try:
@@ -1029,6 +1021,7 @@ class StereoRuntime:
                 depth,
                 convergence=float(getattr(stereo_config, "convergence", 0.0)),
                 max_disparity_px=float(budget.max_disparity_px),
+                depth_strength=max(0.0, float(getattr(stereo_config, "depth_strength", 1.0))),
                 edge_threshold=0.03,
             ), "used"
         except Exception as exc:
@@ -1131,6 +1124,7 @@ def _openxr_shader_uniforms(
         "max_disparity_px": 0.0 if max_disparity_px is None else float(max_disparity_px),
         "parallax_preset": str(config.parallax_preset),
         "depth_response": str(depth_response or "unknown"),
+        "depth_strength": float(config.depth_strength),
         "convergence": float(config.convergence),
         "render_size": None if render_size is None else (int(render_size[0]), int(render_size[1])),
         "screen_roll": float(config.screen_roll),
@@ -1146,12 +1140,7 @@ def _add_openxr_config_debug_info(debug: dict[str, Any], config: OpenXRRenderCon
             render_width=render_size[0],
             render_height=render_size[1],
             preset=config.parallax_preset,
-            depth_strength=config.depth_strength,
-            stereo_scale=config.stereo_scale,
             convergence=config.convergence,
-            ipd_mm=config.ipd_mm,
-            max_shift_ratio=config.max_shift_ratio,
-            ipd=config.ipd,
             max_disparity_px=config.max_disparity_px,
         )
         debug.update(parallax_debug_info(budget))

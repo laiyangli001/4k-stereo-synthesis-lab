@@ -92,7 +92,7 @@ runtime_q 只保留最新 runtime result，避免渲染端积压。
 | 步骤 4：Depth Estimation | `src/stereo_runtime/depth_provider.py`, `src/stereo_runtime/depth_onnx_provider.py`, `src/stereo_runtime/providers/*`, `model_registry.py` | 已支持多 provider / backend；provider 内部尺寸可以不同，但输出必须回到 render_size |
 | 步骤 5：Depth Postprocess | `src/stereo_runtime/runtime.py`, `src/stereo_runtime/synthesis.py` | 当前使用 normalized / relative depth 处理和轻量 postprocess；不能改写为 metric Z 路径 |
 | 步骤 6：Resolve Parallax Budget | `src/stereo_runtime/parallax.py`, `adapter.py`, `settings_snapshot.py` | 已有预算表、短边插值和超宽保护；legacy multiplier 只应留在显式兼容入口 |
-| 步骤 7：Disparity Field | `src/stereo_runtime/synthesis.py`, `baseline_shift.py`, `openxr_render.py` | 主语义为 `depth_response * max_disparity_px`；near/far 和 response 必须在 metadata 中可追踪 |
+| 步骤 7：Disparity Field | `src/stereo_runtime/synthesis.py`, `baseline_shift.py`, `openxr_render.py` | 主语义为 `depth_response * max_disparity_px * depth_strength`；near/far、response 和 depth_strength 必须在 metadata / shader uniforms 中可追踪 |
 | 步骤 8：Stereo Warp | `src/stereo_runtime/synthesis.py`, `baseline_shift.py`, `layers.py`, OpenXR shader paths | full synthesis 已有 baseline/layered DIBR；OpenXR D3D11 direct shader 仍需追平 OpenGL direct 的核心 DIBR 质量语义 |
 | 步骤 9：Mask and Hole Fill | `src/stereo_runtime/synthesis.py`, `layers.py` | 已有 edge-aware / directional fill 路径；AI inpainting 只作为未来离线/质量候选 |
 | 步骤 10：Temporal Stabilization | `src/stereo_runtime/runtime.py`, `pipeline.py`, `settings_snapshot.py` | 已有 scene/render_size/source/settings reset 机制；temporal 只做稳定，不改变 parallax budget |
@@ -131,15 +131,15 @@ GUI 设计规则：
 on_stereo_hot_param_change()
 -> _schedule_stereo_hot_save()
 -> _save_stereo_hot_params()
--> 更新 settings.yaml 中 Stereo Preset / Stereo Quality / IPD / Stereo Scale / Convergence / Depth Strength / Max Shift Ratio / Temporal / Hole Fill / Edge 等字段
+-> 更新 settings.yaml 中 Stereo Preset / Stereo Quality / Convergence / Depth Strength / Parallax Budget / Temporal / Hole Fill / Edge 等规范字段
 ```
 
 后续规范要求：
 
 ```text
-settings.yaml hot save 只能作为兼容机制。
-新热更新路径应收敛到 RuntimeSettingsSnapshot + settings_update_q。
-GUI 写 settings.yaml 后，runtime 可以继续由 StereoHotReloader 兼容读取。
+settings.yaml hot save 是持久化配置写入路径，不承担线程间实时共享语义。
+运行时热更新语义收敛到 RuntimeSettingsSnapshot + settings_update_q。
+GUI 写 settings.yaml 后，runtime 由 StereoHotReloader 读取规范字段；不再接受 IPD / Stereo Scale / Max Shift Ratio 作为兼容强度入口。
 ```
 
 ## 配置与 settings.yaml 契约
@@ -163,7 +163,7 @@ src/settings.yaml
 | Runtime target | `Run Mode` | Local Viewer / 3D Monitor / Stream / OpenXR Link 等 GUI 运行目标 |
 | Depth model | `Depth Model`, `Depth Resolution`, `Model List` | 模型选择和推理尺寸 |
 | Device/backend | `Computing Device`, `TensorRT`, `MIGraphX`, `CoreML`, `OpenVINO`, `torch.compile`, `FP16` | 平台加速选择 |
-| Stereo | `Stereo Preset`, `Stereo Quality`, `Synthetic View`, `Depth Strength`, `Convergence`, `Max Shift Ratio`, `Stereo Scale`, `IPD` | 当前 legacy 立体参数 |
+| Stereo | `Stereo Preset`, `Stereo Quality`, `Synthetic View`, `Depth Strength`, `Convergence`, `Parallax Budget Preset`, `Max Disparity Px` | 当前规范立体参数；Depth Strength 是用户连续强度 gain，Parallax Budget 是档位预算，Convergence 是零视差平面 |
 | Synthesis postprocess | `Temporal Strength`, `Scene Reset Threshold`, `Edge Dilation`, `Mask Feather Radius`, `Hole Fill Mode`, `Edge Threshold`, `Foreground Scale`, `Anti-aliasing` | 稳定、mask、补洞、depth postprocess |
 | Output | `Display Mode`, `Anaglyph Method`, `Cross Eyed`, `Fill 16:9`, `Fix Viewer Aspect`, `VSync` | 本地/推流封装与显示 |
 | OpenXR | `XR Preview Window`, `Controller Model`, `Environment Model` | OpenXR viewer 行为 |
@@ -174,7 +174,7 @@ src/settings.yaml
 ```text
 1. settings.yaml 是持久化配置，不是线程间实时共享对象。
 2. runtime 内部使用规范化后的 dataclass，不直接依赖原始 YAML 字段名。
-3. legacy 字段 IPD / Stereo Scale / Max Shift Ratio 继续读取，但 normalized-depth 新路径已通过 adapter / 兼容入口映射到 max_disparity_px / parallax_budget；旧字段不作为核心强度语义。
+3. normalized-depth 路径只读取 parallax budget / max_disparity_px 规范字段；IPD / Stereo Scale / Max Shift Ratio 不再作为配置、热更新或 adapter 兼容入口。
 4. 保存配置时不得清空用户未显示的有效字段。
 ```
 
@@ -506,7 +506,7 @@ OpenXR direct 路径：
 rgb_frame
 -> depth_provider.predict_profile()
 -> _prepare_openxr_rgb_depth(depth)
--> OpenXRRuntimeResult(source_rgb=rgb_frame, depth=prepared_depth, left_eye=rgb_frame, right_eye=rgb_frame)
+-> OpenXRRuntimeResult(source_rgb=rgb_frame, depth=prepared_depth, left_eye=rgb_frame, right_eye=rgb_frame, shader_uniforms=max_disparity_px/depth_strength/convergence/render_size/screen_roll)
 -> runtime_output_format = openxr_rgb_depth
 ```
 
@@ -561,21 +561,22 @@ src/stereo_runtime/synthesis.py:synthesize_stereo()
 | `quality_4k` | layered synthesis 质量路径 |
 | `hq_4k` | 更高层数/更重质量路径 |
 
-当前 legacy 位移参数：
+当前规范位移参数：
 
 ```text
 depth_strength
 convergence
-ipd / ipd_mm
-max_shift_ratio
-stereo_scale
+parallax_budget_preset
+max_disparity_px
 ```
 
-规范目标参数：
+shader 派生参数：
 
 ```text
 depth_response(depth, convergence)
 max_disparity_px
+depth_strength
+disparity_px = depth_response * max_disparity_px * depth_strength
 left_shift_px = +disparity_px / 2
 right_shift_px = -disparity_px / 2
 ```
@@ -806,15 +807,15 @@ RTMP/低延迟编码路径应复用 RuntimeSettingsSnapshot 和 Output Packing F
 GUI hot save -> settings.yaml
 StereoHotReloader(settings_path=src/settings.yaml)
 RuntimeCallbacks.apply_stereo_hot_reload_if_needed()
-OpenXRStateController.update_runtime_config(ipd/depth_ratio/convergence/stereo_scale/max_shift_ratio/screen_roll)
+OpenXRStateController.update_runtime_config(snapshot/depth_strength/convergence/parallax_preset/max_disparity_px/screen_roll)
 ```
 
 现状说明：
 
 ```text
-当前 OpenXR hot reload 仍是 legacy 参数语义。
-当前规范目标是 RuntimeSettingsSnapshot。
-短期 adapter 负责 legacy 字段转换。
+当前 OpenXR hot reload 使用 RuntimeSettingsSnapshot 语义。
+旧 IPD / Stereo Scale / Max Shift Ratio 兼容入口已清理。
+adapter 只负责规范字段归一化，不再把旧强度链转换为 parallax budget。
 ```
 
 目标路径：
@@ -968,21 +969,21 @@ scripts/tools/openxr_visual_regression.py
 
 | 领域 | 当前状态 | 剩余要求 |
 |---|---|---|
-| Parallax formula | 已有 `resolve_parallax_budget(render_width, render_height, preset)`，normalized-depth 主路径使用 `max_disparity_px` / `parallax_budget_preset` 语义，并保留 legacy 字段兼容入口 | 清理旧 `IPD/stereo_scale/depth_strength/max_shift_ratio` 作为核心强度乘数的兼容冗余；该项属于 Future Work |
+| Parallax formula | 已有 `resolve_parallax_budget(render_width, render_height, preset)`，normalized-depth 主路径使用 `max_disparity_px` / `parallax_budget_preset` 解析档位预算，并使用 `depth_strength` 连续缩放实际视差位移；旧 `IPD/stereo_scale/max_shift_ratio` 配置、热更新和 adapter 兼容入口已清理 | 继续通过测试防止旧强度链回流；Depth Strength 保留为用户可调强度 gain，不作为旧物理 IPD 链的一部分 |
 | RuntimeSettingsSnapshot | 已有 `RuntimeSettingsSnapshot`、`settings_update_q`、帧边界应用、热更新分级、结构化 result 字段 | GUI live hot-save 仍需进一步收敛为直接发送 snapshot；settings.yaml + StereoHotReloader 只保留为兼容路径 |
 | Capture metadata | 已有 `CapturedFrame` / `FrameCopyMode`，event/polling runner 会携带 source、device、dtype、copy_mode、capture_size 等 metadata，并进入 runtime debug | 真实硬件 CUDA/ROCm zero-copy 仍需设备验证后才能把路径标成 true zero-copy |
 | Capture preprocess device contract | 已显式处理 numpy / CPU tensor / CUDA tensor / ROCm tensor 形态，并记录 origin/output device 与 transfer metadata | 跨设备 fallback 和硬件路径仍需按目标机器补充验证矩阵 |
-| OpenXR direct uniforms | 已输出规范 `shader_uniforms`，字段以 `max_disparity_px`、`depth_response`、`convergence`、`render_size`、`screen_roll` 为主；OpenGL 与 D3D11 RGB+D direct 调用层均按 `max_disparity_px / render_width` 派生 shader 位移，不再消费 IPD / Stereo Scale / Max Shift Ratio 旧强度链 | D3D11 native direct shader 仍需追平 OpenGL direct shader 的完整 DIBR 质量语义；这是独立 follow-up |
+| OpenXR direct uniforms | 已输出规范 `shader_uniforms`，字段以 `max_disparity_px`、`depth_strength`、`depth_response`、`convergence`、`render_size`、`screen_roll` 为主；OpenGL 与 D3D11 RGB+D direct 调用层均按 `max_disparity_px / render_width` 派生每眼 shader offset，并使用同一 `depth_strength` 放大实际视差位移，不再消费 IPD / Stereo Scale / Max Shift Ratio 旧强度链 | D3D11 native direct shader 仍需追平 OpenGL direct shader 的完整 DIBR 质量语义；这是独立 follow-up |
 | Render Size / 4K scale tier | 已收敛为固定 scale 档位 Render Scale：非 4K 保持 capture_size；4K 级输入按 4K/3K/2K/1K 稳定 scale 档位解析，并保持横屏、竖屏、16:10、DCI 4K、常见 4K 超宽比例；判断排除面积不足的窄高/1440p 超宽；旧 numeric / short alias Render Scale 输入已清理为默认回退 | 继续通过测试防止重新引入 `0.75`、`75%`、`2K` 等用户侧别名；无新的运行时语义待办 |
 | Debug / result contract | `StereoRuntimeResult` / `OpenXRRuntimeResult` 已暴露 output/timing/provider 结构化字段；每帧 debug_info 已补齐 application_runtime_target、stereo_synthesis_mode、transport、output_transport、capture/render/depth size 和 active settings metadata | debug-only 兼容键仍按兼容清理表逐步移除；host/viewer 新消费路径应继续优先读结构化字段 |
 | Network stream | MJPEG/legacy stream 已消费 packed frame，并引入 `EncoderProfile` 描述 transport 侧 resize、pixel format、quality/FPS 等 | RTMP/更低延迟编码仍是后续工程；不能重新定义立体参数语义 |
 
 ## 后续实施优先级
 
-1. 完成 GUI live hot-save 到 `RuntimeSettingsSnapshot` 的直接发送路径，把 settings.yaml polling 降为明确兼容机制。
+1. 完成 GUI live hot-save 到 `RuntimeSettingsSnapshot` 的直接发送路径，把 settings.yaml polling 降为持久化同步路径。
 2. 做 D3D11 native OpenXR direct shader parity，使其核心 DIBR 质量语义追平 OpenGL direct shader。
 3. 做 CUDA/ROCm capture zero-copy 硬件验证，只有实测无 CPU 中转后才允许把 metadata 标为 `zero_copy=True`。
-4. 清理兼容冗余：旧 snapshot/API 字段、debug-only 兼容字段、legacy parallax 乘数字段；render-scale 数值/短写别名已清理，后续只需防回归。
+4. 清理兼容冗余：旧 snapshot/API 字段、debug-only 兼容字段；legacy parallax 乘数字段和 render-scale 数值/短写别名已清理，后续只需防回归。
 5. 继续完善 network_stream 的 encoder transport contract，尤其是 RTMP/低延迟编码路径，但保持其只消费 packed synthesis 输出。
 
 ## 结论

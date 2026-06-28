@@ -37,7 +37,6 @@ class RuntimeExports:
     render_size_config: RenderSizeConfig
     show_fps: bool
     depth_strength: float
-    ipd: float
     convergence: float
     capture_mode: str
     window_title: str | None
@@ -108,7 +107,6 @@ def resolve_runtime_exports(settings: dict, *, os_name: str) -> RuntimeExports:
         render_size_config=viewer_settings.render_size_config,
         show_fps=viewer_settings.show_fps,
         depth_strength=viewer_settings.depth_strength,
-        ipd=viewer_settings.ipd,
         convergence=viewer_settings.convergence,
         capture_mode=viewer_settings.capture_mode,
         window_title=viewer_settings.window_title,

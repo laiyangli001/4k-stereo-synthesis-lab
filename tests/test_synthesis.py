@@ -31,38 +31,24 @@ def make_inputs(width=64, height=32):
     return rgb, depth
 
 
-def test_legacy_shift_params_use_runtime_ipd_mm_with_stereo_scale():
+def test_shift_params_use_explicit_max_disparity_budget():
     depth = torch.ones(1, 1, 1, 1)
-    runtime_ipd_scaled = compute_shift_px(
+    shift = compute_shift_px(
         depth,
         1000,
         ShiftParams(
             depth_strength=1.0,
             convergence=0.0,
-            ipd_mm=32.0,
-            stereo_scale=0.35,
-            max_shift_ratio=0.05,
-            parallax_preset="legacy",
+            max_disparity_px=20.0,
+            parallax_preset="standard",
         ),
     )
-    direct_effective_baseline = compute_shift_px(
-        depth,
-        1000,
-        ShiftParams(
-            depth_strength=1.0,
-            convergence=0.0,
-            ipd=0.0112,
-            ipd_mm=None,
-            max_shift_ratio=0.05,
-            parallax_preset="legacy",
-        ),
-    )
-    assert torch.allclose(runtime_ipd_scaled, direct_effective_baseline)
+    assert torch.allclose(shift, torch.full_like(depth, -10.0))
 
 
 def test_convergence_zeroes_shift_at_screen_plane():
     depth = torch.full((1, 1, 2, 2), 0.45)
-    shift = compute_shift_px(depth, 3840, ShiftParams(convergence=0.45, ipd_mm=32.0, stereo_scale=0.35))
+    shift = compute_shift_px(depth, 3840, ShiftParams(convergence=0.45, max_disparity_px=20.0))
     assert torch.count_nonzero(shift) == 0
 
 def test_normal_sbs_eye_order_uses_left_then_right_views():
@@ -74,9 +60,7 @@ def test_normal_sbs_eye_order_uses_left_then_right_views():
         fused=False,
         depth_strength=2.0,
         convergence=0.0,
-        ipd_mm=32.0,
-        stereo_scale=0.35,
-        max_shift_ratio=0.05,
+        max_disparity_px=6.0,
     )
     result = synthesize_stereo(rgb, depth, config)
     expected_shift = compute_shift_px(
@@ -85,10 +69,7 @@ def test_normal_sbs_eye_order_uses_left_then_right_views():
         ShiftParams(
             depth_strength=config.depth_strength,
             convergence=config.convergence,
-            ipd=config.ipd,
-            max_shift_ratio=config.max_shift_ratio,
-            ipd_mm=config.ipd_mm,
-            stereo_scale=config.stereo_scale,
+            max_disparity_px=config.max_disparity_px,
             parallax_preset=config.parallax_preset,
         ),
     )
@@ -101,7 +82,7 @@ def test_normal_sbs_eye_order_uses_left_then_right_views():
     assert torch.equal(result.sbs[..., :, 64:], expected_right)
 
 
-def test_layered_quality_legacy_preset_uses_runtime_ipd_mm_with_stereo_scale():
+def test_layered_quality_uses_resolved_parallax_budget_fields():
     rgb, depth = make_inputs(width=64, height=32)
     config = StereoConfig(
         backend="quality_4k",
@@ -112,10 +93,8 @@ def test_layered_quality_legacy_preset_uses_runtime_ipd_mm_with_stereo_scale():
         fused=False,
         depth_strength=1.0,
         convergence=0.0,
-        ipd_mm=32.0,
-        stereo_scale=0.35,
-        max_shift_ratio=0.05,
-        parallax_preset="legacy",
+        max_disparity_px=6.0,
+        parallax_preset="strong",
     )
 
     result = synthesize_stereo(rgb, depth, config)
@@ -126,15 +105,13 @@ def test_layered_quality_legacy_preset_uses_runtime_ipd_mm_with_stereo_scale():
         ShiftParams(
             depth_strength=config.depth_strength,
             convergence=config.convergence,
-            ipd=config.ipd,
-            max_shift_ratio=config.max_shift_ratio,
-            ipd_mm=config.ipd_mm,
-            stereo_scale=config.stereo_scale,
+            max_disparity_px=config.max_disparity_px,
             parallax_preset=config.parallax_preset,
         ),
     )
     assert torch.allclose(result.debug_info["shift_px"], expected_shift)
-    assert result.debug_info["parallax_budget_preset"] == "legacy"
+    assert result.debug_info["parallax_budget_preset"] == "strong"
+    assert result.debug_info["resolved_max_disparity_px"] == 6.0
     assert result.debug_info["parallax_resolver_version"] == 1
 
 
@@ -190,7 +167,7 @@ def test_synthesis_debug_keeps_runtime_contract_scalars_without_debug_output():
 
 
 @pytest.mark.parametrize("backend", ["fast", "fast_plus", "quality_4k", "hq_4k"])
-def test_zero_stereo_scale_bypasses_all_binocular_difference(backend):
+def test_zero_max_disparity_bypasses_all_binocular_difference(backend):
     rgb, depth = make_inputs(width=64, height=32)
     config = StereoConfig(
         backend=backend,
@@ -199,10 +176,8 @@ def test_zero_stereo_scale_bypasses_all_binocular_difference(backend):
         fused=False,
         depth_strength=10.0,
         convergence=0.0,
-        ipd_mm=32.0,
-        stereo_scale=0.0,
-        max_shift_ratio=0.10,
-        parallax_preset="legacy",
+        max_disparity_px=0.0,
+        parallax_preset="standard",
         debug_output=True,
     )
 

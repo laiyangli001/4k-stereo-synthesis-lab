@@ -44,7 +44,8 @@ def test_stereo_presets_map_to_expected_modes():
     assert traditional.backend == "fast"
     assert traditional.temporal is False
     assert traditional.temporal_strength == 0.0
-    assert traditional.max_shift_ratio == 0.03
+    assert traditional.parallax_preset == "standard"
+    assert not hasattr(traditional, "max_shift_ratio")
     assert traditional.edge_dilation == 0
     assert traditional.depth_antialias_strength == 0.0
 
@@ -53,8 +54,9 @@ def test_stereo_presets_map_to_expected_modes():
     assert cinema.temporal is True
     assert cinema.auto_reset_temporal is True
     assert cinema.hole_fill_mode == "balanced"
-    assert cinema.ipd_mm == StereoConfig().ipd_mm
-    assert cinema.stereo_scale < 1.0
+    assert cinema.parallax_preset == "standard"
+    assert not hasattr(cinema, "ipd_mm")
+    assert not hasattr(cinema, "stereo_scale")
     for config in (traditional, cinema, game, still, debug):
         assert config.convergence == 0.0
         assert config.foreground_scale == 0.0
@@ -79,9 +81,8 @@ def test_preset_output_format_and_overrides():
     config = stereo_config_for_preset("cinema", output_format="full_sbs", overrides={"depth_strength": 2.25})
     assert config.output_format == "full_sbs"
     assert config.depth_strength == 2.25
-    runtime_override = stereo_config_for_preset("cinema", overrides={"ipd_mm": 63.0, "stereo_scale": 0.35})
-    assert runtime_override.ipd_mm == 63.0
-    assert runtime_override.stereo_scale == 0.35
+    runtime_override = stereo_config_for_preset("cinema", overrides={"parallax_preset": "strong"})
+    assert runtime_override.parallax_preset == "strong"
 
     with pytest.raises(ValueError, match="unknown config override"):
         stereo_config_for_preset("cinema", overrides={"not_a_field": 1})
@@ -93,11 +94,12 @@ def test_openxr_presets_map_shared_stereo_params():
     cinema = openxr_config_for_preset("cinema")
 
     assert isinstance(traditional, OpenXRRenderConfig)
-    assert traditional.max_shift_ratio == 0.03
+    assert traditional.parallax_preset == "standard"
+    assert not hasattr(traditional, "max_shift_ratio")
     assert isinstance(openxr, OpenXRRenderConfig)
     assert openxr.screen_roll == 0.5
     assert openxr.depth_strength < cinema.depth_strength
-    assert openxr.max_shift_ratio <= cinema.max_shift_ratio
+    assert openxr.parallax_preset == "comfort"
     for config in (traditional, openxr, cinema, openxr_config_for_preset("still_image_hq"), openxr_config_for_preset("debug_export")):
         assert config.convergence == 0.0
 

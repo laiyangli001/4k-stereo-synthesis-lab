@@ -278,7 +278,6 @@ class CoreSourceStateMixin:
                 if self._quad_layer_can_replace_projection_screen():
                     depth_strength *= float(getattr(self, '_xr_quad_layer_stereo_boost', 1.0))
                 payload.update(
-                    ipd=self.ipd_uv,
                     depth_strength=depth_strength,
                     convergence=self.convergence,
                 )

@@ -77,17 +77,6 @@ def test_runtime_config_maps_modes_and_stereo_params():
     assert stereo.layers == 2
 
 
-def test_runtime_config_allows_explicit_legacy_parallax_compatibility():
-    config = StereoRuntimeConfig(
-        model_id="lc700x/Distill-Any-Depth-Base-hf",
-        model_dir=r"D:\Desktop2Stereo\models\models--lc700x--Distill-Any-Depth-Base-hf",
-        parallax_preset="legacy",
-    )
-    stereo = stereo_config_from_runtime(config)
-
-    assert stereo.parallax_preset == "legacy"
-
-
 def test_runtime_config_from_d2s_settings_maps_parallax_budget_fields():
     config = runtime_config_from_d2s_settings(
         {
@@ -178,7 +167,7 @@ def test_runtime_config_from_d2s_settings_maps_legacy_model_and_trt_flags():
             "Run Mode": "Game",
             "Depth Strength": 1.8,
             "Convergence": 0.1,
-            "IPD": 0.07,
+            "Parallax Budget Preset": "strong",
         },
         cache_dir="./models",
         device="cuda",
@@ -193,9 +182,10 @@ def test_runtime_config_from_d2s_settings_maps_legacy_model_and_trt_flags():
     assert config.mode == "game"
     assert config.depth_strength == 1.8
     assert config.convergence == 0.1
-    assert config.ipd == 0.07
-    assert config.ipd_mm == 70.0
-    assert config.stereo_scale == 0.4
+    assert config.parallax_preset == "strong"
+    assert not hasattr(config, "ipd")
+    assert not hasattr(config, "ipd_mm")
+    assert not hasattr(config, "stereo_scale")
 
 
 def test_runtime_config_from_d2s_settings_maps_migraphx_flags_before_tensorrt():
@@ -256,7 +246,7 @@ def test_runtime_config_from_d2s_settings_accepts_traditional_fastest_preset():
             "Depth Model": "Distill-Any-Depth-Base",
             "Stereo Preset": "Traditional / Fastest",
             "Stereo Quality": "fast",
-            "Max Shift Ratio": 0.03,
+            "Parallax Budget Preset": "comfort",
             "Edge Dilation": 0,
             "Depth Antialias Strength": 0.0,
         },
@@ -267,7 +257,8 @@ def test_runtime_config_from_d2s_settings_accepts_traditional_fastest_preset():
     assert config.stereo_preset == "Traditional / Fastest"
     assert stereo.backend == "fast"
     assert stereo.temporal is False
-    assert stereo.max_shift_ratio == 0.03
+    assert stereo.parallax_preset == "comfort"
+    assert not hasattr(stereo, "max_shift_ratio")
     assert stereo.edge_dilation == 0
     assert stereo.depth_antialias_strength == 0.0
 
@@ -279,9 +270,7 @@ def test_runtime_config_from_d2s_settings_maps_realtime_stereo_options():
             "Stereo Preset": "Game / Low Latency",
             "Stereo Quality": "hq_4k",
             "Display Mode": "Anaglyph",
-            "Max Shift Ratio": 0.08,
-            "IPD mm": 63,
-            "Stereo Scale": 0.35,
+            "Parallax Budget Preset": "strong",
             "Temporal": False,
             "Temporal Strength": 0.4,
             "Auto Scene Reset": False,
@@ -304,10 +293,11 @@ def test_runtime_config_from_d2s_settings_maps_realtime_stereo_options():
     assert config.stereo_preset == "Game / Low Latency"
     assert stereo.backend == "hq_4k"
     assert stereo.output_format == "anaglyph"
-    assert stereo.max_shift_ratio == 0.08
-    assert stereo.ipd == 0.063
-    assert stereo.ipd_mm == 63.0
-    assert stereo.stereo_scale == 0.35
+    assert stereo.parallax_preset == "strong"
+    assert not hasattr(stereo, "max_shift_ratio")
+    assert not hasattr(stereo, "ipd")
+    assert not hasattr(stereo, "ipd_mm")
+    assert not hasattr(stereo, "stereo_scale")
     assert stereo.convergence == 0.0
     assert stereo.temporal is False
     assert stereo.temporal_strength == 0.4

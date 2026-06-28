@@ -10,7 +10,6 @@ def build_viewer_runtime_config(
     *,
     capture_mode,
     monitor_index,
-    ipd,
     depth_strength,
     convergence,
     display_mode,
@@ -41,9 +40,8 @@ def build_viewer_runtime_config(
     return ViewerRuntimeConfig(
         capture_mode=capture_mode,
         monitor_index=monitor_index,
-        ipd=ipd,
-        depth_strength=depth_strength,
         convergence=convergence,
+        initial_depth_strength=depth_strength,
         display_mode=display_mode,
         fill_16_9=fill_16_9,
         show_fps=show_fps,
@@ -69,7 +67,6 @@ def build_viewer_runtime_config(
 
 def build_openxr_runtime_config(
     *,
-    ipd,
     depth_strength,
     convergence,
     fps,
@@ -81,7 +78,6 @@ def build_openxr_runtime_config(
     monitor_index,
 ):
     return OpenXRRuntimeConfig(
-        ipd=ipd,
         depth_strength=depth_strength,
         convergence=convergence,
         fps=fps,

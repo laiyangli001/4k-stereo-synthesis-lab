@@ -185,8 +185,8 @@ class GUIBuilderMixin:
         left_labels = [
             self.depth_model_label, self.depth_resolution_label, self.depth_quick_label,
             self.convergence_label, self.depth_strength_label, self.foreground_scale_label,
-            self.antialiasing_label, self.stereo_preset_label, self.max_shift_label,
-            self.scene_reset_label, self.edge_dilation_label, self.mask_feather_label, self.hole_fill_mode_label, self.stereo_scale_label,
+            self.antialiasing_label, self.stereo_preset_label, self.parallax_budget_label,
+            self.scene_reset_label, self.edge_dilation_label, self.mask_feather_label, self.hole_fill_mode_label,
             self.acceleration_label, self.computing_device_label, self.capture_tool_label,
             self.target_fps_label, self.render_policy_label, self.render_fixed_label,
             self.render_min_dimension_label, self.run_mode_label,
@@ -195,7 +195,7 @@ class GUIBuilderMixin:
             self.stream_proto_label, self.audio_label, self.crf_label,
         ]
         right_labels = [
-            self.ipd_label, self.temporal_strength_label,
+            self.temporal_strength_label,
             self.reset_cooldown_label, self.edge_threshold_label, self.anaglyph_label,
             self.render_scale_label, self.render_max_pixels_label, self.render_align_label,
             self.display_mode_label, self.environment_label,
@@ -297,19 +297,7 @@ class GUIBuilderMixin:
             ft.Container(width=S(40)), self.antialiasing_label, self.antialiasing_dd,
         ], spacing=1)
 
-        # Row 4: IPD + stereo scale
-        self.ipd_label = ft.Text("IPD (mm):", size=FONT_SIZE, width=S(130))
-        self.ipd_dd = CompactDropdown(options=[str(i) for i in range(50, 71)], value="64",
-            width=S(130), on_select=self.on_stereo_hot_param_change)
-        self.stereo_scale_label = ft.Text("Stereo Scale:", size=FONT_SIZE, width=S(130))
-        self.stereo_scale_dd = CompactDropdown(options=[f"{i / 10:.1f}" for i in range(0, 11)],
-            value="0.4", width=S(130), on_select=self.on_stereo_hot_param_change)
-        row3 = ft.Row([
-            self.ipd_label, self.ipd_dd,
-            ft.Container(width=S(40)), self.stereo_scale_label, self.stereo_scale_dd,
-        ], spacing=1)
-
-        # Row 5: Stereo runtime mode. Backend quality is derived from this preset.
+        # Row 4: Stereo runtime mode + parallax budget.
         self.stereo_preset_label = ft.Text("Stereo Mode:", size=FONT_SIZE, width=S(130))
         self.stereo_preset_dd = CompactDropdown(
             options=["Traditional / Fastest", "Cinema", "Game / Low Latency", "Image  / High Quality"],
@@ -318,21 +306,22 @@ class GUIBuilderMixin:
         self.stereo_quality_dd = CompactDropdown(options=self._stereo_quality_options(),
             value=self._stereo_quality_to_display("quality_4k"), width=S(1))
         self.stereo_quality_dd.visible = False
+        self.parallax_budget_label = ft.Text("Parallax Budget:", size=FONT_SIZE, width=S(130))
+        self.parallax_budget_dd = CompactDropdown(options=self._parallax_budget_options(),
+            value=self._parallax_budget_to_display("standard"), width=S(130), on_select=self.on_stereo_hot_param_change)
+        stereo_row0 = ft.Row([self.stereo_preset_label, self.stereo_preset_dd,
+            ft.Container(width=S(40)), self.parallax_budget_label, self.parallax_budget_dd], spacing=1)
+
         self.hole_fill_mode_label = ft.Text("Hole Fill Mode:", size=FONT_SIZE, width=S(130))
         self.hole_fill_mode_dd = CompactDropdown(
             options=self._hole_fill_mode_options(),
             value=self._hole_fill_mode_to_display("balanced"), width=S(130), on_select=self.on_stereo_hot_param_change)
-        stereo_row0 = ft.Row([self.stereo_preset_label, self.stereo_preset_dd,
-            ft.Container(width=S(40)), self.hole_fill_mode_label, self.hole_fill_mode_dd], spacing=1)
+        hole_fill_row = ft.Row([self.hole_fill_mode_label, self.hole_fill_mode_dd], spacing=1)
 
-        self.max_shift_label = ft.Text("Max Shift Ratio:", size=FONT_SIZE, width=S(130))
-        self.max_shift_dd = CompactDropdown(options=[f"{i / 100:.2f}" for i in range(0, 11)],
-            value="0.05", width=S(130), on_select=self.on_stereo_hot_param_change)
         self.temporal_strength_label = ft.Text("Temporal Strength:", size=FONT_SIZE, width=S(130))
         self.temporal_strength_dd = CompactDropdown(options=[f"{i / 10:.1f}" for i in range(0, 11)],
             value="0.7", width=S(130), on_select=self.on_stereo_hot_param_change)
-        stereo_row1 = ft.Row([self.max_shift_label, self.max_shift_dd,
-            ft.Container(width=S(40)), self.temporal_strength_label, self.temporal_strength_dd], spacing=1)
+        stereo_row1 = ft.Row([self.temporal_strength_label, self.temporal_strength_dd], spacing=1)
 
         self.scene_reset_label = ft.Text("Scene Threshold:", size=FONT_SIZE, width=S(130))
         self.scene_reset_dd = CompactDropdown(options=["0.00", "0.12", "0.18", "0.22", "0.28", "0.35"],
@@ -367,7 +356,7 @@ class GUIBuilderMixin:
         self.advanced_stereo_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT,
             label="Advanced Stereo", value=False, on_change=self.on_advanced_stereo_change)
         advanced_stereo_row = ft.Row([self.advanced_stereo_cb], spacing=1)
-        self._advanced_stereo_rows = [convergence_depth_row, row2b, row3, stereo_row1, stereo_row2, stereo_row3, stereo_row3b, stereo_row4]
+        self._advanced_stereo_rows = [convergence_depth_row, row2b, stereo_row1, stereo_row2, stereo_row3, stereo_row3b, stereo_row4]
 
         # Acceleration group
         self.acceleration_label = ft.Text("Acceleration:", size=FONT_SIZE, width=S(130))
@@ -539,7 +528,7 @@ class GUIBuilderMixin:
 
         # Assembly
         depth_group = ft.Container(
-            ft.Column([row0, row1, stereo_row0, convergence_depth_row, row2b, row3,
+            ft.Column([row0, row1, stereo_row0, hole_fill_row, convergence_depth_row, row2b,
                        stereo_row1, stereo_row2, stereo_row3, stereo_row4,
                        self.row4a, self.row4b, self.row4c, advanced_stereo_row], spacing=S(8)),
             margin=ft.Margin(0, 0, 0, S(8)),

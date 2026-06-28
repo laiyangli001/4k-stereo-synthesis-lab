@@ -66,28 +66,31 @@ def test_gui_render_size_policy_is_fixed_to_scaled_for_load_and_save():
 
 def test_gui_hot_stereo_params_auto_save_on_select():
     all_text = _all_text()
+    config_mgr_text = _file_text("config_mgr.py")
+    builders_text = _file_text("builders.py")
     assert "def on_stereo_hot_param_change" in all_text
     assert "def _save_stereo_hot_params" in all_text
-    assert 'on_select=self.on_stereo_hot_param_change' in _file_text("builders.py")
-    assert '"IPD": self._display_ipd_mm_to_runtime_m(self.ipd_dd.value)' in _file_text("config_mgr.py")
-    assert '"Stereo Scale": self._parse_float(self.stereo_scale_dd.value' in _file_text("config_mgr.py")
-    assert '"Convergence": self._parse_float(self.convergence_dd.value' in _file_text("config_mgr.py")
-    assert '"Depth Strength": self._parse_float(self.depth_strength_dd.value' in _file_text("config_mgr.py")
-    assert '"Max Shift Ratio": self._parse_float(self.max_shift_dd.value' in _file_text("config_mgr.py")
-    assert '"Temporal Strength": temporal_strength' in _file_text("config_mgr.py")
-    assert '"Scene Reset Threshold": scene_reset_threshold' in _file_text("config_mgr.py")
-    assert '"Reset Cooldown Frames": self._parse_int(self.reset_cooldown_dd.value' in _file_text("config_mgr.py")
+    assert 'on_select=self.on_stereo_hot_param_change' in builders_text
+    assert '"IPD":' not in config_mgr_text
+    assert '"Stereo Scale":' not in config_mgr_text
+    assert '"Max Shift Ratio":' not in config_mgr_text
+    assert '"Parallax Budget Preset": parallax_budget' in config_mgr_text
+    assert '"Convergence": self._parse_float(self.convergence_dd.value' in config_mgr_text
+    assert '"Depth Strength": self._parse_float(self.depth_strength_dd.value' in config_mgr_text
+    assert '"Temporal Strength": temporal_strength' in config_mgr_text
+    assert '"Scene Reset Threshold": scene_reset_threshold' in config_mgr_text
+    assert '"Reset Cooldown Frames": self._parse_int(self.reset_cooldown_dd.value' in config_mgr_text
     assert "def _clamp_foreground_scale" in all_text
-    assert "fg_options = [f\"{i / 10:.1f}\" for i in range(-9, 0)]" in _file_text("builders.py")
-    assert '"Foreground Scale": foreground_scale' in _file_text("config_mgr.py")
-    assert '"Depth Antialias Strength": antialias_strength' in _file_text("config_mgr.py")
-    assert '"Edge Dilation": self._parse_int(self.edge_dilation_dd.value' in _file_text("config_mgr.py")
-    assert '"Mask Feather Radius": self._parse_int(self.mask_feather_dd.value' in _file_text("config_mgr.py")
-    assert '"Hole Fill Mode": self._display_to_hole_fill_mode(self.hole_fill_mode_dd.value)' in _file_text("config_mgr.py")
-    assert '"Edge Threshold": self._parse_float(self.edge_threshold_dd.value' in _file_text("config_mgr.py")
-    assert '"Anaglyph Method": self.anaglyph_dd.value' in _file_text("config_mgr.py")
-    assert '"Cross Eyed": bool(self.cross_eyed_cb.value)' in _file_text("config_mgr.py")
-    assert 'on_change=self.on_stereo_hot_param_change' in _file_text("builders.py")
+    assert "fg_options = [f\"{i / 10:.1f}\" for i in range(-9, 0)]" in builders_text
+    assert '"Foreground Scale": foreground_scale' in config_mgr_text
+    assert '"Depth Antialias Strength": antialias_strength' in config_mgr_text
+    assert '"Edge Dilation": self._parse_int(self.edge_dilation_dd.value' in config_mgr_text
+    assert '"Mask Feather Radius": self._parse_int(self.mask_feather_dd.value' in config_mgr_text
+    assert '"Hole Fill Mode": self._display_to_hole_fill_mode(self.hole_fill_mode_dd.value)' in config_mgr_text
+    assert '"Edge Threshold": self._parse_float(self.edge_threshold_dd.value' in config_mgr_text
+    assert '"Anaglyph Method": self.anaglyph_dd.value' in config_mgr_text
+    assert '"Cross Eyed": bool(self.cross_eyed_cb.value)' in config_mgr_text
+    assert 'on_change=self.on_stereo_hot_param_change' in builders_text
     assert "self._schedule_stereo_hot_save()" in all_text
 
 
@@ -116,7 +119,8 @@ def test_gui_scene_preset_loads_complete_advanced_stereo_controls():
     assert "self.reset_cooldown_dd.value" in block
     assert '"scene_reset_threshold"' in _file_text("config_mgr.py")
     assert '"reset_cooldown_frames"' in _file_text("config_mgr.py")
-    assert "self.stereo_scale_dd.value" in block
+    assert "self.parallax_budget_dd.value" in block
+    assert "self.stereo_scale_dd.value" not in block
     assert "on_select=self.on_stereo_preset_change" in _file_text("builders.py")
 
 
@@ -131,26 +135,21 @@ def test_advanced_stereo_is_not_persisted_and_starts_collapsed():
     assert 'cfg.get("Advanced Stereo"' not in all_text
 
 
-def test_hole_fill_mode_is_visible_next_to_stereo_mode_without_advanced_stereo():
+def test_parallax_budget_is_visible_next_to_stereo_mode_without_advanced_stereo():
     builders_text = _file_text("builders.py")
     row_start = builders_text.index("stereo_row0 = ft.Row([")
     row_end = builders_text.index("], spacing=1)", row_start)
     stereo_row = builders_text[row_start:row_end]
     assert "self.stereo_preset_label" in stereo_row
     assert "self.stereo_preset_dd" in stereo_row
-    assert "self.hole_fill_mode_label" in stereo_row
-    assert "self.hole_fill_mode_dd" in stereo_row
-    assert stereo_row.index("self.stereo_preset_dd") < stereo_row.index("self.hole_fill_mode_label")
+    assert "self.parallax_budget_label" in stereo_row
+    assert "self.parallax_budget_dd" in stereo_row
+    assert stereo_row.index("self.stereo_preset_dd") < stereo_row.index("self.parallax_budget_label")
     depth_start = builders_text.index("depth_group = ft.Container(")
     depth_end = builders_text.index("device_group = ft.Container(", depth_start)
     depth_block = builders_text[depth_start:depth_end]
     assert "stereo_row0" in depth_block
-    assert "hole_fill_mode_row" not in builders_text
-    advanced_start = builders_text.index("self._advanced_stereo_rows = [")
-    advanced_end = builders_text.index("]", advanced_start)
-    advanced_block = builders_text[advanced_start:advanced_end]
-    assert "self.hole_fill_mode_label" not in advanced_block
-    assert "self.hole_fill_mode_dd" not in advanced_block
+    assert "self.parallax_budget_dd" not in builders_text[builders_text.index("self._advanced_stereo_rows = ["):]
 
 
 def test_advanced_device_options_is_not_persisted_and_starts_collapsed():
@@ -259,19 +258,14 @@ def test_gui_environment_discovery_accepts_panorama_image_folders():
     assert "or _find_env_image_for_gui(room_dir)" in config_text
 
 
-def test_stereo_scale_control_is_next_to_ipd():
+def test_parallax_budget_control_replaces_ipd_and_stereo_scale_controls():
     builders_text = _file_text("builders.py")
-    assert 'self.ipd_dd = CompactDropdown(options=[str(i) for i in range(50, 71)]' in builders_text
-    assert 'self.stereo_scale_label = ft.Text("Stereo Scale:"' in builders_text
-    assert 'self.stereo_scale_dd = CompactDropdown(options=[f"{i / 10:.1f}" for i in range(0, 11)]' in builders_text
-    assert 'value="0.4", width=S(130), on_select=self.on_stereo_hot_param_change)' in builders_text
-    row_start = builders_text.index('row3 = ft.Row([')
-    row_end = builders_text.index('# Row 5: Stereo runtime mode. Backend quality is derived from this preset.', row_start)
-    row = builders_text[row_start:row_end]
-    assert 'self.ipd_dd' in row
-    assert 'self.stereo_scale_label' in row
-    assert 'self.stereo_scale_dd' in row
-    assert row.index('self.ipd_dd') < row.index('self.stereo_scale_label') < row.index('self.stereo_scale_dd')
+    assert "self.ipd_dd" not in builders_text
+    assert "self.stereo_scale_label" not in builders_text
+    assert "self.stereo_scale_dd" not in builders_text
+    assert "self.max_shift_dd" not in builders_text
+    assert 'self.parallax_budget_label = ft.Text("Parallax Budget:"' in builders_text
+    assert 'self.parallax_budget_dd = CompactDropdown(options=self._parallax_budget_options()' in builders_text
 
 
 def test_stereo_preset_exposes_four_mode_choices_without_auto_or_debug():
@@ -287,45 +281,31 @@ def test_stereo_preset_exposes_four_mode_choices_without_auto_or_debug():
     assert '"Debug / Export"]' not in builders_text
 
 
-def test_ipd_display_maps_to_calibrated_runtime_value():
-    import ast
-
+def test_ipd_display_helpers_removed_from_gui_config():
     config_mgr_text = _file_text("config_mgr.py")
-    tree = ast.parse(config_mgr_text)
-    wanted = {
-        "_IPD_RUNTIME_PER_DISPLAY_MM",
-        "_runtime_ipd_to_display_mm",
-        "_display_ipd_mm_to_runtime_m",
-        "_parse_int",
-    }
-    class_node = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "GUIConfigMixin")
-    selected = [
-        node
-        for node in class_node.body
-        if isinstance(node, (ast.Assign, ast.FunctionDef))
-        and ((isinstance(node, ast.Assign) and any(getattr(target, "id", None) in wanted for target in node.targets)) or getattr(node, "name", None) in wanted)
-    ]
-    module = ast.Module(body=[ast.ClassDef(name="GUIConfigMixin", bases=[], keywords=[], body=selected, decorator_list=[])], type_ignores=[])
-    ast.fix_missing_locations(module)
-    namespace = {"DEFAULTS": {"IPD": 0.032}}
-    exec(compile(module, "config_mgr.py", "exec"), namespace)
-    mixin = namespace["GUIConfigMixin"]
-
-    assert mixin._runtime_ipd_to_display_mm(0.032) == 64
-    assert mixin._runtime_ipd_to_display_mm(0.064) == 64
-    assert mixin._display_ipd_mm_to_runtime_m("60") == 0.030
-    assert mixin._display_ipd_mm_to_runtime_m("64") == 0.032
-    assert mixin._display_ipd_mm_to_runtime_m("70") == 0.035
+    assert "_IPD_RUNTIME_PER_DISPLAY_MM" not in config_mgr_text
+    assert "_runtime_ipd_to_display_mm" not in config_mgr_text
+    assert "_display_ipd_mm_to_runtime_m" not in config_mgr_text
 
 
-def test_stereo_scale_has_tooltips():
+def test_parallax_budget_standard_display_is_localized():
+    from gui.localization import display_to_parallax_budget, parallax_budget_options, parallax_budget_to_display
+
+    assert parallax_budget_to_display("standard", "EN") == "Standard"
+    assert parallax_budget_to_display("standard", "CN") == "标准"
+    assert parallax_budget_options("EN") == ["Comfort", "Standard", "Strong", "Extreme"]
+    assert display_to_parallax_budget("Standard") == "standard"
+    assert display_to_parallax_budget("标准") == "standard"
+
+
+def test_parallax_budget_has_tooltips_without_legacy_ipd_scale_tooltips():
     all_text = _all_text()
     localization_text = _localization_source().read_text(encoding="utf-8")
-    assert '"tooltip_ipd": "Binocular IPD, displayed in mm' in localization_text
-    assert '"tooltip_ipd": "双眼瞳距，单位 mm' in localization_text
-    assert '"tooltip_stereo_scale": "Stereo strength multiplier; lower values reduce parallax' in localization_text
-    assert '"tooltip_stereo_scale": "立体强度倍率；数值越低视差越小' in localization_text
-    assert '(self.stereo_scale_dd, "tooltip_stereo_scale")' in all_text
+    assert '"tooltip_parallax_budget": "Maximum stereo parallax budget resolved from render size' in localization_text
+    assert '"tooltip_parallax_budget": "根据渲染尺寸解析最大视差预算' in localization_text
+    assert '"tooltip_ipd"' not in localization_text
+    assert '"tooltip_stereo_scale"' not in localization_text
+    assert '(self.parallax_budget_dd, "tooltip_parallax_budget")' in all_text
 
 
 def test_convergence_and_foreground_scale_tooltips_explain_tuning():
@@ -361,20 +341,20 @@ def test_convergence_dropdown_uses_five_percent_steps():
     assert 'self.convergence_dd.value = f"{values[\'convergence\']:.2f}"' in handlers_text
 
 
-def test_stereo_scale_label_is_localized():
+def test_parallax_budget_label_is_localized():
     handlers_text = _file_text("handlers.py")
     localization_text = _localization_source().read_text(encoding="utf-8")
-    assert '"Stereo Scale:": "Stereo Scale:"' in localization_text
-    assert '"Stereo Scale:": "立体缩放:"' in localization_text
+    assert '"Parallax Budget:": "Parallax Budget:"' in localization_text
+    assert '"Parallax Budget:": "视差预算:"' in localization_text
+    assert '"Stereo Scale:"' not in localization_text
     assert '"Convergence:": "会聚位置:"' in localization_text
     assert '"Convergence:": "会聚点:"' not in localization_text
-    assert 'self.stereo_scale_label.value = t["Stereo Scale:"]' in handlers_text
+    assert 'self.parallax_budget_label.value = t["Parallax Budget:"]' in handlers_text
 
 
-def test_cn_ipd_and_antialiasing_labels_are_user_facing():
+def test_cn_antialiasing_labels_are_user_facing_without_legacy_ipd():
     localization_text = _localization_source().read_text(encoding="utf-8")
-    assert '"IPD (m):": "IPD (mm):"' in localization_text
-    assert '"IPD (m):": "双眼瞳距:"' in localization_text
+    assert '"IPD (m):"' not in localization_text
     assert '"Anti-aliasing:": "Anti-aliasing:"' in localization_text
     assert '"Anti-aliasing:": "抗锯齿值:"' in localization_text
     assert '"Depth Resolution:": "深度细节:"' in localization_text
@@ -397,12 +377,11 @@ def test_stereo_quality_options_are_localized():
     assert 'return stereo_quality_options(self.locale)' in _file_text("config_mgr.py")
 
 
-def test_shift_ratio_and_edge_threshold_options_are_dense():
+def test_edge_threshold_options_are_dense_without_legacy_shift_ratio():
     builders_text = _file_text("builders.py")
     localization_text = _localization_source().read_text(encoding="utf-8")
-    assert '"Max Shift Ratio:": "Shift Ratio:"' in localization_text
-    assert '"Max Shift Ratio:": "位移比例:"' in localization_text
-    assert 'self.max_shift_dd = CompactDropdown(options=[f"{i / 100:.2f}" for i in range(0, 11)]' in builders_text
+    assert '"Max Shift Ratio:"' not in localization_text
+    assert "self.max_shift_dd" not in builders_text
     assert 'self.edge_threshold_dd = CompactDropdown(options=[f"{i / 100:.2f}" for i in range(0, 11)]' in builders_text
     assert 'self.mask_feather_dd = CompactDropdown(options=["0", "1", "2", "3", "4", "5"]' in builders_text
     assert 'self.temporal_strength_dd = CompactDropdown(options=[f"{i / 10:.1f}" for i in range(0, 11)]' in builders_text
@@ -434,16 +413,26 @@ def test_reset_defaults_restore_cinema_stereo_defaults():
     assert '"Stereo Preset": "cinema"' in config_text
     assert '"Depth Strength": 2.5' in config_text
     assert '"Depth Quick": "Standard"' in config_text
-    assert '"IPD": 0.032' in config_text
+    assert '"IPD":' not in config_text
     assert '"Foreground Scale": 0.0' in config_text
     assert '"Convergence": 0.0' in config_text
-    assert '"Stereo Scale": 0.4' in config_text
+    assert '"Parallax Budget Preset": "standard"' in config_text
+    assert '"Stereo Scale":' not in config_text
     assert '"Anti-aliasing": 1' in config_text
     assert '"Depth Antialias Strength": 1.0' in config_text
     assert '"Mask Feather Radius": 3' in config_text
     assert '"Hole Fill Mode": "balanced"' in config_text
     assert "dynamic_defaults = DEFAULTS.copy()" in process_text
     assert "self.apply_config(dynamic_defaults, keep_optional=False)" in process_text
+
+
+def test_stereo_mode_presets_keep_expected_parallax_budget_combinations():
+    config_mgr_text = _file_text("config_mgr.py")
+
+    assert '"traditional_fastest": {\n                "quality": "fast", "parallax_budget": "standard"' in config_mgr_text
+    assert '"cinema": {\n                "quality": "quality_4k", "parallax_budget": "standard"' in config_mgr_text
+    assert '"game_low_latency": {\n                "quality": "fast_plus", "parallax_budget": "comfort"' in config_mgr_text
+    assert '"still_image_hq": {\n                "quality": "hq_4k", "parallax_budget": "strong"' in config_mgr_text
 
 
 def test_hole_fill_mode_gui_control_is_localized_and_hot_reloadable():

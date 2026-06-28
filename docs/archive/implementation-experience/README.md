@@ -4,13 +4,13 @@ This folder contains implementation notes, parameter guides, reports, and host A
 
 These files are retained for historical context only. They are not the current normative runtime specification. For current behavior, prefer:
 
-- [../../25-2d-to-3d-runtime-specification.md](../../25-2d-to-3d-runtime-specification.md)
+- [../../28-Realtime-2d-to-3d-specification.md](../../28-Realtime-2d-to-3d-specification.md)
 - [../../26-desktop2stereo-engineering-design-specification.md](../../26-desktop2stereo-engineering-design-specification.md)
+- [../../13-realtime-stereo-parameter-guide.md](../../13-realtime-stereo-parameter-guide.md)
 - [../../00-api-handoff-progress.md](../../00-api-handoff-progress.md)
 
 Archived files:
 
-- [13-realtime-stereo-parameter-guide.md](13-realtime-stereo-parameter-guide.md)
 - [14-host-api-preset-examples.md](14-host-api-preset-examples.md)
 - [15-host-api-contract.md](15-host-api-contract.md)
 - [21-openxr-ghosting-test-report.md](21-openxr-ghosting-test-report.md)

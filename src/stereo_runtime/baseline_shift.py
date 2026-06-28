@@ -13,10 +13,6 @@ from .parallax import parallax_debug_info, resolve_parallax_budget
 class ShiftParams:
     depth_strength: float = 2.0
     convergence: float = 0.0
-    ipd: float = 0.064
-    max_shift_ratio: float = 0.05
-    ipd_mm: float | None = 32.0
-    stereo_scale: float = 0.4
     max_disparity_px: float | None = None
     parallax_preset: str = "standard"
 
@@ -57,15 +53,11 @@ def compute_shift_px(depth: torch.Tensor, width: int, params: ShiftParams) -> to
         render_width=width,
         render_height=height,
         preset=params.parallax_preset,
-        depth_strength=params.depth_strength,
-        stereo_scale=params.stereo_scale,
         convergence=params.convergence,
-        ipd_mm=params.ipd_mm,
-        max_shift_ratio=params.max_shift_ratio,
-        ipd=params.ipd,
         max_disparity_px=params.max_disparity_px,
     )
-    return -budget.depth_response(depth) * budget.max_disparity_px * 0.5
+    depth_strength = max(0.0, float(params.depth_strength))
+    return -budget.depth_response(depth) * depth_strength * budget.max_disparity_px * 0.5
 
 
 def shift_debug_info(depth: torch.Tensor, width: int, params: ShiftParams) -> dict[str, float | int | str]:
@@ -74,12 +66,7 @@ def shift_debug_info(depth: torch.Tensor, width: int, params: ShiftParams) -> di
         render_width=width,
         render_height=height,
         preset=params.parallax_preset,
-        depth_strength=params.depth_strength,
-        stereo_scale=params.stereo_scale,
         convergence=params.convergence,
-        ipd_mm=params.ipd_mm,
-        max_shift_ratio=params.max_shift_ratio,
-        ipd=params.ipd,
         max_disparity_px=params.max_disparity_px,
     )
     return parallax_debug_info(budget)

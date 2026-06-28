@@ -18,7 +18,6 @@ BASE_SETTINGS = {
     "Language": "EN",
     "Show FPS": False,
     "Depth Strength": 2.0,
-    "IPD": 0.064,
     "Convergence": 0.0,
     "Fill 16:9": True,
     "Upscaler": "Off",
@@ -35,6 +34,7 @@ def test_resolve_viewer_settings_reads_vsync_key():
     resolved = resolve_viewer_settings(settings)
 
     assert resolved.local_vsync is False
+    assert not hasattr(resolved, "ipd")
 
 
 def test_resolve_viewer_settings_requires_vsync_key():

@@ -38,10 +38,6 @@ class StereoConfig:
     debug_output: bool = False
     depth_strength: float = 2.0
     convergence: float = 0.0
-    ipd: float = 0.064
-    max_shift_ratio: float = 0.05
-    ipd_mm: float | None = 32.0
-    stereo_scale: float = 0.4
     max_disparity_px: float | None = None
     parallax_preset: str = "standard"
     temporal_strength: float = 0.85
@@ -77,10 +73,6 @@ def _layered_synthesis(rgb: torch.Tensor, depth: torch.Tensor, config: StereoCon
     params = ShiftParams(
         depth_strength=config.depth_strength,
         convergence=config.convergence,
-        ipd=config.ipd,
-        max_shift_ratio=config.max_shift_ratio,
-        ipd_mm=config.ipd_mm,
-        stereo_scale=config.stereo_scale,
         max_disparity_px=config.max_disparity_px,
         parallax_preset=config.parallax_preset,
     )
@@ -256,10 +248,6 @@ def synthesize_stereo(
         params = ShiftParams(
             depth_strength=config.depth_strength,
             convergence=config.convergence,
-            ipd=config.ipd,
-            max_shift_ratio=config.max_shift_ratio,
-            ipd_mm=config.ipd_mm,
-            stereo_scale=config.stereo_scale,
             max_disparity_px=config.max_disparity_px,
             parallax_preset=config.parallax_preset,
         )

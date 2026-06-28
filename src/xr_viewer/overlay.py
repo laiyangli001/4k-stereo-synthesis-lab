@@ -68,7 +68,7 @@ class OverlayMixin:
       self._mod_state, self._caps_lock,
       self._head_pos_w, self._head_fwd_w,
       self.ctx,
-      self.ipd_uv, self.frame_size, self._screen_visible,
+      self.frame_size, self._screen_visible,
       self._screen_yaw, self._screen_pitch, self._screen_roll,
       self._screen_pan_x, self._screen_pan_y, self._corner_radius,
       self._bg_color_idx, self._BG_COLORS,

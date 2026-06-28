@@ -6,7 +6,6 @@ from typing import Callable
 
 @dataclass
 class OpenXRRuntimeConfig:
-    ipd: float
     depth_strength: float
     convergence: float
     fps: int
@@ -85,7 +84,6 @@ def run_openxr_mode(runtime_q, config: OpenXRRuntimeConfig, callbacks: OpenXRRun
     width, height = frame_size_from_runtime_result(runtime_result)
     try:
         viewer = OpenXRViewer(
-            ipd=config.ipd,
             depth_strength=config.depth_strength,
             convergence=config.convergence,
             frame_size=(width, height),

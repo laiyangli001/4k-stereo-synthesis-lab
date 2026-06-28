@@ -1,4 +1,4 @@
-﻿import queue
+import queue
 from types import SimpleNamespace
 
 from app_runtime.runtime_context import (

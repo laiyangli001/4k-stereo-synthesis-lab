@@ -30,10 +30,6 @@ def runtime_stereo_overrides(runtime) -> dict:
         "backend": config.stereo_quality,
         "depth_strength": config.depth_strength,
         "convergence": config.convergence,
-        "ipd": config.ipd,
-        "ipd_mm": config.ipd_mm,
-        "stereo_scale": config.stereo_scale,
-        "max_shift_ratio": config.max_shift_ratio,
         "max_disparity_px": getattr(config, "max_disparity_px", None),
         "parallax_preset": getattr(config, "parallax_preset", "standard"),
         "temporal": config.temporal,
@@ -135,13 +131,6 @@ def _add_rebuild_fields_if_changed(values: dict, settings_dict: dict, config) ->
 
 
 def hot_reload_value_snapshot(settings_dict: dict, config) -> dict:
-    ipd_raw = settings_dict.get(
-        "IPD mm",
-        settings_dict.get("IPD (mm)", settings_dict.get("IPD", config.ipd_mm or 32.0)),
-    )
-    ipd_mm = float(ipd_raw)
-    if ipd_mm <= 1.0:
-        ipd_mm *= 1000.0
     has_hole_fill_mode = "Hole Fill Mode" in settings_dict
     hole_fill_mode, hole_fill_radius, hole_fill_strength = _normalize_hole_fill_mode(
         settings_dict.get("Hole Fill Mode", getattr(config, "hole_fill_mode", "balanced"))
@@ -176,15 +165,6 @@ def hot_reload_value_snapshot(settings_dict: dict, config) -> dict:
     values = {
         "depth_strength": float(settings_dict.get("Depth Strength", config.depth_strength)),
         "convergence": float(settings_dict.get("Convergence", config.convergence)),
-        "ipd": ipd_mm / 1000.0,
-        "ipd_mm": max(1.0, ipd_mm),
-        "stereo_scale": float(
-            settings_dict.get(
-                "Stereo Scale",
-                settings_dict.get("Stereo Strength Scale", config.stereo_scale),
-            )
-        ),
-        "max_shift_ratio": float(settings_dict.get("Max Shift Ratio", config.max_shift_ratio)),
         "stereo_quality": _normalize_stereo_quality(
             settings_dict.get("Stereo Quality", settings_dict.get("Synthetic View", config.stereo_quality))
         ),
@@ -198,8 +178,8 @@ def hot_reload_value_snapshot(settings_dict: dict, config) -> dict:
         ),
         "parallax_preset": str(
             settings_dict.get(
-                "Parallax Preset",
-                settings_dict.get("Parallax Budget Preset", getattr(config, "parallax_preset", "standard")),
+                "Parallax Budget Preset",
+                settings_dict.get("Parallax Preset", getattr(config, "parallax_preset", "standard")),
             )
         ),
         "temporal": temporal_enabled,
@@ -325,11 +305,9 @@ class StereoHotReloader:
         if os.environ.get('D2S_DEBUG', '0') in ('1', 'true', 'yes', 'on'):
             print(
                 "[Main] Stereo hot reload:"
-                f" ipd_mm={values['ipd_mm']:.1f}"
-                f" stereo_scale={values['stereo_scale']:.3f}"
                 f" depth_strength={values['depth_strength']:.3f}"
                 f" convergence={values['convergence']:.3f}"
-                f" max_shift_ratio={values['max_shift_ratio']:.3f}"
+                f" parallax_preset={values['parallax_preset']}"
                 f" stereo_preset={values['stereo_preset']}"
                 f" stereo_quality={values['stereo_quality']}"
                 f" temporal_strength={values['temporal_strength']:.3f}"

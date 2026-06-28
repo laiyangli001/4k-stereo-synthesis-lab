@@ -615,8 +615,6 @@ class GUIHandlerMixin:
         self.depth_quick_dd.value = self._depth_quick_to_display(depth_quick_key)
         self.foreground_scale_label.value = t["Foreground Scale:"]
         self.antialiasing_label.value = t["Anti-aliasing:"]
-        self.ipd_label.value = t["IPD (m):"]
-        self.stereo_scale_label.value = t["Stereo Scale:"]
         self.stereo_preset_label.value = t["Stereo Mode:"]
         preset_key = self._display_to_preset(self.stereo_preset_dd.value)
         self.stereo_preset_dd.options = [t["Traditional / Fastest"], t["Cinema"], t["Game / Low Latency"], t["Image  / High Quality"]]
@@ -627,7 +625,10 @@ class GUIHandlerMixin:
         self.stereo_quality_dd.value = self._stereo_quality_to_display(
             self._stereo_quality_for_preset(preset_key))
         self.stereo_quality_dd.visible = False
-        self.max_shift_label.value = t["Max Shift Ratio:"]
+        self.parallax_budget_label.value = t["Parallax Budget:"]
+        parallax_budget_key = self._display_to_parallax_budget(self.parallax_budget_dd.value)
+        self.parallax_budget_dd.options = self._parallax_budget_options()
+        self.parallax_budget_dd.value = self._parallax_budget_to_display(parallax_budget_key)
         self.temporal_strength_label.value = t["Temporal Strength:"]
         self.scene_reset_label.value = t["Scene Threshold:"]
         self.reset_cooldown_label.value = t["Reset Cooldown:"]
@@ -743,7 +744,7 @@ class GUIHandlerMixin:
             (self.depth_strength_dd, "tooltip_depth_strength"),
             (self.depth_quick_dd, "tooltip_depth_quick"),
             (self.stereo_preset_dd, "tooltip_stereo_preset"),
-            (self.max_shift_dd, "tooltip_max_shift"),
+            (self.parallax_budget_dd, "tooltip_parallax_budget"),
             (self.temporal_strength_dd, "tooltip_temporal_strength"),
             (self.scene_reset_dd, "tooltip_scene_reset"),
             (self.reset_cooldown_dd, "tooltip_reset_cooldown"),
@@ -756,8 +757,6 @@ class GUIHandlerMixin:
             (self.advanced_stereo_cb, "tooltip_advanced_stereo"),
             (self.foreground_scale_dd, "tooltip_foreground_scale"),
             (self.antialiasing_dd, "tooltip_antialiasing"),
-            (self.ipd_dd, "tooltip_ipd"),
-            (self.stereo_scale_dd, "tooltip_stereo_scale"),
             (self.device_dd, "tooltip_device"),
             (self.advanced_device_cb, "tooltip_advanced_device_options"),
             (self.capture_tool_dd, "tooltip_capture_tool"),
@@ -993,11 +992,10 @@ class GUIHandlerMixin:
         if not values:
             return False
         self.stereo_quality_dd.value = self._stereo_quality_to_display(values["quality"])
+        self.parallax_budget_dd.value = self._parallax_budget_to_display(values["parallax_budget"])
         self.depth_strength_dd.value = f"{values['depth_strength']:.1f}"
         self.depth_quick_dd.value = self._depth_quick_to_display(values["depth_quick"])
         self.convergence_dd.value = f"{values['convergence']:.2f}"
-        self.max_shift_dd.value = f"{values['max_shift_ratio']:.2f}"
-        self.stereo_scale_dd.value = f"{values['stereo_scale']:.1f}"
         self.temporal_strength_dd.value = f"{values['temporal_strength']:.2f}"
         self.scene_reset_dd.value = f"{values['scene_reset_threshold']:.2f}"
         self.reset_cooldown_dd.value = str(values["reset_cooldown_frames"])
@@ -1009,8 +1007,8 @@ class GUIHandlerMixin:
         self.edge_threshold_dd.value = f"{values['edge_threshold']:.2f}"
         self.cross_eyed_cb.value = bool(values.get("cross_eyed", False))
         for ctrl in (
-            self.stereo_quality_dd, self.depth_strength_dd, self.depth_quick_dd,
-            self.convergence_dd, self.max_shift_dd, self.stereo_scale_dd, self.temporal_strength_dd,
+            self.stereo_quality_dd, self.parallax_budget_dd, self.depth_strength_dd, self.depth_quick_dd,
+            self.convergence_dd, self.temporal_strength_dd,
             self.scene_reset_dd, self.reset_cooldown_dd, self.foreground_scale_dd, self.antialiasing_dd, self.edge_dilation_dd,
             self.mask_feather_dd, self.edge_threshold_dd, self.hole_fill_mode_dd, self.cross_eyed_cb,
         ):

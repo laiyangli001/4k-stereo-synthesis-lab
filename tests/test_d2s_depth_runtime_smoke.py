@@ -35,7 +35,7 @@ def test_d2s_depth_runtime_smoke_queue_contract():
     assert report["mode"] == "d2s_depth_runtime"
     assert report["raw_shape"] == [40, 64, 4]
     assert report["frame_rgb_shape"] == [32, 50, 3]
-    assert report["runtime_rgb_shape"] == [3, 32, 50]
+    assert report["runtime_rgb_shape"] == [1, 3, 32, 50]
     assert report["runtime_rgb_dtype"] == "torch.float32"
     assert 0.0 <= report["runtime_rgb_min"] <= report["runtime_rgb_max"] <= 1.0
     assert report["depth_shape"] == [1, 1, 32, 50]
