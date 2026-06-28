@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from capture.types import CapturedFrame, FrameCopyMode
-from stereo_runtime.pipeline import RuntimePipelineContext, RuntimePipelineLoop
+from stereo_runtime.pipeline import RuntimePipelineContext, RuntimePipelineLoop, _attach_pipeline_debug
 from stereo_runtime.render_size import RenderSizeConfig, RenderSizePolicy
 from stereo_runtime.settings_snapshot import (
     RuntimeSettingsPipelineRebuildRequired,
@@ -79,6 +79,46 @@ class FakeRuntime:
 class PipelineRebuildRuntime(FakeRuntime):
     def apply_settings_snapshot(self, snapshot, *, active_preset=None):
         raise RuntimeSettingsPipelineRebuildRequired(snapshot, ("render_size_policy",))
+
+
+def test_pipeline_debug_transport_prefers_explicit_output_transport():
+    result = SimpleNamespace(debug_info={})
+
+    _attach_pipeline_debug(
+        result,
+        capture_size=(3840, 2160),
+        render_size=(1920, 1080),
+        run_mode="Viewer",
+        render_size_config=None,
+        output_transport="encoded_stream",
+    )
+
+    assert result.debug_info["transport"] == "encoded_stream"
+    assert result.debug_info["capture_size"] == "3840x2160"
+    assert result.debug_info["render_size"] == "1920x1080"
+
+
+def test_pipeline_debug_transport_falls_back_for_openxr_and_local_window():
+    openxr_result = SimpleNamespace(debug_info={})
+    local_result = SimpleNamespace(debug_info={})
+
+    _attach_pipeline_debug(
+        openxr_result,
+        capture_size=(2, 2),
+        render_size=(2, 2),
+        run_mode="OpenXR",
+        render_size_config=None,
+    )
+    _attach_pipeline_debug(
+        local_result,
+        capture_size=(2, 2),
+        render_size=(2, 2),
+        run_mode="Viewer",
+        render_size_config=None,
+    )
+
+    assert openxr_result.debug_info["transport"] == "openxr_swapchain"
+    assert local_result.debug_info["transport"] == "local_window"
 
 
 def test_runtime_pipeline_processes_one_frame():
@@ -499,7 +539,7 @@ def test_runtime_pipeline_resolves_4k_render_size_before_preprocess():
         output_transport="local_window",
         render_size_config=RenderSizeConfig(
             policy=RenderSizePolicy.SCALED,
-            scale_factor=0.5,
+            scale_factor="1K / 1920x1080",
             align=8,
         ),
     )
@@ -512,10 +552,136 @@ def test_runtime_pipeline_resolves_4k_render_size_before_preprocess():
     assert runtime_result.debug_info["capture_size"] == "3840x2160"
     assert runtime_result.debug_info["render_size"] == "1920x1080"
     assert runtime_result.debug_info["render_size_policy"] == "scaled"
-    assert runtime_result.debug_info["stereo_render_scale"] == 0.5
+    assert runtime_result.debug_info["stereo_render_scale"] == "1K / 1920x1080"
     assert runtime_result.debug_info["transport"] == "local_window"
     assert runtime_result.debug_info["application_runtime_target"] == "local_display"
     assert runtime_result.debug_info["output_transport"] == "local_window"
+
+
+def test_runtime_pipeline_propagates_polling_capture_zero_copy_debug():
+    raw_q = queue.Queue(maxsize=1)
+    runtime_q = queue.Queue(maxsize=1)
+    raw_q.put(
+        CapturedFrame(
+            frame="raw",
+            target_height=(8, 4),
+            timestamp=10.0,
+            capture_tool="DesktopDuplication",
+            capture_mode="Monitor",
+            monitor_index=1,
+            capture_size=(8, 4),
+            frame_raw_device="",
+            frame_raw_dtype="uint8",
+            copy_mode=FrameCopyMode.COPY,
+            metadata={"backend": "FakePollingSource", "zero_copy": False},
+        )
+    )
+
+    context = RuntimePipelineContext(
+        shutdown_event=OneShotShutdown(),
+        raw_q=raw_q,
+        runtime_q=runtime_q,
+        time_sleep=0.01,
+        run_mode="Viewer",
+        openxr_runtime_direct=False,
+        stereo_active_preset=None,
+        device="cpu",
+        use_cudart=False,
+        thread_latencies={},
+        stereo_runtime=FakeRuntime(),
+        capture_frame_to_rgb=lambda frame, size, **kwargs: SimpleNamespace(
+            _d2s_preprocess_backend="fake-preprocess"
+        ),
+        prepare_rgb_for_stereo_runtime=lambda frame, **kwargs: "runtime-rgb",
+        current_openxr_render_config=lambda: None,
+        is_hard_idle=lambda: False,
+        is_source_paused=lambda: False,
+        log_source_health=lambda: None,
+        source_stat_inc=lambda *args, **kwargs: None,
+        breakdown_inc=lambda *args, **kwargs: None,
+        breakdown_add_time=lambda *args, **kwargs: None,
+        breakdown_add_runtime_timing=lambda result: None,
+        set_preprocess_backend=lambda backend: None,
+        queue_clear=lambda q: None,
+        queue_drain_latest=lambda q, first_item: first_item,
+        queue_put_latest=lambda q, item: q.put_nowait(item),
+        log_stereo_runtime_mode_once=lambda: None,
+        apply_stereo_hot_reload_if_needed=lambda: None,
+        warmup_stereo_once_for_frame=lambda frame: None,
+        log_fast_plus_fused_runtime_state=lambda result: None,
+    )
+
+    RuntimePipelineLoop(context).run()
+
+    runtime_result, _capture_start_time = runtime_q.get_nowait()
+    assert runtime_result.debug_info["capture_copy_mode"] == "copy"
+    assert runtime_result.debug_info["capture_zero_copy"] is False
+    assert runtime_result.debug_info["capture_tool"] == "DesktopDuplication"
+    assert runtime_result.debug_info["capture_frame_raw_dtype"] == "uint8"
+
+
+def test_runtime_pipeline_applies_hot_reload_snapshot_from_queue_before_runtime_call():
+    raw_q = queue.Queue(maxsize=1)
+    runtime_q = queue.Queue(maxsize=1)
+    settings_update_q = queue.Queue(maxsize=1)
+    raw_q.put(("raw", (2, 2), 10.0))
+    runtime = FakeRuntime()
+    snapshot = RuntimeSettingsSnapshot(
+        version=9,
+        timestamp=12.0,
+        source="settings_yaml_hot_reload",
+        stereo_preset="game_low_latency",
+        depth_strength=2.0,
+    )
+    stats = {}
+
+    def source_stat_inc(name, amount=1, **values):
+        stats[name] = stats.get(name, 0) + amount
+        stats.update(values)
+
+    context = RuntimePipelineContext(
+        shutdown_event=OneShotShutdown(),
+        raw_q=raw_q,
+        runtime_q=runtime_q,
+        time_sleep=0.01,
+        run_mode="Viewer",
+        openxr_runtime_direct=False,
+        stereo_active_preset="cinema",
+        device="cpu",
+        use_cudart=False,
+        thread_latencies={},
+        stereo_runtime=runtime,
+        capture_frame_to_rgb=lambda frame, size, **kwargs: SimpleNamespace(
+            _d2s_preprocess_backend="fake-preprocess"
+        ),
+        prepare_rgb_for_stereo_runtime=lambda frame, **kwargs: "runtime-rgb",
+        current_openxr_render_config=lambda: None,
+        is_hard_idle=lambda: False,
+        is_source_paused=lambda: False,
+        log_source_health=lambda: None,
+        source_stat_inc=source_stat_inc,
+        breakdown_inc=lambda *args, **kwargs: None,
+        breakdown_add_time=lambda *args, **kwargs: None,
+        breakdown_add_runtime_timing=lambda result: None,
+        set_preprocess_backend=lambda backend: None,
+        queue_clear=lambda q: None,
+        queue_drain_latest=lambda q, first_item: first_item,
+        queue_put_latest=lambda q, item: q.put_nowait(item),
+        log_stereo_runtime_mode_once=lambda: None,
+        apply_stereo_hot_reload_if_needed=lambda: settings_update_q.put_nowait(snapshot),
+        warmup_stereo_once_for_frame=lambda frame: None,
+        log_fast_plus_fused_runtime_state=lambda result: None,
+        settings_update_q=settings_update_q,
+    )
+
+    RuntimePipelineLoop(context).run()
+
+    assert runtime.snapshots == [(snapshot, "game_low_latency")]
+    assert stats["settings_updates"] == 1
+    assert stats["last_settings_version"] == 9
+    assert stats["last_settings_change_class"] == SnapshotChangeClass.HOT_RELOAD.value
+    assert runtime.rgb_calls == 1
+    runtime_q.get_nowait()
 
 
 def test_runtime_pipeline_passes_current_openxr_config_to_runtime():

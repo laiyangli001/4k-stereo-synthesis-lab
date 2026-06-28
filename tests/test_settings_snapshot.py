@@ -49,7 +49,7 @@ def test_settings_snapshot_classifies_spec_layer_fields():
         is SnapshotChangeClass.PIPELINE_REBUILD
     )
     assert (
-        RuntimeSettingsSnapshot(version=7, timestamp=1.0, stereo_render_scale=0.5).classify()
+        RuntimeSettingsSnapshot(version=7, timestamp=1.0, stereo_render_scale="1K / 1920x1080").classify()
         is SnapshotChangeClass.PIPELINE_REBUILD
     )
     assert (
@@ -68,7 +68,7 @@ def test_settings_snapshot_maps_runtime_quality_mode_to_runtime_config_mode():
         timestamp=1.0,
         runtime_quality_mode="game_low_latency",
         render_size_policy="scaled",
-        stereo_render_scale=0.5,
+        stereo_render_scale="1K / 1920x1080",
         stereo_synthesis_mode="full_synthesis_eyes",
         output_transport="openxr_swapchain",
         presentation_flags={"cross_eyed": True},
@@ -104,6 +104,50 @@ def test_settings_snapshot_maps_parallax_budget_fields():
     assert snapshot.classify() is SnapshotChangeClass.HOT_RELOAD
     assert updates["max_disparity_px"] == 96.0
     assert updates["parallax_preset"] == "standard"
+
+
+def test_settings_snapshot_maps_spec_alias_fields_to_runtime_config():
+    snapshot = RuntimeSettingsSnapshot(
+        version=16,
+        timestamp=1.0,
+        parallax_budget_preset="strong",
+        temporal_enabled=False,
+    )
+
+    updates = snapshot.to_config_updates()
+
+    assert snapshot.classify() is SnapshotChangeClass.HOT_RELOAD
+    assert updates == {"parallax_preset": "strong", "temporal": False}
+
+
+def test_runtime_applies_spec_alias_fields_and_tracks_them_in_result():
+    runtime = StereoRuntime(
+        StereoRuntimeConfig(model_id="Distill-Any-Depth-Base", cache_dir="models"),
+        depth_provider=FakeDepthProvider(),
+        collect_memory_stats=False,
+    )
+    runtime.temporal_state.left = torch.ones((1, 3, 2, 2), dtype=torch.float32)
+
+    change_class = runtime.apply_settings_snapshot(
+        RuntimeSettingsSnapshot(
+            version=17,
+            timestamp=1.0,
+            parallax_budget_preset="strong",
+            temporal_enabled=False,
+        )
+    )
+
+    assert change_class is SnapshotChangeClass.HOT_RELOAD
+    assert runtime.config.parallax_preset == "strong"
+    assert runtime.config.temporal is False
+    assert runtime.temporal_state.left is None
+
+    result = runtime.process_openxr_frame(torch.zeros((1, 3, 2, 2), dtype=torch.float32))
+
+    assert result.hot_reload_changed_fields == ("parallax_budget_preset", "temporal_enabled")
+    assert result.debug_info["hot_reload_changed_fields"] == ["parallax_budget_preset", "temporal_enabled"]
+    assert result.debug_info["parallax_budget_preset"] == "strong"
+    assert result.debug_info["temporal_reset_reason"] == "settings_changed"
 
 
 def test_settings_snapshot_maps_temporal_reset_fields():

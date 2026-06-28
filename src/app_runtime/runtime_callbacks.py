@@ -112,7 +112,23 @@ class RuntimeCallbacks:
         return self.context.openxr_state.current_render_config(self.context.stereo_runtime)
 
     def apply_stereo_hot_reload_if_needed(self):
-        self.context.stereo_hot_reloader.apply_if_needed(
+        reloader = self.context.stereo_hot_reloader
+        poll = getattr(reloader, "poll_settings_snapshot_if_needed", None)
+        if callable(poll):
+            polled = poll(
+                runtime=self.context.stereo_runtime,
+                active_preset=self.context.stereo_active_preset,
+            )
+            if polled is None:
+                return False
+            snapshot, _applied_preset, values = polled
+            self.send_settings_snapshot(snapshot)
+            self.update_openxr_runtime_config(snapshot=snapshot)
+            log_snapshot = getattr(reloader, "log_settings_snapshot", None)
+            if callable(log_snapshot):
+                log_snapshot(values, on_mode_log=self.log_stereo_runtime_mode_once)
+            return True
+        return reloader.apply_if_needed(
             runtime=self.context.stereo_runtime,
             active_preset=self.context.stereo_active_preset,
             on_openxr_config_update=self.update_openxr_runtime_config,

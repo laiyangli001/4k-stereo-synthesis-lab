@@ -4433,6 +4433,7 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
                                         screen_depth_strength,
                                         float(self.convergence),
                                         mvp,
+                                        roll=self.screen_roll,
                                     )
                                 xr.release_swapchain_image(swapchain, self._xr_sc_release_info)
                                 released = True

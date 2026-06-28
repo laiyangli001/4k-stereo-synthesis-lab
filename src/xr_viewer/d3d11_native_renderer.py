@@ -357,6 +357,7 @@ cbuffer Params : register(b0)
 #define eyeOffset params.x
 #define depthStrength params.y
 #define convergence params.z
+#define roll params.w
 
 struct VSOut {
     float4 pos : SV_POSITION;
@@ -405,7 +406,7 @@ float4 ps_main(VSOut input) : SV_TARGET
     float depth = saturate(texDepth.Sample(sampLinear, uv).r);
     float depthInv = -depth;
     float shift = (depthInv + convergence) * eyeOffset * depthStrength;
-    float2 shiftedUv = uv - float2(shift, 0.0);
+    float2 shiftedUv = uv - float2(shift * cos(roll), shift * sin(roll));
     if (shiftedUv.x < 0.0 || shiftedUv.x > 1.0 || shiftedUv.y < 0.0 || shiftedUv.y > 1.0) {
         return float4(0.0, 0.0, 0.0, 1.0);
     }
@@ -945,10 +946,10 @@ class D3D11NativeRenderer:
         except Exception as e:
             print(f"[OpenXRViewer] D3D11 world MVP debug failed: {e}")
 
-    def render_eye(self, swapchain_texture, width, height, eye_index, ipd, depth_strength, convergence, mvp):
+    def render_eye(self, swapchain_texture, width, height, eye_index, ipd, depth_strength, convergence, mvp, roll=0.0):
         return self._render_eye_with_srv(
             swapchain_texture, width, height, eye_index,
-            self.color_srv, ipd, depth_strength, convergence, mvp,
+            self.color_srv, ipd, depth_strength, convergence, mvp, roll=roll,
             depth_srv=self.depth_srv,
         )
 
@@ -957,11 +958,11 @@ class D3D11NativeRenderer:
             raise RuntimeError("D3D11 runtime eye textures are not ready")
         return self._render_eye_with_srv(
             swapchain_texture, width, height, eye_index,
-            self.runtime_eye_srv[eye_index], 0.0, 0.0, 0.0, mvp,
+            self.runtime_eye_srv[eye_index], 0.0, 0.0, 0.0, mvp, roll=0.0,
             depth_srv=None,
         )
 
-    def _render_eye_with_srv(self, swapchain_texture, width, height, eye_index, color_srv, ipd, depth_strength, convergence, mvp, *, depth_srv=None):
+    def _render_eye_with_srv(self, swapchain_texture, width, height, eye_index, color_srv, ipd, depth_strength, convergence, mvp, *, roll=0.0, depth_srv=None):
         rtv = self._get_or_create_swapchain_rtv(swapchain_texture)
         try:
             clear = self._context_call(50, None, ctypes.c_void_p, ctypes.POINTER(ctypes.c_float))
@@ -989,7 +990,7 @@ class D3D11NativeRenderer:
             self._log_world_mvp_once(mvp)
             constants = np.zeros(20, dtype=np.float32)
             constants[:16] = np.asarray(mvp, dtype=np.float32).reshape(16)
-            constants[16:20] = np.array([eye_sign * ipd * 0.5, depth_strength, convergence, 0.0], dtype=np.float32)
+            constants[16:20] = np.array([eye_sign * ipd * 0.5, depth_strength, convergence, roll], dtype=np.float32)
             self._update_subresource(self.constant_buffer, constants.ctypes.data, constants.nbytes)
             cb_arr = (ctypes.c_void_p * 1)(_ptr_value(self.constant_buffer))
             self._context_call(7, None, ctypes.c_uint, ctypes.c_uint, ctypes.POINTER(ctypes.c_void_p))(_ptr_value(self.context), 0, 1, cb_arr)

@@ -90,7 +90,7 @@ def test_openxr_stereo_result_shapes_and_debug():
     assert result.right_eye.shape == rgb.shape
     assert result.debug_info["backend"] == "openxr_roll_adaptive_grid_sample"
     assert result.debug_info["screen_roll"] == 0.25
-    assert result.debug_info["parallax_budget_preset"] == "legacy"
+    assert result.debug_info["parallax_budget_preset"] == "standard"
     assert result.debug_info["parallax_resolver_version"] == 1
 
 

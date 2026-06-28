@@ -35,7 +35,7 @@ def runtime_stereo_overrides(runtime) -> dict:
         "stereo_scale": config.stereo_scale,
         "max_shift_ratio": config.max_shift_ratio,
         "max_disparity_px": getattr(config, "max_disparity_px", None),
-        "parallax_preset": getattr(config, "parallax_preset", "legacy"),
+        "parallax_preset": getattr(config, "parallax_preset", "standard"),
         "temporal": config.temporal,
         "temporal_strength": config.temporal_strength,
         "auto_reset_temporal": config.auto_reset_temporal,
@@ -287,62 +287,41 @@ class StereoHotReloader:
         self.last_mtime = os.path.getmtime(settings_path) if os.path.exists(settings_path) else 0.0
         self.last_values = None
 
-    def apply_if_needed(
-        self,
-        *,
-        runtime,
-        active_preset,
-        on_openxr_config_update: Callable[..., None],
-        on_mode_log: Callable[[str], None],
-    ) -> bool:
+    def poll_settings_snapshot_if_needed(self, *, runtime, active_preset):
         now = self.clock()
         if now - self.last_check < self.interval_s:
-            return False
+            return None
         self.last_check = now
         try:
             mtime = os.path.getmtime(self.settings_path)
         except OSError:
-            return False
+            return None
         if mtime <= self.last_mtime and self.last_values is not None:
-            return False
+            return None
         try:
             settings_dict = self.read_settings(self.settings_path)
+            values = hot_reload_value_snapshot(settings_dict, runtime.config)
             snapshot = hot_reload_runtime_settings_snapshot(
                 settings_dict,
                 runtime.config,
                 version=int(mtime * 1_000_000_000),
                 timestamp=mtime,
             )
-            values = hot_reload_value_snapshot(settings_dict, runtime.config)
         except Exception as exc:
             print(f"[Main] Stereo hot reload skipped: {type(exc).__name__}: {exc}", flush=True)
             self.last_mtime = mtime
-            return False
+            return None
         if values == self.last_values:
             self.last_mtime = mtime
-            return False
+            return None
 
         snapshot_preset = values.get("stereo_preset")
         applied_preset = active_preset if snapshot_preset == "auto" else (snapshot_preset or active_preset)
-        if hasattr(runtime, "apply_settings_snapshot"):
-            runtime.apply_settings_snapshot(snapshot, active_preset=applied_preset)
-        else:
-            config_values = {key: value for key, value in values.items() if hasattr(runtime.config, key)}
-            if applied_preset is not None:
-                config_values["stereo_preset"] = applied_preset
-            runtime.config = replace(runtime.config, **config_values)
-            current = runtime.stereo_config
-            runtime.configure_stereo(
-                stereo_config_for_preset(
-                    applied_preset or runtime.config.stereo_preset or preset_for_runtime_mode(runtime.config.mode),
-                    output_format=current.output_format,
-                    overrides=runtime_stereo_overrides(runtime),
-                ),
-                reset_temporal=False,
-            )
-        on_openxr_config_update(snapshot=snapshot)
         self.last_values = values
         self.last_mtime = mtime
+        return snapshot, applied_preset, values
+
+    def log_settings_snapshot(self, values: dict, *, on_mode_log: Callable[[str], None]) -> None:
         if os.environ.get('D2S_DEBUG', '0') in ('1', 'true', 'yes', 'on'):
             print(
                 "[Main] Stereo hot reload:"
@@ -369,4 +348,35 @@ class StereoHotReloader:
                 flush=True,
             )
         on_mode_log("hot-reload")
+
+    def apply_if_needed(
+        self,
+        *,
+        runtime,
+        active_preset,
+        on_openxr_config_update: Callable[..., None],
+        on_mode_log: Callable[[str], None],
+    ) -> bool:
+        polled = self.poll_settings_snapshot_if_needed(runtime=runtime, active_preset=active_preset)
+        if polled is None:
+            return False
+        snapshot, applied_preset, values = polled
+        if hasattr(runtime, "apply_settings_snapshot"):
+            runtime.apply_settings_snapshot(snapshot, active_preset=applied_preset)
+        else:
+            config_values = {key: value for key, value in values.items() if hasattr(runtime.config, key)}
+            if applied_preset is not None:
+                config_values["stereo_preset"] = applied_preset
+            runtime.config = replace(runtime.config, **config_values)
+            current = runtime.stereo_config
+            runtime.configure_stereo(
+                stereo_config_for_preset(
+                    applied_preset or runtime.config.stereo_preset or preset_for_runtime_mode(runtime.config.mode),
+                    output_format=current.output_format,
+                    overrides=runtime_stereo_overrides(runtime),
+                ),
+                reset_temporal=False,
+            )
+        on_openxr_config_update(snapshot=snapshot)
+        self.log_settings_snapshot(values, on_mode_log=on_mode_log)
         return True

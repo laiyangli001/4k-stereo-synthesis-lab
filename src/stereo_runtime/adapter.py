@@ -479,7 +479,7 @@ def openxr_render_config_from_snapshot(
     snapshot,
     *,
     render_size: tuple[int, int] | None = None,
-    preset: str = "legacy",
+    preset: str = "standard",
     screen_roll: float = 0.0,
     padding_mode: str = "reflection",
 ):
@@ -492,7 +492,7 @@ def openxr_render_config_from_snapshot(
     ipd_mm = 32.0 if snapshot.ipd_mm is None else float(snapshot.ipd_mm)
     stereo_scale = 0.4 if snapshot.stereo_scale is None else float(snapshot.stereo_scale)
     max_shift_ratio = 0.05 if snapshot.max_shift_ratio is None else float(snapshot.max_shift_ratio)
-    parallax_preset = str(snapshot.parallax_preset or preset or "legacy")
+    parallax_preset = str(snapshot.parallax_preset or preset or "standard")
     max_disparity_px = snapshot.max_disparity_px
     if max_disparity_px is None and render_size is not None:
         budget = resolve_parallax_budget(

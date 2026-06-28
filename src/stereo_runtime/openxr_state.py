@@ -124,7 +124,7 @@ class OpenXRStateController:
             legacy_ipd = self.legacy_ipd
         config = openxr_render_config_from_snapshot(
             snapshot,
-            preset=getattr(runtime.stereo_config, "parallax_preset", "legacy"),
+            preset=getattr(runtime.stereo_config, "parallax_preset", "standard"),
             screen_roll=screen_roll,
         )
         if legacy_ipd is not None:
@@ -168,7 +168,7 @@ def _snapshot_with_runtime_fallbacks(snapshot: RuntimeSettingsSnapshot, runtime)
             else snapshot.max_disparity_px
         ),
         parallax_preset=(
-            getattr(stereo_config, "parallax_preset", "legacy")
+            getattr(stereo_config, "parallax_preset", "standard")
             if snapshot.parallax_preset is None
             else snapshot.parallax_preset
         ),

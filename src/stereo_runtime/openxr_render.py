@@ -22,7 +22,7 @@ class OpenXRRenderConfig:
     ipd_mm: float | None = 32.0
     stereo_scale: float = 0.4
     max_disparity_px: float | None = None
-    parallax_preset: str = "legacy"
+    parallax_preset: str = "standard"
     screen_roll: float = 0.0
     padding_mode: PaddingMode = "reflection"
 

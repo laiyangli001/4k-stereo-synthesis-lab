@@ -93,7 +93,7 @@ def parallax_debug_info(budget: ParallaxBudget) -> dict[str, float | int | str]:
 
 
 def _normalize_strength_preset(preset: str | None) -> str:
-    key = str(preset or "legacy").strip().lower().replace("-", "_").replace(" ", "_")
+    key = str(preset or "standard").strip().lower().replace("-", "_").replace(" ", "_")
     if key == "legacy":
         return "legacy"
     key = _STRENGTH_ALIASES.get(key, key)

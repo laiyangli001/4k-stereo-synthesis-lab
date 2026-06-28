@@ -63,7 +63,10 @@ class PollingCaptureRunner:
                             capture_start_time,
                             config=self.config,
                             copy_mode=FrameCopyMode.COPY,
-                            metadata={"backend": type(self._source).__name__},
+                            metadata={
+                                "backend": type(self._source).__name__,
+                                "zero_copy": False,
+                            },
                         )
                     )
                 except Exception as exc:

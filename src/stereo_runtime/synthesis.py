@@ -43,7 +43,7 @@ class StereoConfig:
     ipd_mm: float | None = 32.0
     stereo_scale: float = 0.4
     max_disparity_px: float | None = None
-    parallax_preset: str = "legacy"
+    parallax_preset: str = "standard"
     temporal_strength: float = 0.85
     auto_reset_temporal: bool = False
     scene_reset_threshold: float = 0.22

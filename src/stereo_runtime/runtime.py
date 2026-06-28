@@ -179,6 +179,9 @@ class StereoRuntimeResult:
     output_format: str | None = None
     output_dtype: str | None = None
     output_pack_backend: str | None = None
+    active_settings_version: int | None = None
+    hot_reload_class: str | None = None
+    hot_reload_changed_fields: tuple[str, ...] = ()
     debug_info: dict[str, Any] = field(default_factory=dict)
     timing: dict[str, float] = field(default_factory=dict)
     provider_info: dict[str, Any] = field(default_factory=dict)
@@ -195,6 +198,9 @@ class OpenXRRuntimeResult:
     output_format: str | None = None
     output_dtype: str | None = None
     output_pack_backend: str | None = None
+    active_settings_version: int | None = None
+    hot_reload_class: str | None = None
+    hot_reload_changed_fields: tuple[str, ...] = ()
     legacy_shader_uniforms: dict[str, Any] | None = None
     debug_info: dict[str, Any] = field(default_factory=dict)
     timing: dict[str, float] = field(default_factory=dict)
@@ -232,6 +238,9 @@ def openxr_result_from_stereo_result(stereo_result: StereoRuntimeResult) -> Open
         output_format="openxr_full_synthesis_eyes",
         output_dtype=debug["runtime_output_dtype"],
         output_pack_backend=debug.get("runtime_output_pack_backend"),
+        active_settings_version=getattr(stereo_result, "active_settings_version", None),
+        hot_reload_class=getattr(stereo_result, "hot_reload_class", None),
+        hot_reload_changed_fields=tuple(getattr(stereo_result, "hot_reload_changed_fields", ()) or ()),
         debug_info=debug,
         timing=dict(stereo_result.timing or {}),
         provider_info=dict(stereo_result.provider_info or {}),
@@ -393,6 +402,7 @@ _RUNTIME_HANDLED_PIPELINE_REBUILD_FIELDS = _DEPTH_PROVIDER_REBUILD_FIELDS
 _TEMPORAL_RESET_HOT_RELOAD_FIELDS = frozenset(
     {
         "temporal",
+        "temporal_enabled",
         "depth_strength",
         "convergence",
         "ipd_mm",
@@ -400,6 +410,7 @@ _TEMPORAL_RESET_HOT_RELOAD_FIELDS = frozenset(
         "max_shift_ratio",
         "max_disparity_px",
         "parallax_preset",
+        "parallax_budget_preset",
     }
 )
 
@@ -435,6 +446,7 @@ def _add_active_settings_debug_info(debug: dict[str, Any], snapshot: RuntimeSett
         "output_format",
         "max_disparity_px",
         "parallax_preset",
+        "parallax_budget_preset",
         "convergence",
         "hole_fill_mode",
     ):
@@ -776,6 +788,9 @@ class StereoRuntime:
             output_format=str(debug.get("runtime_output_format")),
             output_dtype=str(debug.get("runtime_output_dtype")),
             output_pack_backend=_optional_debug_str(debug.get("runtime_output_pack_backend")),
+            active_settings_version=int(self.active_settings_version),
+            hot_reload_class=self.last_settings_change_class,
+            hot_reload_changed_fields=tuple(self.last_settings_changed_fields),
             debug_info=debug,
             timing=timing,
             provider_info=provider_info,
@@ -888,6 +903,9 @@ class StereoRuntime:
             output_format=str(debug.get("runtime_output_format")),
             output_dtype=str(debug.get("runtime_output_dtype")),
             output_pack_backend=_optional_debug_str(debug.get("runtime_output_pack_backend")),
+            active_settings_version=int(self.active_settings_version),
+            hot_reload_class=self.last_settings_change_class,
+            hot_reload_changed_fields=tuple(self.last_settings_changed_fields),
             legacy_shader_uniforms=legacy_shader_uniforms,
             debug_info=debug,
             timing=timing,

@@ -30,7 +30,9 @@ _HOT_RELOAD_FIELDS = frozenset(
         "max_shift_ratio",
         "max_disparity_px",
         "parallax_preset",
+        "parallax_budget_preset",
         "temporal",
+        "temporal_enabled",
         "temporal_strength",
         "auto_reset_temporal",
         "scene_reset_threshold",
@@ -115,7 +117,7 @@ class RuntimeSettingsSnapshot:
     runtime_quality_mode: str | None = None
     stereo_synthesis_mode: str | None = None
     render_size_policy: str | None = None
-    stereo_render_scale: float | None = None
+    stereo_render_scale: str | None = None
     output_transport: str | None = None
     capture_source: str | None = None
     capture_target: str | None = None
@@ -132,7 +134,9 @@ class RuntimeSettingsSnapshot:
     max_shift_ratio: float | None = None
     max_disparity_px: float | None = None
     parallax_preset: str | None = None
+    parallax_budget_preset: str | None = None
     temporal: bool | None = None
+    temporal_enabled: bool | None = None
     temporal_strength: float | None = None
     auto_reset_temporal: bool | None = None
     scene_reset_threshold: float | None = None
@@ -171,6 +175,10 @@ class RuntimeSettingsSnapshot:
             value = getattr(self, field_name)
             if value is not None:
                 updates[field_name] = value
+        if self.parallax_budget_preset is not None and self.parallax_preset is None:
+            updates["parallax_preset"] = self.parallax_budget_preset
+        if self.temporal_enabled is not None and self.temporal is None:
+            updates["temporal"] = self.temporal_enabled
         if self.runtime_quality_mode is not None:
             updates["mode"] = _normalize_runtime_mode(self.runtime_quality_mode)
         if "ipd_mm" in updates:

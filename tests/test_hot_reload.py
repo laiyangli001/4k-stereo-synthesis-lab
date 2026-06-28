@@ -287,6 +287,47 @@ def test_hot_reload_builds_runtime_settings_snapshot():
     assert snapshot.classify() is SnapshotChangeClass.HOT_RELOAD
 
 
+def test_hot_reload_poll_returns_snapshot_without_applying_runtime(tmp_path):
+    settings_path = tmp_path / "settings.yaml"
+    settings_path.write_text("", encoding="utf-8")
+    runtime = SimpleNamespace(
+        config=StereoRuntimeConfig(
+            model_id="Distill-Any-Depth-Base",
+            cache_dir="models",
+            stereo_quality="fast_plus",
+            stereo_preset="cinema",
+        ),
+        apply_settings_snapshot=lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("poll must not apply runtime settings directly")
+        ),
+    )
+    reloader = StereoHotReloader(
+        settings_path=str(settings_path),
+        interval_s=0.0,
+        read_settings=lambda _path: {
+            "Stereo Quality": "Quality",
+            "Stereo Preset": "Game / Low Latency",
+            "Depth Strength": "2.0",
+        },
+        clock=lambda: 1.0,
+    )
+
+    polled = reloader.poll_settings_snapshot_if_needed(
+        runtime=runtime,
+        active_preset="cinema",
+    )
+
+    assert polled is not None
+    snapshot, applied_preset, values = polled
+    assert snapshot.source == "settings_yaml_hot_reload"
+    assert snapshot.stereo_quality == "quality_4k"
+    assert snapshot.stereo_preset == "game_low_latency"
+    assert snapshot.depth_strength == 2.0
+    assert applied_preset == "game_low_latency"
+    assert values["stereo_preset"] == "game_low_latency"
+    assert reloader.poll_settings_snapshot_if_needed(runtime=runtime, active_preset="cinema") is None
+
+
 def test_hot_reload_pushes_all_openxr_stereo_controls(tmp_path):
     settings_path = tmp_path / "settings.yaml"
     settings_path.write_text("", encoding="utf-8")

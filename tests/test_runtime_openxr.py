@@ -70,6 +70,9 @@ def test_process_openxr_frame_defaults_to_rgb_depth_runtime_result():
     assert result.output_eye_size == (16, 12)
     assert result.output_display_size == (16, 12)
     assert result.output_pack_backend == "none"
+    assert result.active_settings_version == 0
+    assert result.hot_reload_class == "no_change"
+    assert result.hot_reload_changed_fields == ()
 
 
 def test_process_openxr_frame_debug_info_carries_preprocess_device_metadata():
@@ -122,6 +125,9 @@ def test_runtime_debug_info_carries_preprocess_device_metadata():
     assert result.output_dtype in {"float32", "uint8"}
     assert result.output_eye_size == (16, 12)
     assert result.output_display_size == (16, 12)
+    assert result.active_settings_version == result.debug_info["active_settings_version"]
+    assert result.hot_reload_class == result.debug_info["hot_reload_class"]
+    assert result.hot_reload_changed_fields == tuple(result.debug_info["hot_reload_changed_fields"])
 
 
 def test_runtime_debug_info_records_eye_and_display_sizes_for_sbs_output():
@@ -154,6 +160,9 @@ def test_openxr_result_from_stereo_result_keeps_full_size_eye_views_for_quality_
         left_eye=source_left,
         right_eye=source_right,
         sbs=sbs,
+        active_settings_version=7,
+        hot_reload_class="hot_reload",
+        hot_reload_changed_fields=("max_disparity_px",),
         debug_info={"backend": "quality_4k", "runtime_output_format": "half_sbs"},
         timing={"total_ms": 5.0},
         provider_info={"provider": "fake"},
@@ -179,6 +188,9 @@ def test_openxr_result_from_stereo_result_keeps_full_size_eye_views_for_quality_
     assert result.output_eye_size == (4, 2)
     assert result.output_display_size == (4, 2)
     assert result.output_pack_backend == "none"
+    assert result.active_settings_version == 7
+    assert result.hot_reload_class == "hot_reload"
+    assert result.hot_reload_changed_fields == ("max_disparity_px",)
 
 
 def test_openxr_result_from_stereo_result_splits_fused_half_sbs_eye_views_and_preserves_display_size():
@@ -239,7 +251,7 @@ def test_openxr_rgb_depth_debug_info_carries_stereo_scale_and_max_shift():
         "max_shift_ratio": 0.0,
         "convergence": 0.0,
         "max_disparity_px": None,
-        "parallax_preset": "legacy",
+        "parallax_preset": "standard",
     }
     assert result.debug_info["openxr_ipd"] == 0.064
     assert result.debug_info["openxr_stereo_scale"] == 0.35

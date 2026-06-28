@@ -36,6 +36,18 @@ def test_parallax_debug_info_records_depth_response_contract():
     assert debug["parallax_resolver_version"] == 1
 
 
+def test_resolve_parallax_budget_defaults_to_standard_preset():
+    budget = resolve_parallax_budget(
+        render_width=1920,
+        render_height=1080,
+        preset=None,
+        convergence=0.0,
+    )
+
+    assert budget.max_disparity_px == 48.0
+    assert budget.preset == "standard"
+
+
 def test_resolve_parallax_budget_interpolates_between_resolution_levels():
     budget = resolve_parallax_budget(
         render_width=2560,
@@ -74,12 +86,26 @@ def test_legacy_shift_params_preserve_existing_effective_ipd_formula():
     legacy = compute_shift_px(
         depth,
         1000,
-        ShiftParams(depth_strength=1.0, convergence=0.0, ipd_mm=32.0, stereo_scale=0.35, max_shift_ratio=0.05),
+        ShiftParams(
+            depth_strength=1.0,
+            convergence=0.0,
+            ipd_mm=32.0,
+            stereo_scale=0.35,
+            max_shift_ratio=0.05,
+            parallax_preset="legacy",
+        ),
     )
     direct_effective_baseline = compute_shift_px(
         depth,
         1000,
-        ShiftParams(depth_strength=1.0, convergence=0.0, ipd=0.0112, ipd_mm=None, max_shift_ratio=0.05),
+        ShiftParams(
+            depth_strength=1.0,
+            convergence=0.0,
+            ipd=0.0112,
+            ipd_mm=None,
+            max_shift_ratio=0.05,
+            parallax_preset="legacy",
+        ),
     )
 
     assert torch.allclose(legacy, direct_effective_baseline)

@@ -57,6 +57,7 @@ class MJPEGStreamer:
         self.shutdown = threading.Event()
         self.new_raw_event = threading.Event()
         self.new_encoded_event = threading.Event()
+        self._started = False
 
         # Stream dimensions
         self.sbs_width = None
@@ -193,15 +194,23 @@ class MJPEGStreamer:
         print(f"[MJPEGStreamer] serving on http://{get_local_ip()}:{self.server.server_address[1]}/")
         self.server_thread.start()
         self.encoder_thread.start()
+        self._started = True
 
     def stop(self):
         self.shutdown.set()
         try:
-            self.server.shutdown()
+            if self._started:
+                self.server.shutdown()
             self.server.server_close()
         except Exception:
             pass
         self.new_raw_event.set()
+
+    def _transport_frame_size(self, frame_np):
+        h, w = frame_np.shape[:2]
+        if self.profile.resize_size is not None:
+            return self.profile.resize_size
+        return w, h
 
     def set_frame(self, frame_np):
         """
@@ -213,11 +222,11 @@ class MJPEGStreamer:
         EncoderProfile, not in stereo_runtime.
         """
         with self.lock:
-            h, w = frame_np.shape[:2]
-            # If the output resolution changed, update cached index page so new
-            # clients get the correct metadata. Existing clients will auto-resize
-            # in the browser (JS checks the incoming MJPEG frame size), so no
-            # manual refresh is needed.
+            w, h = self._transport_frame_size(frame_np)
+            # If the transport resolution changed, update cached index page so new
+            # clients get the correct encoded-stream metadata. Existing clients
+            # will auto-resize in the browser (JS checks the incoming MJPEG frame
+            # size), so no manual refresh is needed.
             if (self.sbs_width, self.sbs_height) != (w, h):
                 self.sbs_width = w
                 self.sbs_height = h

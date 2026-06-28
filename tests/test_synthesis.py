@@ -31,10 +31,32 @@ def make_inputs(width=64, height=32):
     return rgb, depth
 
 
-def test_shift_params_use_runtime_ipd_mm_with_stereo_scale():
+def test_legacy_shift_params_use_runtime_ipd_mm_with_stereo_scale():
     depth = torch.ones(1, 1, 1, 1)
-    runtime_ipd_scaled = compute_shift_px(depth, 1000, ShiftParams(depth_strength=1.0, convergence=0.0, ipd_mm=32.0, stereo_scale=0.35, max_shift_ratio=0.05))
-    direct_effective_baseline = compute_shift_px(depth, 1000, ShiftParams(depth_strength=1.0, convergence=0.0, ipd=0.0112, ipd_mm=None, max_shift_ratio=0.05))
+    runtime_ipd_scaled = compute_shift_px(
+        depth,
+        1000,
+        ShiftParams(
+            depth_strength=1.0,
+            convergence=0.0,
+            ipd_mm=32.0,
+            stereo_scale=0.35,
+            max_shift_ratio=0.05,
+            parallax_preset="legacy",
+        ),
+    )
+    direct_effective_baseline = compute_shift_px(
+        depth,
+        1000,
+        ShiftParams(
+            depth_strength=1.0,
+            convergence=0.0,
+            ipd=0.0112,
+            ipd_mm=None,
+            max_shift_ratio=0.05,
+            parallax_preset="legacy",
+        ),
+    )
     assert torch.allclose(runtime_ipd_scaled, direct_effective_baseline)
 
 
@@ -67,6 +89,7 @@ def test_normal_sbs_eye_order_uses_left_then_right_views():
             max_shift_ratio=config.max_shift_ratio,
             ipd_mm=config.ipd_mm,
             stereo_scale=config.stereo_scale,
+            parallax_preset=config.parallax_preset,
         ),
     )
     expected_left = warp_horizontal(rgb, expected_shift, eye_sign=1.0)
@@ -78,7 +101,7 @@ def test_normal_sbs_eye_order_uses_left_then_right_views():
     assert torch.equal(result.sbs[..., :, 64:], expected_right)
 
 
-def test_layered_quality_uses_runtime_ipd_mm_with_stereo_scale():
+def test_layered_quality_legacy_preset_uses_runtime_ipd_mm_with_stereo_scale():
     rgb, depth = make_inputs(width=64, height=32)
     config = StereoConfig(
         backend="quality_4k",
@@ -92,6 +115,7 @@ def test_layered_quality_uses_runtime_ipd_mm_with_stereo_scale():
         ipd_mm=32.0,
         stereo_scale=0.35,
         max_shift_ratio=0.05,
+        parallax_preset="legacy",
     )
 
     result = synthesize_stereo(rgb, depth, config)
@@ -106,6 +130,7 @@ def test_layered_quality_uses_runtime_ipd_mm_with_stereo_scale():
             max_shift_ratio=config.max_shift_ratio,
             ipd_mm=config.ipd_mm,
             stereo_scale=config.stereo_scale,
+            parallax_preset=config.parallax_preset,
         ),
     )
     assert torch.allclose(result.debug_info["shift_px"], expected_shift)
@@ -129,7 +154,7 @@ def test_synthesis_debug_records_resolved_parallax_budget_override():
     )
 
     assert result.debug_info["resolved_max_disparity_px"] == 20.0
-    assert result.debug_info["parallax_budget_preset"] == "legacy"
+    assert result.debug_info["parallax_budget_preset"] == "standard"
 
 
 def test_synthesis_debug_keeps_runtime_contract_scalars_without_debug_output():
@@ -177,6 +202,7 @@ def test_zero_stereo_scale_bypasses_all_binocular_difference(backend):
         ipd_mm=32.0,
         stereo_scale=0.0,
         max_shift_ratio=0.10,
+        parallax_preset="legacy",
         debug_output=True,
     )
 

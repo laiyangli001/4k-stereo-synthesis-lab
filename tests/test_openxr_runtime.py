@@ -171,6 +171,55 @@ def test_runtime_eye_tensor_hwc_u8_scales_near_normalized_float_range(monkeypatc
     assert int(out[0, 0, 0]) == 255
 
 
+def test_runtime_eye_stats_log_prefers_structured_output_fields(monkeypatch, capsys):
+    torch = pytest.importorskip("torch")
+    monkeypatch.chdir(SRC)
+    from xr_viewer.core_runtime_eye import CoreRuntimeEyeMixin
+
+    viewer = CoreRuntimeEyeMixin()
+    left_eye = torch.zeros(1, 3, 2, 4, dtype=torch.float32)
+    right_eye = torch.ones(1, 3, 2, 4, dtype=torch.float32)
+    result = SimpleNamespace(
+        left_eye=left_eye,
+        right_eye=right_eye,
+        output_format="openxr_full_synthesis_eyes",
+        output_dtype="uint8",
+        output_eye_size=(3840, 2160),
+        output_pack_backend="none",
+        debug_info={
+            "runtime_output_format": "legacy_format",
+            "runtime_output_dtype": "legacy_dtype",
+            "runtime_output_eye_size": "1x1",
+            "runtime_output_pack_backend": "legacy_pack",
+        },
+    )
+
+    viewer._log_runtime_eye_stats_once(result, upload_path="cpu")
+
+    output = capsys.readouterr().out
+    assert "format=openxr_full_synthesis_eyes" in output
+    assert "runtime_dtype=uint8" in output
+    assert "eye_size=(3840, 2160)" in output
+    assert "pack=none" in output
+    assert "legacy_format" not in output
+    assert "legacy_dtype" not in output
+    assert "eye_size=1x1" not in output
+    assert "legacy_pack" not in output
+
+
+def test_d3d11_rgb_depth_shader_uses_screen_roll_for_parallax_direction(monkeypatch):
+    monkeypatch.chdir(SRC)
+    source = (SRC / "xr_viewer" / "d3d11_native_renderer.py").read_text(encoding="utf-8")
+    implementation = (SRC / "xr_viewer" / "implementation.py").read_text(encoding="utf-8")
+
+    assert "#define roll params.w" in source
+    assert "float2 shiftedUv = uv - float2(shift * cos(roll), shift * sin(roll));" in source
+    assert "def render_eye(self, swapchain_texture, width, height, eye_index, ipd, depth_strength, convergence, mvp, roll=0.0):" in source
+    assert "constants[16:20] = np.array([eye_sign * ipd * 0.5, depth_strength, convergence, roll]" in source
+    assert "self.runtime_eye_srv[eye_index], 0.0, 0.0, 0.0, mvp, roll=0.0" in source
+    assert "roll=self.screen_roll" in implementation
+
+
 def test_runtime_rgb_depth_config_prefers_structured_legacy_shader_uniforms(monkeypatch):
     monkeypatch.chdir(SRC)
     from xr_viewer.core_runtime_eye import CoreRuntimeEyeMixin

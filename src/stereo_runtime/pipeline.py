@@ -71,6 +71,29 @@ def _openxr_full_synthesis_enabled(ctx: RuntimePipelineContext) -> bool:
     return str(ctx.stereo_active_preset or "").strip().lower() in _OPENXR_FULL_SYNTHESIS_PRESETS
 
 
+def _active_preset_for_snapshot(settings_snapshot, active_preset):
+    snapshot_preset = getattr(settings_snapshot, "stereo_preset", None)
+    if snapshot_preset == "auto":
+        return active_preset
+    return snapshot_preset or active_preset
+
+
+def _apply_latest_settings_snapshot(ctx: RuntimePipelineContext):
+    settings_snapshot = _drain_latest_nowait(ctx.settings_update_q)
+    if settings_snapshot is None:
+        return None
+    change_class = ctx.stereo_runtime.apply_settings_snapshot(
+        settings_snapshot,
+        active_preset=_active_preset_for_snapshot(settings_snapshot, ctx.stereo_active_preset),
+    )
+    ctx.source_stat_inc(
+        "settings_updates",
+        last_settings_version=int(settings_snapshot.version),
+        last_settings_change_class=change_class.value,
+    )
+    return change_class
+
+
 def _unpack_raw_queue_item(item):
     if isinstance(item, CapturedFrame):
         return item.frame, item.target_height, item.timestamp, item
@@ -172,19 +195,21 @@ def _attach_capture_debug(runtime_result, captured_frame: CapturedFrame | None, 
         debug_info.update(_capture_debug_fields(captured_frame, frame_rgb))
 
 
-def _attach_pipeline_debug(runtime_result, *, capture_size, render_size, run_mode, render_size_config) -> None:
+def _attach_pipeline_debug(runtime_result, *, capture_size, render_size, run_mode, render_size_config, output_transport=None) -> None:
     debug_info = getattr(runtime_result, "debug_info", None)
     if not isinstance(debug_info, dict):
         return
     debug_info["capture_size"] = _size_debug_text(capture_size)
     debug_info["render_size"] = _size_debug_text(render_size)
-    debug_info["transport"] = _transport_debug_label(run_mode)
+    debug_info["transport"] = _transport_debug_label(run_mode, output_transport=output_transport)
     if render_size_config is not None:
         debug_info["render_size_policy"] = render_size_config.policy.value
-        debug_info["stereo_render_scale"] = float(render_size_config.scale_factor)
+        debug_info["stereo_render_scale"] = render_size_config.scale_factor
 
 
-def _transport_debug_label(run_mode) -> str:
+def _transport_debug_label(run_mode, *, output_transport=None) -> str:
+    if output_transport:
+        return str(output_transport)
     return "openxr_swapchain" if run_mode == "OpenXR" else "local_window"
 
 
@@ -224,17 +249,7 @@ class RuntimePipelineLoop:
                     time.sleep(0.01)
                     continue
 
-                settings_snapshot = _drain_latest_nowait(ctx.settings_update_q)
-                if settings_snapshot is not None:
-                    change_class = ctx.stereo_runtime.apply_settings_snapshot(
-                        settings_snapshot,
-                        active_preset=ctx.stereo_active_preset,
-                    )
-                    ctx.source_stat_inc(
-                        "settings_updates",
-                        last_settings_version=int(settings_snapshot.version),
-                        last_settings_change_class=change_class.value,
-                    )
+                _apply_latest_settings_snapshot(ctx)
 
                 frame_raw, size, capture_start_time, captured_frame = _unpack_raw_queue_item(
                     ctx.queue_drain_latest(
@@ -305,6 +320,7 @@ class RuntimePipelineLoop:
                 ctx.breakdown_add_time("rt_prepare", time.perf_counter() - prepare_start_time)
                 ctx.log_stereo_runtime_mode_once()
                 ctx.apply_stereo_hot_reload_if_needed()
+                _apply_latest_settings_snapshot(ctx)
                 ctx.warmup_stereo_once_for_frame(runtime_rgb)
                 runtime_call_start_time = time.perf_counter()
                 if ctx.run_mode == "OpenXR" and not _openxr_full_synthesis_enabled(ctx):
@@ -323,6 +339,7 @@ class RuntimePipelineLoop:
                     render_size=render_size,
                     run_mode=ctx.run_mode,
                     render_size_config=ctx.render_size_config,
+                    output_transport=ctx.output_transport,
                 )
                 debug_info = getattr(runtime_result, "debug_info", None)
                 if isinstance(debug_info, dict):

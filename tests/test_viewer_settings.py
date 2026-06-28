@@ -54,7 +54,7 @@ def test_resolve_viewer_settings_reads_render_size_config():
         VSync=False,
         **{
             "Render Size Policy": "scaled",
-            "Render Scale": 0.5,
+            "Render Scale": "1K / 1920x1080",
             "Render Fixed Width": 1600,
             "Render Fixed Height": 900,
             "Render Max Pixels": 2073600,
@@ -66,7 +66,7 @@ def test_resolve_viewer_settings_reads_render_size_config():
     resolved = resolve_viewer_settings(settings)
 
     assert resolved.render_size_config.policy is RenderSizePolicy.SCALED
-    assert resolved.render_size_config.scale_factor == 0.5
+    assert resolved.render_size_config.scale_factor == "1K / 1920x1080"
     assert resolved.render_size_config.fixed_width == 1600
     assert resolved.render_size_config.fixed_height == 900
     assert resolved.render_size_config.max_pixels == 2073600
