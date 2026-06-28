@@ -126,7 +126,7 @@ DEFAULTS = {
     "Target FPS": 0,
     "Processing Resolution": "Auto",
     "Render Size Policy": "scaled",
-    "Render Scale": 1.0,
+    "Render Scale": "4K / 3840x2160",
     "Render Fixed Width": 1920,
     "Render Fixed Height": 1080,
     "Render Max Pixels": 3840 * 2160,

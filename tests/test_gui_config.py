@@ -41,6 +41,29 @@ def test_gui_stereo_preset_uses_dropdown_value_for_load_and_save():
     assert '"Stereo Preset": DEFAULTS["Stereo Preset"],' not in text
 
 
+
+def test_gui_render_size_policy_is_fixed_to_scaled_for_load_and_save():
+    config_text = _config_source().read_text(encoding="utf-8")
+    config_mgr_text = _file_text("config_mgr.py")
+    handlers_text = _file_text("handlers.py")
+    builders_text = _file_text("builders.py")
+
+    assert '"Render Size Policy": "scaled"' in config_text
+    assert 'def _render_policy_options' in handlers_text
+    assert 'def _render_policy_to_display' in handlers_text
+    assert 'def _display_to_render_policy' in handlers_text
+    assert 'return UI_MESSAGES[self.locale].get("Scaled", "Scaled")' in handlers_text
+    assert 'return "scaled"' in handlers_text
+    assert '"native": "native"' not in handlers_text
+    assert '"fixed": "fixed"' not in handlers_text
+    assert '"dynamic": "dynamic"' not in handlers_text
+    assert 'self.render_policy_dd = CompactDropdown(' in builders_text
+    assert 'options=["Scaled"]' in builders_text
+    assert 'cfg.get("Render Size Policy", DEFAULTS["Render Size Policy"])' in config_mgr_text
+    assert '"Render Size Policy": "scaled",' in config_mgr_text
+    assert '"Render Size Policy": self._display_to_render_policy(self.render_policy_dd.value)' not in config_mgr_text
+
+
 def test_gui_hot_stereo_params_auto_save_on_select():
     all_text = _all_text()
     assert "def on_stereo_hot_param_change" in all_text
@@ -552,7 +575,7 @@ def test_vsync_uses_teammate_config_key_and_default():
     assert 'tooltip_local_vsync' not in localization_text
 
 
-def test_gui_render_size_policy_is_exposed_and_persisted():
+def test_gui_render_size_controls_expose_only_fixed_4k_tiers():
     config_text = _config_source().read_text(encoding="utf-8")
     builders_text = _file_text("builders.py")
     handlers_text = _file_text("handlers.py")
@@ -561,7 +584,7 @@ def test_gui_render_size_policy_is_exposed_and_persisted():
 
     for key, value in {
         "Render Size Policy": "scaled",
-        "Render Scale": 1.0,
+        "Render Scale": "4K / 3840x2160",
         "Render Fixed Width": 1920,
         "Render Fixed Height": 1080,
         "Render Min Dimension": 480,
@@ -581,6 +604,8 @@ def test_gui_render_size_policy_is_exposed_and_persisted():
     assert '"4K / 3840x2160"' in handlers_text
     assert 'def _display_to_render_scale' in handlers_text
     assert 'def _render_scale_to_display' in handlers_text
+    assert 'return float(match.group(0))' not in handlers_text
+    assert '"1K / 1920x1080": 0.5' not in handlers_text
     assert 'self.render_fixed_dd.visible = False' in builders_text
     assert 'self.row6d = ft.Row([self.render_scale_label, self.render_scale_dd' in builders_text
     row6d_start = builders_text.index('self.row6d = ft.Row([')
@@ -593,9 +618,10 @@ def test_gui_render_size_policy_is_exposed_and_persisted():
     assert 'def _update_render_size_control_visibility' in handlers_text
     assert 'self._update_render_size_control_visibility(show_render_size)' in handlers_text
 
-    assert 'self.render_policy_dd.value = self._render_policy_to_display("scaled")' in config_mgr_text
+    assert 'cfg.get("Render Size Policy", DEFAULTS["Render Size Policy"])' in config_mgr_text
     assert 'cfg.get("Render Scale", DEFAULTS["Render Scale"])' in config_mgr_text
-    assert '"Render Size Policy": "scaled"' in config_mgr_text
+    assert '"Render Size Policy": "scaled",' in config_mgr_text
+    assert '"Render Size Policy": self._display_to_render_policy(self.render_policy_dd.value)' not in config_mgr_text
     assert '"Render Scale": self._display_to_render_scale(self.render_scale_dd.value)' in config_mgr_text
     assert 'self.render_scale_dd.value = self._render_scale_to_display(' in config_mgr_text
     assert '"Render Align": self._parse_int(self.render_align_dd.value, DEFAULTS["Render Align"])' in config_mgr_text

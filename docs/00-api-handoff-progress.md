@@ -60,6 +60,30 @@ Current task queue:
 
 ## Current Status
 
+### 2026-06-28 GUI Render Size Policy User-Layer Convergence
+
+Continued compliance against `docs/28-Realtime-2d-to-3d-specification.md` using `docs/26-desktop2stereo-engineering-design-specification.md` as the engineering checklist. This pass focused on the Render Size / 4K Tier contract: users should see only fixed 4K render-size tiers, not `native` / `fixed` / `dynamic` policy choices.
+
+Implemented in this follow-up:
+
+- Collapsed GUI render-size policy display/parsing helpers so the user layer always resolves to `scaled`.
+- Changed GUI config collection to save `"Render Size Policy": "scaled"` directly instead of round-tripping the hidden dropdown value.
+- Kept low-level `RenderSizePolicy` parsing intact as a legacy configuration compatibility path.
+- Updated GUI regression tests to assert that the visible render-size surface exposes only fixed tier labels and does not write old policy choices back to settings.
+
+Verification:
+
+```powershell
+src\python3\python.exe -m py_compile src\gui\handlers.py src\gui\config_mgr.py tests\test_gui_config.py
+src\python3\python.exe -m pytest tests\test_gui_config.py tests\test_render_size.py -q
+```
+
+Result:
+
+```text
+56 passed
+```
+
 ### 2026-06-28 Docs 26 Engineering Flow Alignment
 
 Reduced `docs/00-api-handoff-progress.md` Future Work to a task queue and moved detailed compatibility/migration rules into `docs/26-desktop2stereo-engineering-design-specification.md`.

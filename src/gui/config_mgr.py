@@ -68,7 +68,8 @@ class GUIConfigMixin:
         self.upscaler_sharpness_dd.value = "0.00"
         target_fps = self._parse_int(cfg.get("Target FPS", DEFAULTS["Target FPS"]), DEFAULTS["Target FPS"])
         self.target_fps_dd.value = self._target_fps_to_display(target_fps)
-        self.render_policy_dd.value = self._render_policy_to_display("scaled")
+        self.render_policy_dd.value = self._render_policy_to_display(
+            cfg.get("Render Size Policy", DEFAULTS["Render Size Policy"]))
         self.render_scale_dd.value = self._render_scale_to_display(
             cfg.get("Render Scale", DEFAULTS["Render Scale"]))
         fixed_width = self._parse_int(cfg.get("Render Fixed Width", DEFAULTS["Render Fixed Width"]), DEFAULTS["Render Fixed Width"])

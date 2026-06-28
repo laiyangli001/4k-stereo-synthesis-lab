@@ -18,11 +18,19 @@ _RENDER_SIZE_POLICY_ALIASES = {
     "dynamic": RenderSizePolicy.DYNAMIC,
 }
 
+_RENDER_SCALE_TIERS = {
+    "1K / 1920x1080": (1920, 1080),
+    "2K / 2560x1440": (2560, 1440),
+    "3K / 3200x1800": (3200, 1800),
+    "4K / 3840x2160": (3840, 2160),
+}
+_DEFAULT_RENDER_SCALE_TIER = "4K / 3840x2160"
+
 
 @dataclass(frozen=True)
 class RenderSizeConfig:
     policy: RenderSizePolicy = RenderSizePolicy.SCALED
-    scale_factor: float = 1.0
+    scale_factor: str = _DEFAULT_RENDER_SCALE_TIER
     fixed_width: int = 1920
     fixed_height: int = 1080
     max_pixels: int = 3840 * 2160
@@ -34,7 +42,7 @@ def render_size_config_from_settings(settings: dict | None) -> RenderSizeConfig:
     settings = settings or {}
     return RenderSizeConfig(
         policy=_normalize_policy(settings.get("Render Size Policy", RenderSizePolicy.SCALED.value)),
-        scale_factor=_float_setting(settings, "Render Scale", 1.0),
+        scale_factor=_normalize_render_scale_tier(settings.get("Render Scale", _DEFAULT_RENDER_SCALE_TIER)),
         fixed_width=_int_setting(settings, "Render Fixed Width", 1920),
         fixed_height=_int_setting(settings, "Render Fixed Height", 1080),
         max_pixels=_int_setting(settings, "Render Max Pixels", 3840 * 2160),
@@ -88,25 +96,34 @@ def _int_setting(settings: dict, key: str, default: int) -> int:
         return int(default)
 
 
-def _float_setting(settings: dict, key: str, default: float) -> float:
-    try:
-        return float(settings.get(key, default))
-    except (TypeError, ValueError):
-        return float(default)
+def _normalize_render_scale_tier(value) -> str:
+    text = str(value or "").strip()
+    compact = text.upper().replace(" ", "").replace("×", "X")
+    for label in _RENDER_SCALE_TIERS:
+        tier_name, resolution = label.split(" / ", 1)
+        if text == label or compact.startswith(tier_name):
+            return label
+        if resolution.upper() in compact:
+            return label
+    return _DEFAULT_RENDER_SCALE_TIER
+
+
+def _is_4k_tier_input(width: int, height: int) -> bool:
+    short_side = min(width, height)
+    long_side = max(width, height)
+    pixels = width * height
+    uhd_4k_pixels = 3840 * 2160
+    is_4k_full_or_ultrawide = long_side >= 3840 and short_side >= 1600
+    is_near_4k_window = pixels >= uhd_4k_pixels * 0.85 and long_side >= 3200 and short_side >= 1600
+    return is_4k_full_or_ultrawide or is_near_4k_window
 
 
 def _resolve_4k_tier_size(width: int, height: int, config: RenderSizeConfig, align: int) -> tuple[int, int]:
-    if width < 3840 and height < 2160:
+    if not _is_4k_tier_input(width, height):
         return _align_size(width, height, align)
-    scale = max(0.01, float(config.scale_factor))
-    if scale <= 0.58:
-        target = (1920, 1080)
-    elif scale <= 0.75:
-        target = (2560, 1440)
-    elif scale < 0.92:
-        target = (3200, 1800)
-    else:
-        target = (3840, 2160)
+    target = _RENDER_SCALE_TIERS[_normalize_render_scale_tier(config.scale_factor)]
+    if height > width:
+        target = (target[1], target[0])
     return _align_size(*target, align)
 
 

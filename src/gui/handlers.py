@@ -1,6 +1,5 @@
 """GUI Handler Mixin — event handlers, visibility sync, i18n, audio, refresh."""
 import os
-import re
 import asyncio
 import subprocess
 import flet as ft
@@ -61,57 +60,27 @@ class GUIHandlerMixin:
         ]
 
     def _render_scale_to_display(self, value):
-        scale = self._parse_float(value, DEFAULTS["Render Scale"])
-        if abs(scale - 0.5) < 0.01:
-            return "1K / 1920x1080"
-        if abs(scale - (2 / 3)) < 0.01:
-            return "2K / 2560x1440"
-        if abs(scale - (5 / 6)) < 0.01:
-            return "3K / 3200x1800"
-        if abs(scale - 1.0) < 0.01:
-            return "4K / 3840x2160"
-        return f"{scale:.6f}".rstrip("0").rstrip(".")
+        return self._normalize_render_scale_tier(value)
 
     def _display_to_render_scale(self, value):
+        return self._normalize_render_scale_tier(value)
+
+    def _normalize_render_scale_tier(self, value):
         text = str(value or "").strip()
-        mapping = {
-            "1K / 1920x1080": 0.5,
-            "2K / 2560x1440": 2 / 3,
-            "3K / 3200x1800": 5 / 6,
-            "4K / 3840x2160": 1.0,
-        }
-        if text in mapping:
-            return mapping[text]
-        if "1920x1080" in text or text.startswith("1K"):
-            return 0.5
-        if "2560x1440" in text or text.startswith("2K"):
-            return 2 / 3
-        if "3200x1800" in text or text.startswith("3K"):
-            return 5 / 6
-        if "3840x2160" in text or text.startswith("4K"):
-            return 1.0
-        match = re.search(r"\d+(?:\.\d+)?", text)
-        return float(match.group(0)) if match else DEFAULTS["Render Scale"]
+        compact = text.upper().replace(" ", "").replace("×", "X")
+        for label in self._render_scale_options():
+            tier_name, resolution = label.split(" / ", 1)
+            if text == label or compact.startswith(tier_name):
+                return label
+            if resolution.upper() in compact:
+                return label
+        return DEFAULTS["Render Scale"]
 
     def _render_policy_to_display(self, value):
-        mapping = {
-            "native": "Native",
-            "scaled": "Scaled",
-            "fixed": "Fixed",
-            "dynamic": "Dynamic",
-        }
-        key = mapping.get(str(value or "native").strip().lower(), "Native")
-        return UI_MESSAGES[self.locale].get(key, key)
+        return UI_MESSAGES[self.locale].get("Scaled", "Scaled")
 
     def _display_to_render_policy(self, value):
-        text = str(value or "")
-        mapping = {
-            "native": "native", "Native": "native", "原生": "native",
-            "scaled": "scaled", "Scaled": "scaled", "缩放": "scaled",
-            "fixed": "fixed", "Fixed": "fixed", "固定": "fixed",
-            "dynamic": "dynamic", "Dynamic": "dynamic", "动态": "dynamic",
-        }
-        return mapping.get(text, text.strip().lower() or "native")
+        return "scaled"
 
     def _update_render_size_control_visibility(self, show_render_size):
         self.row6d.visible = show_render_size
