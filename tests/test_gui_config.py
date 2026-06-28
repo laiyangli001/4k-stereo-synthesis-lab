@@ -613,6 +613,8 @@ def test_gui_render_size_controls_expose_only_fixed_4k_scale_tiers():
     assert 'def _display_to_render_scale' in handlers_text
     assert 'def _render_scale_to_display' in handlers_text
     assert 'return float(match.group(0))' not in handlers_text
+    assert 'compact.startswith(tier_name)' not in handlers_text
+    assert 'resolution.upper() in compact' not in handlers_text
     assert '"1K / 50%": 0.5' not in handlers_text
     assert 'self.render_fixed_dd.visible = False' in builders_text
     assert 'self.row6d = ft.Row([self.render_scale_label, self.render_scale_dd' in builders_text

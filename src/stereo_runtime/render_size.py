@@ -98,13 +98,8 @@ def _int_setting(settings: dict, key: str, default: int) -> int:
 
 def _normalize_render_scale_tier(value) -> str:
     text = str(value or "").strip()
-    compact = text.upper().replace(" ", "").replace("×", "X")
-    for label in _RENDER_SCALE_TIERS:
-        tier_name, percent = label.split(" / ", 1)
-        if text == label or compact.startswith(tier_name):
-            return label
-        if percent.upper() in compact:
-            return label
+    if text in _RENDER_SCALE_TIERS:
+        return text
     return _DEFAULT_RENDER_SCALE_TIER
 
 

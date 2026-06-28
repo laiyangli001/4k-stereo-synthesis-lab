@@ -70,8 +70,9 @@ def test_resolve_render_size_scaled_keeps_non_4k_tier_input_native(capture_size)
     assert resolve_render_size(capture_size, config) == capture_size
 
 
-def test_render_scale_numeric_values_do_not_select_legacy_thresholds():
-    config = render_size_config_from_settings({"Render Size Policy": "scaled", "Render Scale": "0.75"})
+@pytest.mark.parametrize("legacy_value", ["0.75", "75%", "2K", "3K", "1K"])
+def test_render_scale_rejects_legacy_numeric_and_short_aliases(legacy_value):
+    config = render_size_config_from_settings({"Render Size Policy": "scaled", "Render Scale": legacy_value})
 
     assert config.scale_factor == "4K / 100%"
     assert resolve_render_size((3840, 2160), config) == (3840, 2160)

@@ -493,7 +493,7 @@ class GUIConfigMixin:
     @staticmethod
     def _display_to_preset(value):
         mapping = {
-            "Traditional / Fastest": "traditional_fastest", "传统 / 速度最快": "traditional_fastest",
+            "Traditional / Fastest": "traditional_fastest", "传统 / 速度快": "traditional_fastest",
             "Cinema": "cinema", "Cinema / Balance": "cinema", "影院": "cinema", "电影 / 偏均衡": "cinema",
             "Game / Low Latency": "game_low_latency", "游戏 / 低延迟": "game_low_latency",
             "Image  / High Quality": "still_image_hq", "图片 / 高质量": "still_image_hq",

@@ -87,7 +87,7 @@ runtime_q 只保留最新 runtime result，避免渲染端积压。
 | docs/28 阶段 | 当前工程实现 | 当前状态 / 迁移边界 |
 |---|---|---|
 | 步骤 1：Capture Input | `src/capture/session.py`, `src/capture/runners.py`, `src/capture/types.py`, `src/capture/backends/*` | 已有 `CapturedFrame` metadata、copy mode、source/capture size 记录；真实 CUDA/ROCm zero-copy 仍需硬件验证 |
-| 步骤 2：Resolve Render Size | `src/stereo_runtime/render_size.py`, `src/stereo_runtime/pipeline.py`, GUI Render Scale 配置 | 已按 4K/3K/2K/1K 固定 scale 档位解析；4K级输入按比例缩放并保持输入宽高比；历史 numeric threshold 兼容属于清理项 |
+| 步骤 2：Resolve Render Size | `src/stereo_runtime/render_size.py`, `src/stereo_runtime/pipeline.py`, GUI Render Scale 配置 | 已按 4K/3K/2K/1K 固定 scale 档位解析；4K级输入按比例缩放并保持输入宽高比；历史 numeric / short alias Render Scale 输入已清理并有测试防回归 |
 | 步骤 3：Resize RGB To Render Size | `src/capture/preprocess.py`, `src/stereo_runtime/pipeline.py` | 已在 pipeline 边界把 capture frame 解析到 render_size；跨设备 fallback 仍需继续扩展验证矩阵 |
 | 步骤 4：Depth Estimation | `src/stereo_runtime/depth_provider.py`, `src/stereo_runtime/depth_onnx_provider.py`, `src/stereo_runtime/providers/*`, `model_registry.py` | 已支持多 provider / backend；provider 内部尺寸可以不同，但输出必须回到 render_size |
 | 步骤 5：Depth Postprocess | `src/stereo_runtime/runtime.py`, `src/stereo_runtime/synthesis.py` | 当前使用 normalized / relative depth 处理和轻量 postprocess；不能改写为 metric Z 路径 |
@@ -973,7 +973,7 @@ scripts/tools/openxr_visual_regression.py
 | Capture metadata | 已有 `CapturedFrame` / `FrameCopyMode`，event/polling runner 会携带 source、device、dtype、copy_mode、capture_size 等 metadata，并进入 runtime debug | 真实硬件 CUDA/ROCm zero-copy 仍需设备验证后才能把路径标成 true zero-copy |
 | Capture preprocess device contract | 已显式处理 numpy / CPU tensor / CUDA tensor / ROCm tensor 形态，并记录 origin/output device 与 transfer metadata | 跨设备 fallback 和硬件路径仍需按目标机器补充验证矩阵 |
 | OpenXR direct uniforms | 已通过 adapter/snapshot 路径生成规范参数到 legacy shader uniforms 的转换，并输出 `legacy_shader_uniforms` / resolved disparity debug | D3D11 native direct shader 仍需追平 OpenGL direct shader 的完整 DIBR 质量语义；这是独立 follow-up |
-| Render Size / 4K scale tier | 已收敛为固定 scale 档位 Render Scale：非 4K 保持 capture_size；4K 级输入按 4K/3K/2K/1K 稳定 scale 档位解析，并保持横屏、竖屏、16:10、DCI 4K、常见 4K 超宽比例；判断排除面积不足的窄高/1440p 超宽 | 清理历史 numeric scale / threshold 兼容冗余；该项属于 Future Work |
+| Render Size / 4K scale tier | 已收敛为固定 scale 档位 Render Scale：非 4K 保持 capture_size；4K 级输入按 4K/3K/2K/1K 稳定 scale 档位解析，并保持横屏、竖屏、16:10、DCI 4K、常见 4K 超宽比例；判断排除面积不足的窄高/1440p 超宽；旧 numeric / short alias Render Scale 输入已清理为默认回退 | 继续通过测试防止重新引入 `0.75`、`75%`、`2K` 等用户侧别名；无新的运行时语义待办 |
 | Network stream | MJPEG/legacy stream 已消费 packed frame，并引入 `EncoderProfile` 描述 transport 侧 resize、pixel format、quality/FPS 等 | RTMP/更低延迟编码仍是后续工程；不能重新定义立体参数语义 |
 
 ## 后续实施优先级
@@ -981,7 +981,7 @@ scripts/tools/openxr_visual_regression.py
 1. 完成 GUI live hot-save 到 `RuntimeSettingsSnapshot` 的直接发送路径，把 settings.yaml polling 降为明确兼容机制。
 2. 做 D3D11 native OpenXR direct shader parity，使其核心 DIBR 质量语义追平 OpenGL direct shader。
 3. 做 CUDA/ROCm capture zero-copy 硬件验证，只有实测无 CPU 中转后才允许把 metadata 标为 `zero_copy=True`。
-4. 清理兼容冗余：旧 snapshot/API 字段、debug-only 兼容字段、legacy parallax 乘数字段、历史 render-scale 数值阈值。
+4. 清理兼容冗余：旧 snapshot/API 字段、debug-only 兼容字段、legacy parallax 乘数字段；render-scale 数值/短写别名已清理，后续只需防回归。
 5. 继续完善 network_stream 的 encoder transport contract，尤其是 RTMP/低延迟编码路径，但保持其只消费 packed synthesis 输出。
 
 ## 结论

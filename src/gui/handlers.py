@@ -67,13 +67,8 @@ class GUIHandlerMixin:
 
     def _normalize_render_scale_tier(self, value):
         text = str(value or "").strip()
-        compact = text.upper().replace(" ", "").replace("×", "X")
-        for label in self._render_scale_options():
-            tier_name, resolution = label.split(" / ", 1)
-            if text == label or compact.startswith(tier_name):
-                return label
-            if resolution.upper() in compact:
-                return label
+        if text in self._render_scale_options():
+            return text
         return DEFAULTS["Render Scale"]
 
     def _render_policy_to_display(self, value):
