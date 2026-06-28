@@ -28,14 +28,14 @@ refactor: complete hot reload snapshot fields
 
 Canonical specs for current work:
 
-- `docs/26-desktop2stereo-engineering-design-specification.md`
-- `docs/25-2d-to-3d-runtime-specification.md`
+- `docs/28-Realtime-2d-to-3d-specification.md` - official final runtime process spec; `docs/25` is obsolete.
+- `docs/26-desktop2stereo-engineering-design-specification.md` - engineering implementation, migration, compatibility cleanup, and compliance status.
 - `prompts/codex-refactor-prompt.md`
 - This file: `docs/00-api-handoff-progress.md`
 
 ## Current Boundaries
 
-- Treat `docs/25-2d-to-3d-runtime-specification.md` as canonical when Parallax Budget details differ from the prompt.
+- Treat `docs/28-Realtime-2d-to-3d-specification.md` as canonical when Parallax Budget, render_size, OpenXR, or output contract details differ from the prompt or historical docs.
 - Keep `stereo_runtime` responsible for depth inference, stereo synthesis, OpenXR render-core config, output tensors, timings, and provider/debug contracts.
 - Keep capture/session/window lifecycle, GUI settings persistence, OpenXR session/swapchain timing, and final display/submit outside `stereo_runtime`.
 - Keep compatibility paths where recent tasks introduced new contracts: `RuntimeSettingsSnapshot`, normalized parallax budgets, and `CapturedFrame` metadata.
@@ -43,9 +43,461 @@ Canonical specs for current work:
 
 ## Current Known Issues
 
-- None currently recorded for this handoff.
+- D3D11 native OpenXR direct shader still needs a follow-up to match the OpenGL RGB+depth direct shader's core DIBR semantics. Current D3D11 already applies `screen_roll` to parallax direction, but still lacks the OpenGL shader's 3-tap depth smoothing, non-linear depth shaping, edge falloff, soft disocclusion confidence, push-pull inpaint, alpha edge fade, feather controls, corner radius, and `u_resolution` / `u_viewport` semantics. Estimated AI time for the focused direct-shader parity pass is about 60-90 minutes excluding headset validation; full OpenGL `_render_eye()` experience parity is a larger 3-5 hour follow-up.
+
+## Future Work
+
+Detailed engineering and migration rules live in `docs/26-desktop2stereo-engineering-design-specification.md`. This handoff file only tracks the current task queue and verification status.
+
+Current task queue:
+
+1. Complete GUI live hot-save direct emission of `RuntimeSettingsSnapshot`; keep settings.yaml polling as an explicit compatibility path.
+2. Bring D3D11 native OpenXR RGB+depth direct shader to parity with the OpenGL direct shader's core DIBR quality semantics.
+3. Validate CUDA/ROCm capture zero-copy on real hardware before any path reports `zero_copy=True`.
+4. Remove compatibility redundancy after all consumers use the docs/28 contract: old snapshot/API aliases, debug-only fallback keys, legacy parallax multiplier fields, and historical render-scale numeric thresholds.
+5. Continue network_stream encoder transport work, especially RTMP / low-latency paths, without redefining stereo synthesis semantics.
+6. Keep `docs/26-desktop2stereo-engineering-design-specification.md` aligned to the `docs/28-Realtime-2d-to-3d-specification.md` eleven-step runtime flow.
 
 ## Current Status
+
+### 2026-06-28 Docs 26 Engineering Flow Alignment
+
+Reduced `docs/00-api-handoff-progress.md` Future Work to a task queue and moved detailed compatibility/migration rules into `docs/26-desktop2stereo-engineering-design-specification.md`.
+
+Implemented in this follow-up:
+
+- Added a docs/26 document-position section: docs/28 is the final runtime process spec, docs/26 is the engineering implementation and migration spec, docs/00 is only handoff/progress.
+- Added a docs/26 mapping table from each docs/28 runtime step to current implementation modules and remaining migration boundaries.
+- Added a docs/26 compatibility cleanup section covering snapshot aliases, debug fallback keys, legacy parallax multipliers, historical render-scale paths, and D3D11 direct shader parity.
+- Replaced the detailed docs/00 Future Work explanation with a concise current task queue that points to docs/26 for engineering detail.
+
+Verification:
+
+```powershell
+git diff --check -- docs\26-desktop2stereo-engineering-design-specification.md docs\00-api-handoff-progress.md
+```
+
+Result:
+
+```text
+passed; CRLF warnings only
+```
+
+### 2026-06-28 Docs 28 Canonical Runtime Spec Promotion
+
+Promoted `docs/28-Realtime-2d-to-3d-specification.md` to the official final runtime process specification and made `docs/25-2d-to-3d-runtime-specification.md` obsolete.
+
+Implemented in this follow-up:
+
+- Updated `docs/28-Realtime-2d-to-3d-specification.md` so it carries the final runtime-flow authority while preserving its structured eleven-step format.
+- Ensured the former `docs/25` normative content is represented in docs/28: render_size / 4K tier semantics, normalized-depth parallax budget, depth provider contract, RuntimeSettingsSnapshot, hot-reload classification, OpenXR RGB+depth direct/full synthesis, output packing contracts, and runtime debug/result fields.
+- Marked `docs/25-2d-to-3d-runtime-specification.md` as obsolete at the top of the file instead of deleting it.
+- Updated `docs/26-desktop2stereo-engineering-design-specification.md` and `docs/README.md` so current spec references point to docs/28.
+
+Verification:
+
+```powershell
+git diff --check -- docs\28-Realtime-2d-to-3d-specification.md docs\25-2d-to-3d-runtime-specification.md docs\26-desktop2stereo-engineering-design-specification.md docs\README.md docs\00-api-handoff-progress.md
+```
+
+Result:
+
+```text
+passed; CRLF warnings only
+```
+
+### 2026-06-28 Docs 25 Final Runtime Flow Cleanup
+
+Accepted the split between the canonical runtime process specification and the engineering/migration specification.
+
+Implemented in this follow-up:
+
+- Cleaned `docs/25-2d-to-3d-runtime-specification.md` so it describes the final target runtime flow, not intermediate compatibility or migration steps.
+- Removed legacy/current-code wording from the `docs/25` runtime flow, OpenXR RGB+depth direct path, RuntimeSettingsSnapshot field list, hot-reload debug fields, IPD handling, render-scale semantics, and parallax implementation section.
+- Renamed the mode matrix row from `openxr traditional` to `openxr_rgb_depth_direct` and clarified that the direct shader path must consume a spec-derived shader uniform snapshot.
+- Removed `render_size_policy` from the `docs/25` final RuntimeSettingsSnapshot/debug field contract; remaining compatibility handling stays in `docs/26` and Future Work.
+- Left `docs/26-desktop2stereo-engineering-design-specification.md` as the place for current implementation state, legacy adapters, compatibility fallbacks, and cleanup tracking.
+
+Verification:
+
+```powershell
+git diff --check -- docs\25-2d-to-3d-runtime-specification.md docs\00-api-handoff-progress.md
+```
+
+Result:
+
+```text
+passed; CRLF warnings only
+```
+
+### 2026-06-28 Docs 25/26 Compliance Alignment Follow-up
+
+Checked `docs/25-2d-to-3d-runtime-specification.md` and `docs/26-desktop2stereo-engineering-design-specification.md` together after the render-size, parallax, capture metadata, RuntimeSettingsSnapshot, OpenXR adapter, and stream transport passes.
+
+Outcome:
+
+- Excluding the separately recorded compatibility-cleanup work, the main `docs/25` runtime logic is now considered basically satisfied by the current implementation and tests.
+- `docs/26` had stale "current gaps / priorities" wording that still described already-completed work as future implementation; updated it to a compliance-status table.
+- `docs/26` now explicitly treats `docs/25` as canonical for parallax budget, render_size, and OpenXR output semantics when the two documents differ.
+- Remaining non-cleanup gaps are now narrowed to GUI live hot-save directly emitting `RuntimeSettingsSnapshot`, D3D11 native direct shader parity with OpenGL DIBR quality semantics, hardware validation for CUDA/ROCm zero-copy, and future RTMP/low-latency stream transport work.
+- A broader keyword sweep found no new `docs/25` vs `docs/26` semantic conflict in production code. It did find stale `docs/26` wording for `CapturedFrame`, structured output size consumption, and parallax migration status; those sections were updated.
+- The sweep also found non-canonical older docs that still explain legacy `Depth Strength` / `IPD` / `Stereo Scale` / `Max Shift Ratio` semantics. These implementation-experience records have been moved to `docs/archive/implementation-experience/` and are not current normative specs. A later documentation-cleanup pass can decide whether to delete or rewrite them.
+- `src/settings.yaml` currently contains `Render Scale: 1.0` in the local working tree. Runtime/GUI normalization maps unknown old values back to the default `4K / 3840x2160`, but the file value itself is not spec-clean and should be normalized when user-local settings are safe to touch.
+
+Verification:
+
+```powershell
+git diff --check -- docs\26-desktop2stereo-engineering-design-specification.md docs\00-api-handoff-progress.md
+```
+
+Result:
+
+```text
+passed; CRLF warnings only
+```
+
+### 2026-06-28 Runtime Settings Spec Alias Follow-up
+
+Continued the `docs/25-2d-to-3d-runtime-specification.md` RuntimeSettingsSnapshot compliance pass by accepting the spec-facing field names that differ from older internal runtime config names.
+
+Implemented in this follow-up:
+
+- Added `RuntimeSettingsSnapshot.parallax_budget_preset` as the spec-facing alias for internal `parallax_preset`.
+- Added `RuntimeSettingsSnapshot.temporal_enabled` as the spec-facing alias for internal `temporal`.
+- Kept existing internal fields supported; aliases map to runtime config only when the internal field is not explicitly set.
+- Included the alias fields in hot-reload classification, temporal-reset handling, active settings merge, and active settings debug output.
+- Added regression coverage proving alias-only snapshots update runtime config, reset temporal state, and surface the alias names through structured hot-reload result metadata and debug compatibility fields.
+
+Verification:
+
+```powershell
+src\python3\python.exe -m py_compile src\stereo_runtime\settings_snapshot.py src\stereo_runtime\runtime.py tests\test_settings_snapshot.py
+src\python3\python.exe -m pytest tests\test_settings_snapshot.py tests\test_runtime_openxr.py tests\test_runtime_pipeline.py -q
+git diff --check -- src\stereo_runtime\settings_snapshot.py src\stereo_runtime\runtime.py tests\test_settings_snapshot.py
+```
+
+Result:
+
+```text
+46 passed; diff-check passed with CRLF warnings only
+```
+
+### 2026-06-28 Runtime Settings Result Fields Follow-up
+
+Continued the `docs/25-2d-to-3d-runtime-specification.md` compliance pass by promoting hot-reload/runtime-settings result metadata out of debug-only storage.
+
+Implemented in this follow-up:
+
+- Added structured `active_settings_version`, `hot_reload_class`, and `hot_reload_changed_fields` fields to `StereoRuntimeResult` and `OpenXRRuntimeResult`.
+- Kept the legacy `debug_info["active_settings_version"]`, `debug_info["hot_reload_class"]`, and `debug_info["hot_reload_changed_fields"]` keys for compatibility.
+- Updated RGB runtime and OpenXR runtime paths to populate the structured fields from the runtime's applied settings state.
+- Updated `openxr_result_from_stereo_result()` so OpenXR full-synthesis conversion preserves the structured settings metadata.
+- Added regression coverage for RGB results, OpenXR RGB+depth results, and full-synthesis conversion preserving the structured fields.
+
+Verification:
+
+```powershell
+src\python3\python.exe -m py_compile src\stereo_runtime\runtime.py tests\test_runtime_openxr.py
+src\python3\python.exe -m pytest tests\test_runtime_openxr.py tests\test_settings_snapshot.py tests\test_runtime_pipeline.py -q
+git diff --check -- src\stereo_runtime\runtime.py tests\test_runtime_openxr.py docs\00-api-handoff-progress.md
+```
+
+Result:
+
+```text
+44 passed; diff-check passed with CRLF warnings only
+```
+
+### 2026-06-28 Render Size Aspect Protection Specification Follow-up
+
+Clarified the canonical `docs/25-2d-to-3d-runtime-specification.md` aspect-ratio rules after the fixed-tier `render_size` semantics were finalized.
+
+Implemented in this follow-up:
+
+- Kept ultrawide aspect protection as a valid Parallax Budget rule, but moved its input explicitly to resolved `render_size` rather than raw `capture_size`.
+- Clarified that 4K-tier input classification and aspect-factor budget protection are separate stages: `capture_size` decides 4K-tier eligibility, while `render_size` decides short-side budget and `aspect_factor`.
+- Documented that 4K ultrawide inputs such as `3840x1600` may map to fixed 16:9 tiers such as `2560x1440`, which should not trigger ultrawide budget reduction after mapping.
+- Documented that non-4K ultrawide inputs such as `3440x1440` keep `render_size = capture_size` and still trigger aspect protection when the final render aspect exceeds 2:1.
+- Updated window-capture budget recalculation thresholds to refer to `render_size` short-side and final `render_size` aspect, avoiding raw capture aspect jitter in fixed-tier cases.
+
+Verification:
+
+```powershell
+git diff --check -- docs/25-2d-to-3d-runtime-specification.md docs/00-api-handoff-progress.md
+```
+
+Result:
+
+```text
+passed; CRLF warnings only
+```
+
+### 2026-06-28 Render Scale Fixed Tier Runtime Follow-up
+
+Continued the render-size compliance pass by removing the remaining continuous-scale and threshold behavior from the runtime and GUI render-scale path.
+
+Implemented in this follow-up:
+
+- Changed `RenderSizeConfig.scale_factor` semantics from a float scale to a canonical fixed tier label (`1K / 1920x1080`, `2K / 2560x1440`, `3K / 3200x1800`, `4K / 3840x2160`).
+- Removed runtime threshold mapping for `0.58` / `0.75` / `0.92`; unknown or numeric legacy values now fall back to the default 4K tier instead of selecting a lower tier.
+- Implemented direction-independent 4K-tier input detection, including portrait 4K, DCI 4K, 16:10 4K, and 3840x1600 ultrawide, while excluding 1440p ultrawide and narrow tall windows.
+- Preserved portrait orientation when resolving fixed tiers, so 2160x3840 can resolve to 1080x1920 / 1440x2560 / 1800x3200 / 2160x3840.
+- Updated GUI render-scale load/save to store canonical tier labels instead of floats.
+- Updated pipeline debug `stereo_render_scale` to report the tier label, matching the structured fixed-tier contract used by local, stream, and OpenXR render-size resolution.
+
+Verification:
+
+```powershell
+src\python3\python.exe -m py_compile src\stereo_runtime\render_size.py src\gui\handlers.py src\gui\config.py src\stereo_runtime\pipeline.py src\stereo_runtime\settings_snapshot.py tests\test_render_size.py tests\test_runtime_pipeline.py tests\test_viewer_settings.py tests\test_settings_snapshot.py tests\test_gui_config.py
+src\python3\python.exe -m pytest tests\test_render_size.py tests\test_runtime_pipeline.py tests\test_viewer_settings.py tests\test_settings_snapshot.py tests\test_gui_config.py tests\test_runtime_context.py -q
+```
+
+Result:
+
+```text
+95 passed
+```
+
+Notes / next improvements:
+
+- OpenXR downsampling uses the same `RuntimePipelineContext.render_size_config -> resolve_render_size() -> capture_frame_to_rgb(target_resolution=render_size)` path, so this fixed-tier behavior applies there without a separate OpenXR-only scale branch.
+
+### 2026-06-28 Render Size 4K Tier Specification Follow-up
+
+Updated the canonical render-size specification after confirming `native` / `fixed` / `dynamic` are no longer user-facing policy requirements. `Render Scale` is now documented as a stable 4K-tier selection signal, not a continuous scale for arbitrary input sizes.
+
+Implemented in this follow-up:
+
+- Replaced the user-facing `native` / `fixed` / `dynamic` Render Size Policy language in `docs/25-2d-to-3d-runtime-specification.md` with the current Render Size / 4K Tier contract.
+- Clarified that non-4K inputs keep `capture_size`, while 4K-tier inputs map GUI `Render Scale` labels to stable 3840x2160 / 3200x1800 / 2560x1440 / 1920x1080 tiers.
+- Documented that GUI Render Scale uses fixed resolution labels (`1K / 1920x1080`, `2K / 2560x1440`, `3K / 3200x1800`, `4K / 3840x2160`); numeric thresholds such as `0.58` / `0.75` / `0.92` are not valid tier-selection semantics.
+- Added the portrait 4K equivalent tiers: 2160x3840 / 1800x3200 / 1440x2560 / 1080x1920.
+- Replaced the old landscape-only 4K detection pseudocode with a 4K-tier input rule based on full/ultrawide 4K dimensions or near-4K pixel area: `long_side >= 3840 and short_side >= 1600`, or `pixels >= 3840*2160*0.85 and long_side >= 3200 and short_side >= 1600`.
+- Clarified that 3840x2160, 2160x3840, 4096x2160, 3840x2400, and 3840x1600 enter 4K tier, while 2560x1440, 3440x1440, 1080x1920, and 1000x3000 stay at capture size.
+- Updated `docs/26-desktop2stereo-engineering-design-specification.md` so the implementation gap and follow-up priority no longer point to user-selectable `native/scaled/fixed/dynamic` policy modes.
+
+Verification:
+
+```powershell
+git diff --check -- docs/25-2d-to-3d-runtime-specification.md docs/26-desktop2stereo-engineering-design-specification.md docs/00-api-handoff-progress.md
+```
+
+Result:
+
+```text
+passed; CRLF warnings only
+```
+
+Notes / next improvements:
+
+- This is a documentation/specification correction only. Runtime code already follows the 4K-tier scaled behavior for current tests; a follow-up can add explicit portrait 4K tests if we want to lock that contract in code.
+
+### 2026-06-28 Render Size Policy GUI Persistence Follow-up
+
+Continued the `docs/25-2d-to-3d-runtime-specification.md` render-size policy compliance pass by fixing GUI load/save persistence for the independent `Render Size Policy` layer.
+
+Implemented in this follow-up:
+
+- Updated GUI config load so `render_policy_dd` reflects `cfg["Render Size Policy"]` instead of always displaying `scaled`.
+- Updated GUI config save so `Render Size Policy` is derived from the selected render policy dropdown value instead of being hard-coded to `scaled`.
+- Added GUI config regression coverage proving the policy dropdown uses the configured value for load/save and guarding against reintroducing the hard-coded `scaled` path.
+
+Verification:
+
+```powershell
+src\python3\python.exe -m py_compile src\gui\config_mgr.py tests\test_gui_config.py
+src\python3\python.exe -m pytest tests\test_gui_config.py tests\test_render_size.py tests\test_runtime_context.py -q
+```
+
+Result:
+
+```text
+54 passed
+```
+
+Notes / next improvements:
+
+- This closes the config load/save overwrite bug for non-`scaled` compatibility values. User-selectable `native` / `fixed` / `dynamic` policy modes are no longer a product requirement; current spec direction is `Render Scale` as a 4K-tier selection signal, with non-4K inputs preserving `capture_size`.
+
+### 2026-06-28 Output Transport Debug Contract Follow-up
+
+Continued the `docs/25-2d-to-3d-runtime-specification.md` transport-layer compliance pass by making runtime pipeline debug report the resolved output transport instead of deriving `transport` only from `run_mode`.
+
+Implemented in this follow-up:
+
+- Updated `_attach_pipeline_debug()` so `debug_info["transport"]` prefers the explicit `RuntimePipelineContext.output_transport` value.
+- Preserved fallback labels for older contexts without explicit transport: `openxr_swapchain` for OpenXR and `local_window` otherwise.
+- Added regression coverage proving `encoded_stream` remains the primary `transport` debug value for network-stream style contexts, while OpenXR/local fallback behavior remains unchanged.
+
+Verification:
+
+```powershell
+src\python3\python.exe -m py_compile src\stereo_runtime\pipeline.py tests\test_runtime_pipeline.py
+src\python3\python.exe -m pytest tests\test_runtime_pipeline.py tests\test_runtime_context.py tests\test_mode_configs.py -q
+src\python3\python.exe -m pytest tests\test_capture_runners.py tests\test_capture_metadata.py tests\test_capture_session.py tests\test_windows_capture_event.py tests\test_capture_preprocess.py tests\test_runtime_pipeline.py tests\test_mjpeg_streamer.py tests\test_legacy_runtime.py tests\test_viewer_runtime.py tests\test_mode_configs.py tests\test_adapter_config.py tests\test_hot_reload.py tests\test_runtime.py tests\test_runtime_context.py tests\test_settings_snapshot.py tests\test_runtime_openxr.py tests\test_openxr_runtime.py tests\test_runtime_callbacks.py tests\test_session_helpers.py tests\test_breakdown.py tests\test_parallax.py tests\test_synthesis.py tests\test_openxr_state.py tests\test_openxr_render.py -q
+```
+
+Result:
+
+```text
+23 passed
+224 passed
+```
+
+Notes / next improvements:
+
+- `application_runtime_target` and `output_transport` are still also emitted as explicit debug fields for readability, but the canonical `transport` field now reflects the resolved transport contract when the context provides one.
+
+### 2026-06-28 Polling Capture Copy Metadata Follow-up
+
+Continued the `docs/26-desktop2stereo-engineering-design-specification.md` capture-copy compliance pass by making polling capture backends explicitly report their non-zero-copy status, matching the event capture metadata contract.
+
+Implemented in this follow-up:
+
+- Updated `PollingCaptureRunner` to attach `metadata["zero_copy"] = False` when wrapping polling backend frames into `CapturedFrame`.
+- Kept `FrameCopyMode.COPY` for polling backends, making DesktopDuplication / DXCamera-style paths explicit copy paths until hardware-backed zero-copy validation proves otherwise.
+- Added polling runner regression coverage for `CapturedFrame` metadata: backend name, copy mode, zero-copy flag, capture tool, raw device, dtype, and capture size.
+- Added pipeline regression coverage proving polling capture metadata reaches runtime debug fields as `capture_copy_mode="copy"` and `capture_zero_copy=False`.
+
+Verification:
+
+```powershell
+src\python3\python.exe -m py_compile src\capture\runners.py tests\test_capture_runners.py tests\test_runtime_pipeline.py
+src\python3\python.exe -m pytest tests\test_capture_runners.py tests\test_capture_metadata.py tests\test_capture_session.py tests\test_windows_capture_event.py tests\test_runtime_pipeline.py -q
+src\python3\python.exe -m pytest tests\test_capture_runners.py tests\test_capture_metadata.py tests\test_capture_session.py tests\test_windows_capture_event.py tests\test_capture_preprocess.py tests\test_runtime_pipeline.py tests\test_mjpeg_streamer.py tests\test_legacy_runtime.py tests\test_viewer_runtime.py tests\test_mode_configs.py tests\test_adapter_config.py tests\test_hot_reload.py tests\test_runtime.py tests\test_runtime_context.py tests\test_settings_snapshot.py tests\test_runtime_openxr.py tests\test_openxr_runtime.py tests\test_runtime_callbacks.py tests\test_session_helpers.py tests\test_breakdown.py tests\test_parallax.py tests\test_synthesis.py tests\test_openxr_state.py tests\test_openxr_render.py -q
+```
+
+Result:
+
+```text
+20 passed
+222 passed
+```
+
+Notes / next improvements:
+
+- Hardware-backed CUDA/ROCm validation is still required before any capture path can be promoted from explicit non-zero-copy metadata to true zero-copy.
+
+### 2026-06-28 Network Stream Encoder Metadata Follow-up
+
+Continued the `docs/25-2d-to-3d-runtime-specification.md` network-stream compliance pass by aligning MJPEG transport metadata with the encoded stream profile instead of the pre-encoder packed frame size.
+
+Implemented in this follow-up:
+
+- Kept network streaming consuming packed SBS/runtime output frames outside `stereo_runtime`; no stereo algorithm semantics moved into the transport layer.
+- Updated `MJPEGStreamer.set_frame()` so cached stream HTML metadata (`WIDTH` / `HEIGHT`) reports the encoder transport size when `EncoderProfile.resize_width` / `resize_height` are set.
+- Kept resize and RGB/BGR/BGRA conversion inside `MJPEGStreamer._prepare_frame_for_jpeg()`, preserving `EncoderProfile` as the transport-side contract.
+- Hardened `MJPEGStreamer.stop()` so tests and callers can close a streamer that was constructed but not started without hanging in WSGI shutdown.
+- Added MJPEG streamer regression coverage for resized transport metadata and no-resize packed-frame metadata.
+
+Verification:
+
+```powershell
+src\python3\python.exe -m py_compile src\streaming\mjpeg_streamer.py tests\test_mjpeg_streamer.py tests\test_legacy_runtime.py tests\test_viewer_runtime.py
+src\python3\python.exe -m pytest tests\test_mjpeg_streamer.py tests\test_legacy_runtime.py tests\test_viewer_runtime.py -q
+src\python3\python.exe -m pytest tests\test_mjpeg_streamer.py tests\test_legacy_runtime.py tests\test_viewer_runtime.py tests\test_mode_configs.py tests\test_adapter_config.py tests\test_hot_reload.py tests\test_runtime.py tests\test_runtime_context.py tests\test_settings_snapshot.py tests\test_runtime_openxr.py tests\test_openxr_runtime.py tests\test_runtime_pipeline.py tests\test_runtime_callbacks.py tests\test_session_helpers.py tests\test_breakdown.py tests\test_parallax.py tests\test_synthesis.py tests\test_openxr_state.py tests\test_openxr_render.py -q
+```
+
+Result:
+
+```text
+9 passed
+203 passed
+```
+
+Notes / next improvements:
+
+- MJPEG/legacy stream now has an explicit transport metadata contract for encoder resize. RTMP remains a separate window-capture based legacy stream path and can be audited independently if it becomes part of the runtime-result transport contract.
+
+### 2026-06-28 Settings YAML Hot Reload Snapshot Queue Follow-up
+
+Continued the `docs/25-2d-to-3d-runtime-specification.md` and `docs/26-desktop2stereo-engineering-design-specification.md` hot-reload compliance pass by moving the main-process `settings.yaml` compatibility hot-reload path onto `RuntimeSettingsSnapshot + settings_update_q` instead of directly mutating `StereoRuntime`.
+
+Implemented in this follow-up:
+
+- Split `StereoHotReloader` into `poll_settings_snapshot_if_needed()` plus `log_settings_snapshot()`, while keeping `apply_if_needed()` as the direct-apply compatibility API for older callers/tests.
+- Updated `RuntimeCallbacks.apply_stereo_hot_reload_if_needed()` to enqueue the polled `RuntimeSettingsSnapshot` with `send_settings_snapshot()` and update OpenXR state from the same snapshot, rather than directly applying runtime config changes.
+- Updated `RuntimePipelineLoop` to drain and apply settings snapshots again immediately after the hot-reload poll and before the runtime frame call, so YAML compatibility changes still take effect on a frame boundary before synthesis/rendering.
+- Centralized snapshot active-preset resolution in the pipeline so fixed `stereo_preset` snapshots override stale context `stereo_active_preset`, while `auto` preserves the current active preset.
+- Added regression coverage for poll-only hot reload, callback enqueue behavior, and pipeline application of queued hot-reload snapshots before runtime processing.
+
+Verification:
+
+```powershell
+src\python3\python.exe -m py_compile src\stereo_runtime\hot_reload.py src\app_runtime\runtime_callbacks.py src\stereo_runtime\pipeline.py tests\test_hot_reload.py tests\test_runtime_pipeline.py tests\test_runtime_callbacks.py
+src\python3\python.exe -m pytest tests\test_hot_reload.py tests\test_runtime_pipeline.py tests\test_runtime_callbacks.py -q
+src\python3\python.exe -m pytest tests\test_adapter_config.py tests\test_hot_reload.py tests\test_runtime.py tests\test_runtime_context.py tests\test_settings_snapshot.py tests\test_runtime_openxr.py tests\test_viewer_runtime.py tests\test_openxr_runtime.py tests\test_runtime_pipeline.py tests\test_runtime_callbacks.py tests\test_session_helpers.py tests\test_breakdown.py tests\test_parallax.py tests\test_synthesis.py tests\test_openxr_state.py tests\test_openxr_render.py -q
+```
+
+Result:
+
+```text
+26 passed
+197 passed
+```
+
+Notes / next improvements:
+
+- The GUI process still persists hot controls to `settings.yaml`; because GUI and runtime are separate processes, this remains the compatibility transport. The main runtime process now converts that compatibility signal into `RuntimeSettingsSnapshot` and applies it through `settings_update_q` at frame boundaries.
+
+### 2026-06-28 Runtime Output Size Structured Consumption Follow-up
+
+Continued the `docs/25-2d-to-3d-runtime-specification.md` output-size compliance pass by auditing host/viewer consumers of runtime output dimensions and locking the structured-field precedence with an OpenXR viewer regression test.
+
+Findings in this follow-up:
+
+- `viewer.viewer_runtime.frame_size_from_runtime_result()` already prefers `runtime_result.output_display_size` before falling back to legacy `debug_info["runtime_output_display_size"]`.
+- `xr_viewer.openxr_runtime.frame_size_from_runtime_result()` already prefers `runtime_result.output_display_size` before the same legacy fallback.
+- `StereoRuntimeLogger` already prefers structured `output_format`, `output_dtype`, `output_eye_size`, and `output_pack_backend` fields before legacy debug fields.
+- Added OpenXR viewer coverage proving `_log_runtime_eye_stats_once()` logs structured `output_*` values even when stale `runtime_output_*` debug fields are present.
+
+Verification:
+
+```powershell
+src\python3\python.exe -m py_compile tests\test_openxr_runtime.py
+src\python3\python.exe -m pytest tests\test_openxr_runtime.py tests\test_viewer_runtime.py tests\test_session_helpers.py -q
+src\python3\python.exe -m pytest tests\test_adapter_config.py tests\test_hot_reload.py tests\test_runtime.py tests\test_runtime_context.py tests\test_settings_snapshot.py tests\test_runtime_openxr.py tests\test_viewer_runtime.py tests\test_openxr_runtime.py tests\test_runtime_pipeline.py tests\test_session_helpers.py tests\test_breakdown.py tests\test_parallax.py tests\test_synthesis.py tests\test_openxr_state.py tests\test_openxr_render.py -q
+```
+
+Result:
+
+```text
+25 passed
+192 passed
+```
+
+Notes / next improvements:
+
+- `runtime_output_eye_size` and `runtime_output_display_size` remain published in `debug_info` only for legacy diagnostics and fallback compatibility. The host/viewer contract is now the structured `output_eye_size` / `output_display_size` fields.
+
+### 2026-06-28 Parallax Legacy Default Exit Follow-up
+
+Continued the `docs/25-2d-to-3d-runtime-specification.md` parallax compliance pass by making the normalized-depth `standard` budget model the default at the low-level synthesis and OpenXR render boundaries, not only at the host-facing runtime config layer.
+
+Implemented in this follow-up:
+
+- Changed `ShiftParams`, `StereoConfig`, and `OpenXRRenderConfig` defaults from `parallax_preset="legacy"` to `"standard"`.
+- Changed `openxr_render_config_from_snapshot()` and `OpenXRStateController` fallback presets to `standard` when no explicit snapshot/runtime preset is available.
+- Changed `resolve_parallax_budget(preset=None)` to resolve `standard`; only explicit `preset="legacy"` now enters the old `IPD * stereo_scale * depth_strength * max_shift_ratio` multiplier path.
+- Changed hot-reload fallback defaults for runtimes without `parallax_preset` to `standard`.
+- Updated tests so legacy IPD multiplier behavior is covered only through explicit `parallax_preset="legacy"`, while default synthesis/OpenXR debug now reports `standard`.
+
+Verification:
+
+```powershell
+src\python3\python.exe -m py_compile src\stereo_runtime\baseline_shift.py src\stereo_runtime\parallax.py src\stereo_runtime\synthesis.py src\stereo_runtime\openxr_render.py src\stereo_runtime\adapter.py src\stereo_runtime\openxr_state.py src\stereo_runtime\hot_reload.py tests\test_parallax.py tests\test_synthesis.py tests\test_openxr_render.py tests\test_openxr_state.py tests\test_runtime_openxr.py tests\test_adapter_config.py tests\test_hot_reload.py
+src\python3\python.exe -m pytest tests\test_parallax.py tests\test_synthesis.py tests\test_openxr_render.py tests\test_openxr_state.py tests\test_runtime_openxr.py tests\test_adapter_config.py tests\test_hot_reload.py -q
+```
+
+Result:
+
+```text
+130 passed
+```
+
+Notes / next improvements:
+
+- The legacy multiplier implementation remains available behind explicit `parallax_preset="legacy"` for compatibility and regression coverage, but is no longer selected by default in normalized-depth runtime paths.
 
 ### 2026-06-28 OpenXR Legacy Shader Uniform Structured Field Follow-up
 
@@ -626,7 +1078,7 @@ Result:
 
 Notes / next improvements:
 
-- `StereoConfig` and `OpenXRRenderConfig` still keep `legacy` defaults for low-level direct construction and compatibility; the host-facing `StereoRuntimeConfig` default now selects `standard`.
+- Low-level `StereoConfig`, `ShiftParams`, and `OpenXRRenderConfig` defaults now select `standard`; explicit `parallax_preset="legacy"` remains available only as a compatibility path.
 - OpenXR direct path now exposes `OpenXRRuntimeResult.legacy_shader_uniforms` as the primary direct-path shader-uniform contract; flat `openxr_ipd`, `openxr_depth_strength`, `openxr_stereo_scale`, and `openxr_max_shift_ratio` debug keys remain as compatibility fields alongside normalized parallax debug fields.
 - GUI hot-save still needs a follow-up to emit full `RuntimeSettingsSnapshot` objects for live runtime settings instead of relying only on persisted settings and legacy callbacks.
 - `src/settings.yaml` already had unrelated local edits in the working tree and was not intentionally modified as part of this compliance pass.

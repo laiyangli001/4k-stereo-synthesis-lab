@@ -8,8 +8,7 @@
 |---|---|
 | [00-api-handoff-progress.md](00-api-handoff-progress.md) | 当前唯一交接入口，记录项目状态、边界、验证命令和下一步 |
 | [00-goals.md](00-goals.md) | 当前目标、非目标、质量边界 |
-| [14-host-api-preset-examples.md](14-host-api-preset-examples.md) | GUI / runtime / OpenXR host 的 preset 调用示例 |
-| [15-host-api-contract.md](15-host-api-contract.md) | Host 与核心库的职责边界、数据流、常驻对象要求 |
+| [28-Realtime-2d-to-3d-specification.md](28-Realtime-2d-to-3d-specification.md) | Desktop2Stereo 当前正式最终运行时流程规范；docs/25 已作废，以本文为准 |
 
 ## 专项说明
 
@@ -17,10 +16,11 @@
 |---|---|
 | [11-visual-regression-guide.md](11-visual-regression-guide.md) | 视觉回归输出图片含义、检查方法和固定样例说明 |
 | [12-openxr-stereo-runtime-plan.md](12-openxr-stereo-runtime-plan.md) | OpenXR per-eye core 与未来 runtime 集成计划 |
-| [13-realtime-stereo-parameter-guide.md](13-realtime-stereo-parameter-guide.md) | 实时立体参数、Auto Mode、电影/游戏/图片模式策略 |
 | [17-multiplatform-provider-layout.md](17-multiplatform-provider-layout.md) | 多平台 depth provider 目录分层和 artifact 规划 |
 | [18-host-bootstrap-device-flow.md](18-host-bootstrap-device-flow.md) | Host/GUI/capture bootstrap 设备检测与 runtime 参数传递流程 |
 | [20-openxr-gpu-glow-guide.md](20-openxr-gpu-glow-guide.md) | OpenXR GPU glow 的原理、调用链、配置和复杂效果扩展方法 |
+| [26-desktop2stereo-engineering-design-specification.md](26-desktop2stereo-engineering-design-specification.md) | 基于 docs/28 的工程实现、迁移、兼容清理和符合状态说明 |
+| [25-2d-to-3d-runtime-specification.md](25-2d-to-3d-runtime-specification.md) | 已作废的历史运行时规范；仅用于追溯背景，不作为当前裁决来源 |
 
 ## Benchmark 与优化记录
 
@@ -32,13 +32,20 @@
 
 ## 历史归档
 
-`archive/` 保留早期讨论、方案评估和边界定义，用于追溯背景，不作为当前实现状态的唯一依据：
+`archive/` 保留早期讨论、方案评估、经验报告和边界定义，用于追溯背景，不作为当前实现状态的唯一依据：
 
 - [archive/01-algorithm-survey.md](archive/01-algorithm-survey.md)
 - [archive/02-4k-performance-budget.md](archive/02-4k-performance-budget.md)
 - [archive/03-iw3-comparison.md](archive/03-iw3-comparison.md)
 - [archive/04-implementation-plan.md](archive/04-implementation-plan.md)
 - [archive/05-model-boundary.md](archive/05-model-boundary.md)
+- [archive/implementation-experience/13-realtime-stereo-parameter-guide.md](archive/implementation-experience/13-realtime-stereo-parameter-guide.md)
+- [archive/implementation-experience/14-host-api-preset-examples.md](archive/implementation-experience/14-host-api-preset-examples.md)
+- [archive/implementation-experience/15-host-api-contract.md](archive/implementation-experience/15-host-api-contract.md)
+- [archive/implementation-experience/21-openxr-ghosting-test-report.md](archive/implementation-experience/21-openxr-ghosting-test-report.md)
+- [archive/implementation-experience/22-cinema-ipd64-production-sweep-guide.md](archive/implementation-experience/22-cinema-ipd64-production-sweep-guide.md)
+- [archive/implementation-experience/23-saved-cinema-settings-samples-guide.md](archive/implementation-experience/23-saved-cinema-settings-samples-guide.md)
+- [archive/implementation-experience/24-openxr-render-path-report.md](archive/implementation-experience/24-openxr-render-path-report.md)
 
 ## 编码提醒
 
