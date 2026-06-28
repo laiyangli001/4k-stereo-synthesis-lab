@@ -15,7 +15,7 @@ def test_render_size_config_from_settings_parses_gui_fields():
     config = render_size_config_from_settings(
         {
             "Render Size Policy": "scaled",
-            "Render Scale": "2K / 2560x1440",
+            "Render Scale": "2K / 75%",
             "Render Fixed Width": "1600",
             "Render Fixed Height": "900",
             "Render Max Pixels": "2073600",
@@ -26,7 +26,7 @@ def test_render_size_config_from_settings_parses_gui_fields():
 
     assert config == RenderSizeConfig(
         policy=RenderSizePolicy.SCALED,
-        scale_factor="2K / 2560x1440",
+        scale_factor="2K / 75%",
         fixed_width=1600,
         fixed_height=900,
         max_pixels=2073600,
@@ -50,14 +50,14 @@ def test_resolve_render_size_native_aligns_capture_size():
 @pytest.mark.parametrize(
     ("capture_size", "tier", "expected"),
     [
-        ((3840, 2160), "1K / 1920x1080", (1920, 1080)),
-        ((2160, 3840), "1K / 1920x1080", (1080, 1920)),
-        ((3840, 2400), "2K / 2560x1440", (2560, 1440)),
-        ((4096, 2160), "3K / 3200x1800", (3200, 1800)),
-        ((3840, 1600), "2K / 2560x1440", (2560, 1440)),
+        ((3840, 2160), "1K / 50%", (1920, 1080)),
+        ((2160, 3840), "1K / 50%", (1080, 1920)),
+        ((3840, 2400), "2K / 75%", (2880, 1800)),
+        ((4096, 2160), "3K / 85%", (3480, 1832)),
+        ((3840, 1600), "2K / 75%", (2880, 1200)),
     ],
 )
-def test_resolve_render_size_scaled_uses_fixed_4k_tiers_for_4k_inputs(capture_size, tier, expected):
+def test_resolve_render_size_scaled_uses_fixed_4k_scale_tiers_for_4k_inputs(capture_size, tier, expected):
     config = RenderSizeConfig(policy=RenderSizePolicy.SCALED, scale_factor=tier, align=8)
 
     assert resolve_render_size(capture_size, config) == expected
@@ -65,7 +65,7 @@ def test_resolve_render_size_scaled_uses_fixed_4k_tiers_for_4k_inputs(capture_si
 
 @pytest.mark.parametrize("capture_size", [(2560, 1440), (3440, 1440), (1080, 1920), (1000, 3000)])
 def test_resolve_render_size_scaled_keeps_non_4k_tier_input_native(capture_size):
-    config = RenderSizeConfig(policy=RenderSizePolicy.SCALED, scale_factor="1K / 1920x1080", align=8)
+    config = RenderSizeConfig(policy=RenderSizePolicy.SCALED, scale_factor="1K / 50%", align=8)
 
     assert resolve_render_size(capture_size, config) == capture_size
 
@@ -73,7 +73,7 @@ def test_resolve_render_size_scaled_keeps_non_4k_tier_input_native(capture_size)
 def test_render_scale_numeric_values_do_not_select_legacy_thresholds():
     config = render_size_config_from_settings({"Render Size Policy": "scaled", "Render Scale": "0.75"})
 
-    assert config.scale_factor == "4K / 3840x2160"
+    assert config.scale_factor == "4K / 100%"
     assert resolve_render_size((3840, 2160), config) == (3840, 2160)
 
 

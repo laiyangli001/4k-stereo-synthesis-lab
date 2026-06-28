@@ -575,7 +575,7 @@ def test_vsync_uses_teammate_config_key_and_default():
     assert 'tooltip_local_vsync' not in localization_text
 
 
-def test_gui_render_size_controls_expose_only_fixed_4k_tiers():
+def test_gui_render_size_controls_expose_only_fixed_4k_scale_tiers():
     config_text = _config_source().read_text(encoding="utf-8")
     builders_text = _file_text("builders.py")
     handlers_text = _file_text("handlers.py")
@@ -584,7 +584,7 @@ def test_gui_render_size_controls_expose_only_fixed_4k_tiers():
 
     for key, value in {
         "Render Size Policy": "scaled",
-        "Render Scale": "4K / 3840x2160",
+        "Render Scale": "4K / 100%",
         "Render Fixed Width": 1920,
         "Render Fixed Height": 1080,
         "Render Min Dimension": 480,
@@ -598,14 +598,14 @@ def test_gui_render_size_controls_expose_only_fixed_4k_tiers():
     assert 'options=["Scaled"]' in builders_text
     assert 'self.render_policy_dd.visible = False' in builders_text
     assert 'self.render_scale_dd = CompactDropdown(options=self._render_scale_options()' in builders_text
-    assert '"1K / 1920x1080"' in handlers_text
-    assert '"2K / 2560x1440"' in handlers_text
-    assert '"3K / 3200x1800"' in handlers_text
-    assert '"4K / 3840x2160"' in handlers_text
+    assert '"4K / 100%"' in handlers_text
+    assert '"3K / 85%"' in handlers_text
+    assert '"2K / 75%"' in handlers_text
+    assert '"1K / 50%"' in handlers_text
     assert 'def _display_to_render_scale' in handlers_text
     assert 'def _render_scale_to_display' in handlers_text
     assert 'return float(match.group(0))' not in handlers_text
-    assert '"1K / 1920x1080": 0.5' not in handlers_text
+    assert '"1K / 50%": 0.5' not in handlers_text
     assert 'self.render_fixed_dd.visible = False' in builders_text
     assert 'self.row6d = ft.Row([self.render_scale_label, self.render_scale_dd' in builders_text
     row6d_start = builders_text.index('self.row6d = ft.Row([')
@@ -626,8 +626,8 @@ def test_gui_render_size_controls_expose_only_fixed_4k_tiers():
     assert 'self.render_scale_dd.value = self._render_scale_to_display(' in config_mgr_text
     assert '"Render Align": self._parse_int(self.render_align_dd.value, DEFAULTS["Render Align"])' in config_mgr_text
 
-    assert '"Render Scale:": "4K Render Size:"' in localization_text
-    assert '"Render Scale:": "4K渲染档位:"' in localization_text
+    assert '"Render Scale:": "4K Render Scale:"' in localization_text
+    assert '"Render Scale:": "4K缩放档位:"' in localization_text
     assert '"tooltip_render_scale"' in localization_text
     assert '(self.render_scale_dd, "tooltip_render_scale")' in handlers_text
     assert '(self.render_align_dd, "tooltip_render_align")' in handlers_text

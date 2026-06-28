@@ -19,12 +19,12 @@ _RENDER_SIZE_POLICY_ALIASES = {
 }
 
 _RENDER_SCALE_TIERS = {
-    "1K / 1920x1080": (1920, 1080),
-    "2K / 2560x1440": (2560, 1440),
-    "3K / 3200x1800": (3200, 1800),
-    "4K / 3840x2160": (3840, 2160),
+    "4K / 100%": 1.0,
+    "3K / 85%": 0.85,
+    "2K / 75%": 0.75,
+    "1K / 50%": 0.5,
 }
-_DEFAULT_RENDER_SCALE_TIER = "4K / 3840x2160"
+_DEFAULT_RENDER_SCALE_TIER = "4K / 100%"
 
 
 @dataclass(frozen=True)
@@ -64,7 +64,7 @@ def resolve_render_size(
         return _align_size(capture_width, capture_height, align)
 
     if config.policy is RenderSizePolicy.SCALED:
-        return _resolve_4k_tier_size(capture_width, capture_height, config, align)
+        return _resolve_4k_scale_tier_size(capture_width, capture_height, config, align)
 
     if config.policy is RenderSizePolicy.FIXED:
         return _align_size(config.fixed_width, config.fixed_height, align)
@@ -100,10 +100,10 @@ def _normalize_render_scale_tier(value) -> str:
     text = str(value or "").strip()
     compact = text.upper().replace(" ", "").replace("×", "X")
     for label in _RENDER_SCALE_TIERS:
-        tier_name, resolution = label.split(" / ", 1)
+        tier_name, percent = label.split(" / ", 1)
         if text == label or compact.startswith(tier_name):
             return label
-        if resolution.upper() in compact:
+        if percent.upper() in compact:
             return label
     return _DEFAULT_RENDER_SCALE_TIER
 
@@ -118,13 +118,11 @@ def _is_4k_tier_input(width: int, height: int) -> bool:
     return is_4k_full_or_ultrawide or is_near_4k_window
 
 
-def _resolve_4k_tier_size(width: int, height: int, config: RenderSizeConfig, align: int) -> tuple[int, int]:
+def _resolve_4k_scale_tier_size(width: int, height: int, config: RenderSizeConfig, align: int) -> tuple[int, int]:
     if not _is_4k_tier_input(width, height):
         return _align_size(width, height, align)
-    target = _RENDER_SCALE_TIERS[_normalize_render_scale_tier(config.scale_factor)]
-    if height > width:
-        target = (target[1], target[0])
-    return _align_size(*target, align)
+    scale = _RENDER_SCALE_TIERS[_normalize_render_scale_tier(config.scale_factor)]
+    return _align_size(width * scale, height * scale, align)
 
 
 def _resolve_dynamic_size(width: int, height: int, config: RenderSizeConfig, align: int) -> tuple[int, int]:

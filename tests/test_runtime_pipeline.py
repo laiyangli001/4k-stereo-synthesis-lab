@@ -539,7 +539,7 @@ def test_runtime_pipeline_resolves_4k_render_size_before_preprocess():
         output_transport="local_window",
         render_size_config=RenderSizeConfig(
             policy=RenderSizePolicy.SCALED,
-            scale_factor="1K / 1920x1080",
+            scale_factor="1K / 50%",
             align=8,
         ),
     )
@@ -552,7 +552,7 @@ def test_runtime_pipeline_resolves_4k_render_size_before_preprocess():
     assert runtime_result.debug_info["capture_size"] == "3840x2160"
     assert runtime_result.debug_info["render_size"] == "1920x1080"
     assert runtime_result.debug_info["render_size_policy"] == "scaled"
-    assert runtime_result.debug_info["stereo_render_scale"] == "1K / 1920x1080"
+    assert runtime_result.debug_info["stereo_render_scale"] == "1K / 50%"
     assert runtime_result.debug_info["transport"] == "local_window"
     assert runtime_result.debug_info["application_runtime_target"] == "local_display"
     assert runtime_result.debug_info["output_transport"] == "local_window"

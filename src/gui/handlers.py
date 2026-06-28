@@ -53,10 +53,10 @@ class GUIHandlerMixin:
 
     def _render_scale_options(self):
         return [
-            "1K / 1920x1080",
-            "2K / 2560x1440",
-            "3K / 3200x1800",
-            "4K / 3840x2160",
+            "4K / 100%",
+            "3K / 85%",
+            "2K / 75%",
+            "1K / 50%",
         ]
 
     def _render_scale_to_display(self, value):

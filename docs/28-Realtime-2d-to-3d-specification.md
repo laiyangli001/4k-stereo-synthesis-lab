@@ -38,7 +38,7 @@
 | **DIBR** | Depth-Image-Based Rendering，基于深度图像的渲染 |
 | **捕获尺寸（capture_size）** | 输入源原始分辨率，来自显示器、窗口、文件或 API 帧 |
 | **渲染尺寸（render_size）** | 立体合成管线内部的唯一工作分辨率 |
-| **4K档位（4K Tier）** | 4K级输入映射到 4K/3K/2K/1K 固定 render_size 档位的规则 |
+| **4K缩放档位（4K Scale Tier）** | 4K级输入按 4K/3K/2K/1K 稳定 scale 档位缩放，并保持输入宽高比的规则 |
 | **最大视差（max_disparity_px）** | 软件层面允许的左右眼总视差像素预算，用于控制立体感强度（非物理测量值） |
 | **视差预算（Parallax Budget）** | 根据 `render_size` 和用户强度档位解析出的 `max_disparity_px` 及其响应曲线 |
 | **深度响应（depth_response）** | normalized depth 到相对视差权重的映射函数 |
@@ -62,7 +62,7 @@ Stereo Warp → Mask and Hole Fill → Temporal Stabilization → Output Pack / 
 2. **数据对齐约束**：RGB、Depth、Disparity、Mask、Hole Fill、Temporal、Left/Right Eye 全部必须严格对齐 `render_size`。
 3. **视差控制约束**：`max_disparity_px` 必须按 `render_size` 解析，其值由软件层根据用户偏好和固定预算表计算，不受物理显示设备参数的直接影响。
 4. **Normalized-depth约束**：默认单目深度路径不得把 normalized / relative depth 当作真实米制 `Z` 代入物理 IPD 公式。
-5. **Render Scale约束**：`Render Scale` 只表示 4K级输入的固定档位选择，不是任意输入尺寸的连续缩放比例。
+5. **Render Scale约束**：`Render Scale` 只表示 4K级输入的固定 scale 档位选择；它不是任意连续滑杆，也不得改变输入宽高比。
 6. **坐标系规则**：所有图像坐标系采用**左上角为原点**（0,0），x轴向右，y轴向下。
 7. **输出分层约束**：运行目标、质量模式、合成方式、render size、transport、packing format 必须分层表达，不能互相替代。
 
@@ -75,7 +75,7 @@ Capture Source
 → Application Runtime Target
 → Runtime Quality Mode
 → Stereo Synthesis Mode
-→ Render Size / 4K Tier
+→ Render Size / 4K Scale Tier
 → Output Transport
 → Output Packing Format
 → Viewer / Device Presentation
@@ -147,7 +147,7 @@ debug_flags
 | `temporal_strength` | 是 | 否 | 否 | 0 可表示关闭效果 |
 | `cross_eyed` / `eye_order` | 是 | 否 | 否 | presentation 层修正 |
 | `output_packing_format` | 部分 | 否 | 可能 | 本地/推流可能需要重建输出缓冲 |
-| `stereo_render_scale` | 否 | 是 | 是 | 仅当 4K 档位变化并导致 `render_size` 变化时重建 |
+| `stereo_render_scale` | 否 | 是 | 是 | 仅当 4K scale 档位变化并导致 `render_size` 变化时重建 |
 | `stereo_synthesis_mode` | 否 | 是 | 是 | direct/full synthesis 切换 |
 | `depth_backend` | 否 | 是 | 是 | provider/engine 变化 |
 | `capture_source` / `capture_target` | 否 | 是 | 是 | 重新捕捉和重建 source metadata |
@@ -225,13 +225,12 @@ timing
 
 #### 4.2.2 处理语义
 
-`render_size` 是 stereo synthesis、OpenXR upload、depth 对齐、mask、hole fill、temporal 的唯一工作尺寸。当前规范不向用户暴露 `native` / `fixed` / `dynamic` 策略选择；用户侧只暴露 `Render Scale` 作为 4K级输入的固定档位选择信号。
+`render_size` 是 stereo synthesis、OpenXR upload、depth 对齐、mask、hole fill、temporal 的唯一工作尺寸。当前规范不向用户暴露 `native` / `fixed` / `dynamic` 策略选择；用户侧只暴露 `Render Scale` 作为 4K级输入的固定 scale 档位选择信号。4K级输入必须按档位 scale 乘以 `capture_size` 解析 `render_size`，并保持输入宽高比。
 
 | 输入条件 | 规则 | 用途 |
 |----------|------|------|
-| 非 4K级输入 | `render_size = capture_size` | 避免普通 1080p/2K 输入被连续缩放，保持视差预算稳定 |
-| 4K级横屏输入 | 按 `Render Scale` 映射到 3840x2160、3200x1800、2560x1440、1920x1080 | 降低 OpenXR 上传量、网络码率、本地 GPU 压力 |
-| 4K级竖屏输入 | 按同一档位映射到 2160x3840、1800x3200、1440x2560、1080x1920 | 保持竖屏方向，预算按 `render_size` 短边解析 |
+| 非 4K级输入 | `render_size = align(capture_size)` | 避免普通 1080p/2K 输入被缩放，保持视差预算稳定 |
+| 4K级输入 | `render_size = align(capture_size × scale)` | 保持横屏、竖屏、16:10、DCI 4K、超宽输入比例，同时降低 OpenXR 上传量、网络码率、本地 GPU 压力 |
 
 4K级判断必须方向无关，并覆盖常见全屏和近 4K 窗口：3840x2160、2160x3840、4096x2160、3840x2400、3840x1600 属于 4K级；2560x1440、3440x1440、1080x1920、1000x3000 不属于 4K级。
 
@@ -248,19 +247,30 @@ is_4k_tier_input = is_4k_full_or_ultrawide or is_near_4k_window
 if not is_4k_tier_input:
     render_size = align(capture_size)
 else:
-    render_size = resolve_4k_tier_size(stereo_render_scale, orientation=capture_orientation)
+    scale = resolve_4k_scale_tier(stereo_render_scale)
+    render_size = align(capture_width * scale, capture_height * scale)
 ```
 
-`Render Scale` 的有效配置值只能是固定档位标签或等价分辨率字符串：
+`Render Scale` 的有效配置值只能是固定档位标签：
 
 ```text
-4K / 3840x2160 -> 横屏 3840x2160，竖屏 2160x3840
-3K / 3200x1800 -> 横屏 3200x1800，竖屏 1800x3200
-2K / 2560x1440 -> 横屏 2560x1440，竖屏 1440x2560
-1K / 1920x1080 -> 横屏 1920x1080，竖屏 1080x1920
+4K / 100% -> scale = 1.0
+3K / 85%  -> scale = 0.85
+2K / 75%  -> scale = 0.75
+1K / 50%  -> scale = 0.5
 ```
 
-`1.0`、`5/6`、`2/3`、`0.5` 以及 `0.92`、`0.75`、`0.58` 这类数值不是档位选择语义；runtime 不得按数值阈值推断档位。
+示例：
+
+```text
+3840x2160 @ 75% -> 2880x1620
+3840x2400 @ 75% -> 2880x1800
+4096x2160 @ 75% -> 3072x1620
+3840x1600 @ 75% -> 2880x1200
+2160x3840 @ 75% -> 1620x2880
+```
+
+`1.0`、`0.85`、`0.75`、`0.5` 是内部 scale 值，不是用户输入字符串；runtime 不得接受任意连续数值，也不得保留 `0.92`、`0.58` 这类历史兼容阈值。
 
 #### 4.2.3 行业依据
 
@@ -273,16 +283,17 @@ else:
 
 #### 4.2.5 前沿技术说明
 
-**当前项目采用**：4K级输入固定档位解析。`Render Scale` 只在输入跨入 4K级条件后生效，非 4K 输入保持 `capture_size`。
+**当前项目采用**：4K级输入固定 scale 档位解析。`Render Scale` 只在输入跨入 4K级条件后生效，非 4K 输入保持 `capture_size`；4K级输入按枚举 scale 缩放并保持输入宽高比。
 
-**未来候选**：动态分辨率稳帧率可以加入，但只能在 4K/3K/2K/1K 等稳定档位之间切换，不能每帧连续改变预算。
+**未来候选**：动态分辨率稳帧率可以加入，但只能在 4K/3K/2K/1K 等稳定 scale 档位之间切换，不能每帧连续改变预算。
 
 **未采用/不适用**：
 
 | 方案 | 原因 |
 |------|------|
-| 任意连续缩放因子 | 会造成 `max_disparity_px` 预算随输入尺寸连续漂移 |
-| 用户可选 `native/fixed/dynamic` 策略 | 当前产品规范只保留固定 4K 档位选择 |
+| 任意用户输入连续缩放因子 | 会造成 `max_disparity_px` 预算随输入尺寸连续漂移，也会引发资源频繁重建 |
+| 固定输出分辨率档位 | 会改变 16:10、DCI 4K、超宽和竖屏输入比例，除非额外引入 crop / letterbox |
+| 用户可选 `native/fixed/dynamic` 策略 | 当前产品规范只保留固定 4K scale 档位选择 |
 | 每帧动态改 render size | 会导致 depth、mask、temporal、OpenXR texture 频繁重建 |
 
 
@@ -298,7 +309,7 @@ else:
 
 #### 4.3.2 处理语义
 
-将原始捕获的 RGB 图像转换到管线工作分辨率 `render_size`。若 `render_size == capture_size`，不得做无意义缩放；若 4K级输入映射到固定档位，则 RGB 必须先缩放到 `render_size`，后续 depth、disparity、mask、hole fill、temporal、left/right eye 均以该尺寸为准。`aspect_policy` 如果需要 crop / letterbox，必须在 `render_size` 解析前明确，否则 RGB 与 depth 会错位。
+将原始捕获的 RGB 图像转换到管线工作分辨率 `render_size`。若 `render_size == capture_size`，不得做无意义缩放；若 4K级输入按固定 scale 档位缩放，则 RGB 必须先缩放到 `render_size`，后续 depth、disparity、mask、hole fill、temporal、left/right eye 均以该尺寸为准。默认 `Render Scale` 路径必须保持输入宽高比；若未来引入 crop / letterbox，必须在 `render_size` 解析前明确 `aspect_policy`，否则 RGB 与 depth 会错位。
 
 #### 4.3.3 行业依据
 
@@ -474,7 +485,7 @@ else:
 max_disparity_px = base_budget * aspect_factor
 ```
 
-窗口捕捉的预算不得每帧重算。只有在用户切换质量档、OpenXR render scale 改变并导致 4K 档位变化、输入源跨入/离开 4K级判断条件、最终 `render_size` 短边变化超过 10%、最终 aspect 跨过 2.0 保护阈值或用户重新选择显示器/窗口时，才重新解析预算。
+窗口捕捉的预算不得每帧重算。只有在用户切换质量档、OpenXR render scale 改变并导致 4K scale 档位变化、输入源跨入/离开 4K级判断条件、最终 `render_size` 短边变化超过 10%、最终 aspect 跨过 2.0 保护阈值或用户重新选择显示器/窗口时，才重新解析预算。
 
 normalized-depth 路径不得使用下面的经验乘法链作为核心强度公式：
 
@@ -827,9 +838,9 @@ disparity_px = depth_response(depth, convergence) × max_disparity_px
 
 | 平台 | 目标分辨率 | 目标帧率 | 测试条件 |
 |------|-----------|---------|---------|
-| 桌面端（RTX 4060 或同级） | 1080p/1440p/4K固定档位 | 以实际 depth backend 和 synthesis mode 记录 | 本地 / OpenXR / stream 分路径测试 |
-| 高端桌面端（RTX 4080/4090 或同级） | 4K / 3K / 2K 固定档位 | 以实际 headset / viewer / stream 目标记录 | OpenXR full synthesis 与 RGB+depth direct 分开测试 |
-| 移动/边缘端 | 1080p 或更低固定档位 | 只在对应 provider 实现后声明 | 不得引用未接入 provider 的论文 FPS 作为项目性能指标 |
+| 桌面端（RTX 4060 或同级） | 1080p/1440p/4K scale 档位 | 以实际 depth backend 和 synthesis mode 记录 | 本地 / OpenXR / stream 分路径测试 |
+| 高端桌面端（RTX 4080/4090 或同级） | 4K / 3K / 2K scale 档位 | 以实际 headset / viewer / stream 目标记录 | OpenXR full synthesis 与 RGB+depth direct 分开测试 |
+| 移动/边缘端 | 1080p 或更低稳定档位 | 只在对应 provider 实现后声明 | 不得引用未接入 provider 的论文 FPS 作为项目性能指标 |
 
 ### 6.5 标准符合性验证
 

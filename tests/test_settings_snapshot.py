@@ -49,7 +49,7 @@ def test_settings_snapshot_classifies_spec_layer_fields():
         is SnapshotChangeClass.PIPELINE_REBUILD
     )
     assert (
-        RuntimeSettingsSnapshot(version=7, timestamp=1.0, stereo_render_scale="1K / 1920x1080").classify()
+        RuntimeSettingsSnapshot(version=7, timestamp=1.0, stereo_render_scale="1K / 50%").classify()
         is SnapshotChangeClass.PIPELINE_REBUILD
     )
     assert (
@@ -68,7 +68,7 @@ def test_settings_snapshot_maps_runtime_quality_mode_to_runtime_config_mode():
         timestamp=1.0,
         runtime_quality_mode="game_low_latency",
         render_size_policy="scaled",
-        stereo_render_scale="1K / 1920x1080",
+        stereo_render_scale="1K / 50%",
         stereo_synthesis_mode="full_synthesis_eyes",
         output_transport="openxr_swapchain",
         presentation_flags={"cross_eyed": True},
