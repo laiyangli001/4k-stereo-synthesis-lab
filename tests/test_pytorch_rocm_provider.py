@@ -1,3 +1,6 @@
+import sys
+import types
+
 from stereo_runtime.depth_provider import DepthProviderConfig, create_depth_provider
 from stereo_runtime.providers.amd import GenericTorchRocmDepthProvider, TorchRocmDepthProvider
 import stereo_runtime.providers.amd.migraphx as migraphx_provider
@@ -58,3 +61,82 @@ def test_create_migraphx_rocm_provider_falls_back_to_pytorch_rocm(monkeypatch):
     assert isinstance(provider, TorchRocmDepthProvider)
     assert provider.info.depth_backend == "pytorch_rocm"
     assert provider.info.fallback_reason == "migraphx is not installed"
+
+
+def test_build_migraphx_graph_uses_fp8_then_saves(monkeypatch, tmp_path):
+    calls = []
+
+    class Program:
+        def compile(self, target, offload_copy=False):
+            calls.append(("compile", target, offload_copy))
+
+    fake_mx = types.SimpleNamespace(
+        parse_onnx=lambda path: calls.append(("parse", path)) or Program(),
+        get_target=lambda name: calls.append(("target", name)) or name,
+        autocast_fp8=lambda prog: calls.append("fp8"),
+        quantize_fp16=lambda prog: calls.append("fp16"),
+        save=lambda prog, path: calls.append(("save", path)),
+    )
+    monkeypatch.setitem(sys.modules, "migraphx", fake_mx)
+    onnx_path = tmp_path / "model.onnx"
+    graph_path = tmp_path / "model.mgx"
+    onnx_path.write_bytes(b"onnx")
+
+    assert migraphx_provider.build_migraphx_graph(onnx_path, graph_path) == graph_path
+    assert "fp8" in calls
+    assert "fp16" not in calls
+    assert ("compile", "gpu", False) in calls
+
+
+def test_build_migraphx_graph_falls_back_to_fp16(monkeypatch, tmp_path):
+    calls = []
+
+    class Program:
+        def compile(self, target, offload_copy=False):
+            calls.append(("compile", target, offload_copy))
+
+    def fail_fp8(_prog):
+        calls.append("fp8")
+        raise RuntimeError("fp8 unsupported")
+
+    fake_mx = types.SimpleNamespace(
+        parse_onnx=lambda path: Program(),
+        get_target=lambda name: name,
+        autocast_fp8=fail_fp8,
+        quantize_fp16=lambda prog: calls.append("fp16"),
+        save=lambda prog, path: None,
+    )
+    monkeypatch.setitem(sys.modules, "migraphx", fake_mx)
+    onnx_path = tmp_path / "model.onnx"
+    graph_path = tmp_path / "model.mgx"
+    onnx_path.write_bytes(b"onnx")
+
+    migraphx_provider.build_migraphx_graph(onnx_path, graph_path)
+
+    assert calls[:2] == ["fp8", "fp16"]
+
+
+def test_build_migraphx_graph_force_fp32_skips_quantization(monkeypatch, tmp_path):
+    calls = []
+
+    class Program:
+        def compile(self, target, offload_copy=False):
+            calls.append(("compile", target, offload_copy))
+
+    fake_mx = types.SimpleNamespace(
+        parse_onnx=lambda path: Program(),
+        get_target=lambda name: name,
+        autocast_fp8=lambda prog: calls.append("fp8"),
+        quantize_fp16=lambda prog: calls.append("fp16"),
+        save=lambda prog, path: None,
+    )
+    monkeypatch.setitem(sys.modules, "migraphx", fake_mx)
+    onnx_path = tmp_path / "model.onnx"
+    graph_path = tmp_path / "model.mgx"
+    onnx_path.write_bytes(b"onnx")
+
+    migraphx_provider.build_migraphx_graph(onnx_path, graph_path, force_fp32=True)
+
+    assert "fp8" not in calls
+    assert "fp16" not in calls
+    assert ("compile", "gpu", False) in calls

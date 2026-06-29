@@ -10,6 +10,7 @@ from OpenGL.GL import *
 from utils import OS_NAME, DEVICE_INFO
 from utils.cpu_warnings import describe_tensor, warn_cpu_fallback, warn_cpu_transfer
 from viewer.assets import crop_icon, get_font_type
+from viewer.gl_texture_uploader import CudaGlTextureUploader
 # 3D monitor mode to hide viewer
 if OS_NAME == "Windows":
     from viewer.window_control import hide_window_from_capture, show_window_in_capture
@@ -1512,6 +1513,7 @@ class StereoWindow:
         self._cuda_image_upload_logged = False
         self._cuda_rgba_upload = None
         self._cuda_rgba_upload_size = None
+        self._runtime_texture_uploader = None
         self._color_tex_components = 3
         # Persistent page-locked (pinned) staging buffer for the colour upload.
         # Reused every frame to avoid per-frame device allocations and to make the
@@ -1561,23 +1563,10 @@ class StereoWindow:
             glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0)
             self._cuda_resource_depth = self._cudart.register_buffer(self._pbo_depth)
 
-            # Direct CUDA -> OpenGL texture interop for already-composited runtime
-            # frames. This avoids the PBO + glTexSubImage2D hop on the local viewer
-            # fast path. PBO upload remains available as a compatibility fallback.
+            # Final runtime-output texture upload is handled by CudaGlTextureUploader.
             self._cuda_resource_color_image = None
             self._cuda_rgba_upload = None
             self._cuda_rgba_upload_size = None
-            if self._gl_upload_mode in {"texture", "image"} and self._color_tex_components == 4 and not self._cuda_image_upload_failed and all(
-                hasattr(self._cudart, name)
-                for name in ("register_image", "mapped_array", "memcpy_2d_to_array")
-            ):
-                try:
-                    self._cuda_resource_color_image = self._cudart.register_image(
-                        self.color_tex.glo, GL_TEXTURE_2D
-                    )
-                except Exception as e:
-                    self._cuda_image_upload_failed = True
-                    print(f"[Main] CUDA-GL texture interop unavailable, using PBO fallback: {e}")
 
             # Persistent pinned staging buffer for the (overlay-composited) colour
             # frame — only on discrete GPUs, where pinned H2D bandwidth pays off.
@@ -1720,6 +1709,9 @@ class StereoWindow:
             except Exception:
                 pass
             try:
+                if self._runtime_texture_uploader:
+                    self._runtime_texture_uploader.release()
+                    self._runtime_texture_uploader = None
                 if self._cuda_resource_color_image:
                     self._cudart.unregister_resource(self._cuda_resource_color_image)
             except Exception:
@@ -2669,24 +2661,37 @@ class StereoWindow:
             and getattr(frame_gpu, "is_cuda", False)
         ):
             try:
-                if self._cuda_resource_color is None or self._pbo_color is None:
-                    raise RuntimeError("Colour PBO not available")
-                if self._cuda_resource_color_image is not None:
-                    try:
-                        self._upload_color_cuda_image(frame_gpu)
-                        if not self._cuda_image_upload_logged:
-                            print("[Main] CUDA-GL texture interop upload active")
-                            self._cuda_image_upload_logged = True
-                    except Exception as image_exc:
-                        print(f"[update_runtime_frame] CUDA-GL texture upload unavailable, using PBO fallback: {image_exc}")
-                        self._cuda_image_upload_failed = True
-                        try:
-                            self._cudart.unregister_resource(self._cuda_resource_color_image)
-                        except Exception:
-                            pass
-                        self._cuda_resource_color_image = None
-                        self._upload_color_cuda(frame_gpu)
+                if self._color_tex_components == 4:
+                    if self._runtime_texture_uploader is None:
+                        self._runtime_texture_uploader = CudaGlTextureUploader(
+                            self._cudart,
+                            backend=BACKEND,
+                            log_prefix="StereoWindow",
+                        )
+                    if frame_gpu.shape[-1] == 4:
+                        upload_gpu = frame_gpu[..., :4].contiguous()
+                    else:
+                        size = (int(h), int(w))
+                        if self._cuda_rgba_upload is None or self._cuda_rgba_upload_size != size:
+                            self._cuda_rgba_upload = torch.empty((int(h), int(w), 4), device=frame_gpu.device, dtype=torch.uint8)
+                            self._cuda_rgba_upload_size = size
+                        upload_gpu = self._cuda_rgba_upload
+                        upload_gpu[..., :3].copy_(frame_gpu[..., :3])
+                        upload_gpu[..., 3].fill_(255)
+                    upload_path = self._runtime_texture_uploader.upload_rgba(
+                        [self.color_tex],
+                        [upload_gpu],
+                        w,
+                        h,
+                        prefer_image=self._gl_upload_mode in {"texture", "image"},
+                        build_mipmaps=False,
+                    )
+                    if not self._cuda_image_upload_logged:
+                        print(f"[Main] CUDA-GL {upload_path} interop upload active")
+                        self._cuda_image_upload_logged = True
                 else:
+                    if self._cuda_resource_color is None or self._pbo_color is None:
+                        raise RuntimeError("Colour PBO not available")
                     self._upload_color_cuda(frame_gpu)
                     if not self._cuda_image_upload_logged:
                         print("[Main] CUDA-GL PBO interop upload active")

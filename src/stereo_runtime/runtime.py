@@ -124,6 +124,7 @@ class DepthRuntime:
                     preprocess_ms=float(getattr(result, "preprocess_ms", 0.0)),
                     model_ms=float(getattr(result, "model_ms", 0.0)),
                     postprocess_ms=float(getattr(result, "postprocess_ms", 0.0)),
+                    cuda_timing_events=dict(getattr(result, "cuda_timing_events", None) or {}),
                 )
 
         start = time.perf_counter()
@@ -771,6 +772,7 @@ class StereoRuntime:
         profile = self._predict_depth_profile(rgb_frame)
         depth_total_ms = (time.perf_counter() - depth_start) * 1000.0
         depth = profile.depth
+        cuda_events.update(getattr(profile, "cuda_timing_events", None) or {})
         _record_cuda_event(cuda_events, "depth", rgb_frame)
         stereo_config = self.stereo_config
 

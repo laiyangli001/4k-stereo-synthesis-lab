@@ -240,7 +240,7 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
                 os.environ.get('D2S_OPENXR_RUNTIME_EYE_TEXTURE_GPU_UPLOAD', '1'),
             ) or '1'
         ).strip().lower() in ('1', 'true', 'yes', 'on')
-        self._runtime_eye_texture_components = 4 if self._runtime_eye_texture_gpu_enabled else 3
+        self._runtime_eye_texture_components = 4
         self._runtime_eye_texture_logged = False
         self._runtime_eye_cpu_logged = False
         self._runtime_eye_diff_logged = False

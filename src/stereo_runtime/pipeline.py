@@ -359,6 +359,11 @@ def _add_cuda_event_timings(ctx: RuntimePipelineContext, runtime_result) -> None
         return
     for name, start, end in (
         ("rt_gpu_depth", "start", "depth"),
+        ("rt_gpu_depth_preprocess", "depth_pre_start", "depth_pre_end"),
+        ("rt_gpu_depth_model", "depth_model_start", "depth_model_end"),
+        ("rt_gpu_depth_normalize", "depth_norm_start", "depth_norm_end"),
+        ("rt_gpu_depth_upsample", "depth_upsample_start", "depth_upsample_end"),
+        ("rt_gpu_depth_postprocess", "depth_post_start", "depth_post_end"),
         ("rt_gpu_synth", "depth", "synthesis"),
         ("rt_gpu_pack", "synthesis", "pack"),
         ("rt_gpu_openxr_pack", "openxr_pack_start", "openxr_pack"),

@@ -214,6 +214,7 @@ def test_cpu_fallback_paths_emit_red_console_warnings(monkeypatch):
     d3d11 = (SRC / "xr_viewer" / "d3d11_native_renderer.py").read_text(encoding="utf-8")
     implementation = (SRC / "xr_viewer" / "implementation.py").read_text(encoding="utf-8")
     viewer = (SRC / "viewer" / "viewer.py").read_text(encoding="utf-8")
+    gl_uploader = (SRC / "viewer" / "gl_texture_uploader.py").read_text(encoding="utf-8")
     metal = (SRC / "viewer" / "metal_viewer.py").read_text(encoding="utf-8")
     output_convert = (SRC / "stereo_runtime" / "output_convert.py").read_text(encoding="utf-8")
     depth_onnx = (SRC / "stereo_runtime" / "depth_onnx_provider.py").read_text(encoding="utf-8")
@@ -225,18 +226,18 @@ def test_cpu_fallback_paths_emit_red_console_warnings(monkeypatch):
     assert "warn_cpu_fallback" in runtime_eye
     assert "warn_cpu_transfer" in runtime_eye
     assert "runtime_eye_not_cuda" in runtime_eye
-    assert "continuing with GPU PBO fallback" in runtime_eye
-    assert "texture_image_status" in runtime_eye
-    assert "texture_image={texture_image_status}" in runtime_eye
-    assert "requires register_image support" in runtime_eye
+    assert "texture_image=fallback" in runtime_eye
+    assert "CudaGlTextureUploader" in runtime_eye
+    assert "upload_rgba" in runtime_eye
     assert "runtime_eye_tensor" in runtime_eye
     assert "runtime_eye_sync" in runtime_eye
     assert "runtime_eye_image" in runtime_eye
-    assert "runtime_eye_mipmap" in runtime_eye
     assert "runtime_eye_total" in runtime_eye
-    assert "if not self._update_runtime_frame_pbo_gpu" in runtime_eye
+    assert "glGenerateMipmap" in gl_uploader
+    assert "_upload_pbo" in gl_uploader
+    assert "memcpy_2d_to_array" in gl_uploader
+    assert "row_bytes, row_bytes" in gl_uploader
     assert "_runtime_eye_tensor_rgba_u8" in runtime_eye
-    assert "w * 4, w * 4" in runtime_eye
     assert "D2S_OPENXR_RUNTIME_EYE_TEXTURE_GPU_UPLOAD" in implementation
     assert "os.environ.get('D2S_OPENXR_RUNTIME_EYE_TEXTURE_GPU_UPLOAD', '1')" in implementation
     assert "_runtime_eye_texture_components = 4" in implementation
@@ -247,6 +248,10 @@ def test_cpu_fallback_paths_emit_red_console_warnings(monkeypatch):
     assert "using_cpu_update_subresource" in d3d11
     assert "StereoWindow runtime texture upload" in viewer
     assert "StereoWindow RGB+depth texture upload" in viewer
+    assert "CudaGlTextureUploader" in viewer
+    assert "CUDA/GL image texture upload failed" in gl_uploader
+    assert "using PBO fallback" in gl_uploader
+    assert "requires {name} support" in gl_uploader
     assert "metal_rgb_cpu_transfer" in metal
     assert "metal_depth_cpu_transfer" in metal
     assert "runtime_output_to_numpy_cpu_transfer" in output_convert

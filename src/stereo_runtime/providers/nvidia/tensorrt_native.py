@@ -201,6 +201,17 @@ def _dtype_label(dtype: torch.dtype) -> str:
     return "fp16" if dtype == torch.float16 else "fp32" if dtype == torch.float32 else str(dtype).replace("torch.", "")
 
 
+def _record_cuda_event(events: dict[str, object], name: str, tensor: torch.Tensor | None) -> None:
+    if not isinstance(tensor, torch.Tensor) or not tensor.is_cuda:
+        return
+    try:
+        event = torch.cuda.Event(blocking=False, enable_timing=True)
+        event.record(torch.cuda.current_stream(tensor.device))
+        events[name] = event
+    except Exception:
+        return
+
+
 def build_native_tensorrt_engine(
     onnx_path: str | Path,
     engine_path: str | Path,
@@ -411,17 +422,21 @@ class DistillAnyDepthBaseNativeTensorRt:
             if self.profile_sync and torch.cuda.is_available():
                 torch.cuda.synchronize(self.device)
 
+        cuda_events: dict[str, object] = {}
         rgb = ensure_bchw(rgb, name="rgb")
         _, _, height, width = rgb.shape
         self._ensure_artifacts_for_input(height, width)
         engine = self.load()
         sync()
+        _record_cuda_event(cuda_events, "depth_pre_start", rgb)
         start = time.perf_counter()
         tensor = self._preprocessor(rgb)
         sync()
+        _record_cuda_event(cuda_events, "depth_pre_end", tensor)
         preprocess_ms = (time.perf_counter() - start) * 1000.0
 
         sync()
+        _record_cuda_event(cuda_events, "depth_model_start", tensor)
         start = time.perf_counter()
         if self.use_cuda_graph:
             predicted = engine.run_graph(tensor)
@@ -431,11 +446,16 @@ class DistillAnyDepthBaseNativeTensorRt:
             except TypeError:
                 predicted = engine(tensor)
         sync()
+        _record_cuda_event(cuda_events, "depth_model_end", predicted)
         model_ms = (time.perf_counter() - start) * 1000.0
 
         start = time.perf_counter()
+        _record_cuda_event(cuda_events, "depth_post_start", predicted)
+        _record_cuda_event(cuda_events, "depth_norm_start", predicted)
         depth = ensure_b1hw(predicted.float())
         depth = _normalize_depth(depth)
+        _record_cuda_event(cuda_events, "depth_norm_end", depth)
+        _record_cuda_event(cuda_events, "depth_upsample_start", depth)
         depth = upsample_depth(
             depth,
             height,
@@ -445,8 +465,10 @@ class DistillAnyDepthBaseNativeTensorRt:
             edge_strength=self.depth_upsample_edge_strength,
         )
         sync()
+        _record_cuda_event(cuda_events, "depth_upsample_end", depth)
+        _record_cuda_event(cuda_events, "depth_post_end", depth)
         postprocess_ms = (time.perf_counter() - start) * 1000.0
-        return DepthProfileResult(depth, preprocess_ms, model_ms, postprocess_ms)
+        return DepthProfileResult(depth, preprocess_ms, model_ms, postprocess_ms, cuda_events)
 
 
 NativeTensorRtDepthProvider = DistillAnyDepthBaseNativeTensorRt

@@ -32,6 +32,8 @@ def build_migraphx_graph(
     graph_path: str | Path,
     *,
     fp16: bool = True,
+    fp8: bool = True,
+    force_fp32: bool = False,
     force: bool = False,
 ) -> Path:
     onnx_path = Path(onnx_path)
@@ -45,8 +47,14 @@ def build_migraphx_graph(
 
     graph_path.parent.mkdir(parents=True, exist_ok=True)
     prog = mx.parse_onnx(str(onnx_path))
-    if fp16:
-        mx.quantize_fp16(prog)
+    if fp16 and not force_fp32:
+        if fp8 and hasattr(mx, "autocast_fp8"):
+            try:
+                mx.autocast_fp8(prog)
+            except Exception:
+                mx.quantize_fp16(prog)
+        else:
+            mx.quantize_fp16(prog)
     prog.compile(mx.get_target("gpu"), offload_copy=False)
     mx.save(prog, str(graph_path))
     return graph_path

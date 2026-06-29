@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from pathlib import Path
 from typing import Any
 
@@ -51,6 +51,7 @@ class DepthProfileResult:
     preprocess_ms: float
     model_ms: float
     postprocess_ms: float
+    cuda_timing_events: dict[str, Any] = field(default_factory=dict)
 
     @property
     def total_ms(self) -> float:
