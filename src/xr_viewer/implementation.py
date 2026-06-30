@@ -2024,8 +2024,11 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
         """Render a thin screen border slightly larger than the desktop quad."""
         if self.screen_height is None:
             return
-        alpha = max(float(getattr(self, '_border_alpha', 0.0)), 0.55)
-        if self._border_prog is None or self._border_vao is None:
+        should_show_source_border = getattr(self, '_should_show_source_border', None)
+        if callable(should_show_source_border) and not should_show_source_border():
+            return
+        alpha = max(float(getattr(self, '_border_alpha', 0.0)), 0.0)
+        if alpha <= 0.0 or self._border_prog is None or self._border_vao is None:
             return
         color = (0.0, 0.0, 0.0, alpha)
         border = self.screen_width / 300.0
@@ -4158,12 +4161,10 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
 
         # Upload the first frame supplied by main.py
         if first_runtime_result is not None:
-            self._mark_source_frame_received()
             self._update_runtime_frame(first_runtime_result)
             if first_frame_ts is not None:
                 self.total_latency = (time.perf_counter() - first_frame_ts) * 1000.0
         elif first_rgb is not None and first_depth is not None:
-            self._mark_source_frame_received()
             self._update_frame(first_rgb, first_depth)
 
         # Default fallback projection (used before first locate_views succeeds)

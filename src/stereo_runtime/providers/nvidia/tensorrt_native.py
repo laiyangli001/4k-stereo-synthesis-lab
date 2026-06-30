@@ -20,6 +20,7 @@ from ...depth_provider import (
 )
 from ...depth_upsample import DepthUpsampleMode, upsample_depth
 from ...output import ensure_b1hw, ensure_bchw, match_depth
+from ...progress import activity_progress, file_size_progress, write_bytes_with_progress
 from .tensorrt_ort import ensure_tensorrt_dll_path
 
 
@@ -250,7 +251,9 @@ def build_native_tensorrt_engine(
     network = builder.create_network(1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH))
     parser = trt.OnnxParser(network, logger)
 
-    if not parser.parse(onnx_path.read_bytes()):
+    with activity_progress(f"Parsing ONNX for TensorRT: {onnx_path.name}"):
+        parsed = parser.parse(onnx_path.read_bytes())
+    if not parsed:
         errors = [str(parser.get_error(index)) for index in range(parser.num_errors)]
         raise RuntimeError("TensorRT ONNX parse failed: " + "; ".join(errors))
 
@@ -271,12 +274,18 @@ def build_native_tensorrt_engine(
     profile.set_shape(input_tensor.name, input_shape, input_shape, input_shape)
     config.add_optimization_profile(profile)
 
-    serialized = builder.build_serialized_network(network, config)
+    expected_engine_bytes = max(onnx_path.stat().st_size, 1)
+    with file_size_progress(
+        f"Building TensorRT engine: {engine_path.name}",
+        engine_path,
+        total_bytes=expected_engine_bytes,
+    ):
+        serialized = builder.build_serialized_network(network, config)
     if serialized is None:
         raise RuntimeError("TensorRT build_serialized_network returned None")
 
     engine_path.parent.mkdir(parents=True, exist_ok=True)
-    engine_path.write_bytes(serialized)
+    write_bytes_with_progress(engine_path, serialized, f"Saving TensorRT engine: {engine_path.name}")
     print(f"[TensorRT] native engine ready: engine={engine_path}", flush=True)
     return engine_path
 

@@ -413,13 +413,33 @@ def test_screen_back_offset_scales_for_cinema_giant(monkeypatch):
     assert viewer._screen_back_offset(0.5) == 0.1
 
 
-def test_screen_border_remains_visible_when_idle():
+def test_screen_border_hides_when_idle_alpha_reaches_zero():
     impl_text = (SRC / "xr_viewer" / "implementation.py").read_text(encoding="utf-8")
+    base_text = (SRC / "xr_viewer" / "base.py").read_text(encoding="utf-8")
+    source_state_text = (SRC / "xr_viewer" / "core_source_state.py").read_text(encoding="utf-8")
 
-    assert "alpha = max(float(getattr(self, '_border_alpha', 0.0)), 0.55)" in impl_text
-    assert "if alpha <= 0.0 or self._border_prog is None" not in impl_text
+    assert "def _should_show_source_border(self, now=None):" in source_state_text
+    assert 'if getattr(self, "_hard_idle_active", False):' in source_state_text
+    assert 'if not source_active_event.is_set():' in source_state_text
+    assert "if not self._has_renderable_source_frame():" in source_state_text
+    assert "return self._has_fresh_source_frame(now)" in source_state_text
+    assert "should_show_source_border = getattr(self, '_should_show_source_border', None)" in impl_text
+    assert "should_show_source_border = getattr(self, '_should_show_source_border', None)" in base_text
+    assert "alpha = max(float(getattr(self, '_border_alpha', 0.0)), 0.0)" in impl_text
+    assert "if alpha <= 0.0 or self._border_prog is None" in impl_text
+    assert "alpha = max(float(getattr(self, '_border_alpha', 0.0)), 0.0)" in base_text
+    assert "if alpha <= 0.0:" in base_text
     assert "border_prog = getattr(self, '_metallic_border_prog', None)" in impl_text
     assert "border_prog['u_border_uv'].value" in impl_text
+
+
+def test_openxr_startup_seed_frame_does_not_mark_fresh_source():
+    impl_text = (SRC / "xr_viewer" / "implementation.py").read_text(encoding="utf-8")
+    startup_block = impl_text.split("# Upload the first frame supplied by main.py", 1)[1].split("# Default fallback projection", 1)[0]
+
+    assert "self._update_runtime_frame(first_runtime_result)" in startup_block
+    assert "self._update_frame(first_rgb, first_depth)" in startup_block
+    assert "self._mark_source_frame_received()" not in startup_block
 
 
 def test_shader_sources_live_in_glsl_module():

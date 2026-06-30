@@ -9,7 +9,14 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from stereo_runtime import StereoRuntime, StereoRuntimeConfig
-from stereo_runtime.depth_provider import DepthProfileResult, DepthProviderInfo
+from stereo_runtime.depth_provider import (
+    DepthProfileResult,
+    DepthProviderInfo,
+    _ConsoleDownloadProgress,
+    _print_download_preparing_progress,
+    _progress_print,
+    _raise_model_resolution_error,
+)
 from stereo_runtime.runtime import RollingRuntimeStats
 
 
@@ -92,6 +99,80 @@ def test_runtime_process_rgb_frame_uses_persistent_provider_and_returns_report()
 
     runtime.close()
     assert provider.close_count == 1
+
+
+def test_console_download_progress_prints_dynamic_bar(capsys):
+    progress = _ConsoleDownloadProgress(total=100, desc="model.safetensors")
+    progress.update(50)
+    progress.update(50)
+    progress.close()
+
+    out = capsys.readouterr().out
+    assert "\r[Main] " in out
+    assert "Downloading model.safetensors" in out
+    assert "100" in out
+    assert "100/100" in out
+
+
+def test_console_download_progress_live_path_uses_fixed_short_width(monkeypatch):
+    calls = []
+
+    class FakeTqdm:
+        n = 0
+        total = 100
+
+    monkeypatch.setenv("D2S_FORCE_TQDM", "1")
+    monkeypatch.setattr("tqdm.tqdm", lambda *args, **kwargs: calls.append(kwargs) or FakeTqdm())
+
+    _ConsoleDownloadProgress(total=100, desc="model.safetensors")
+
+    assert calls[0]["dynamic_ncols"] is False
+    assert calls[0]["ncols"] == 79
+    assert "{bar:10}" in calls[0]["bar_format"]
+
+
+
+def test_download_preparing_progress_prints_waiting_status_without_fake_bar(capsys):
+    _print_download_preparing_progress("model.safetensors")
+
+    out = capsys.readouterr().out
+    assert "[Main] Preparing download model.safetensors: waiting for server response..." in out
+    assert "0.00%" not in out
+    assert "[>" not in out
+
+
+def test_progress_print_uses_tqdm_write_when_live(monkeypatch):
+    calls = []
+
+    monkeypatch.setenv("D2S_FORCE_TQDM", "1")
+    monkeypatch.setattr("tqdm.tqdm.write", lambda text, file=None: calls.append((text, file)))
+
+    _progress_print("[Main] Runtime preparation: checking depth model test/model")
+
+    assert calls
+    assert calls[0][0] == "[Main] Runtime preparation: checking depth model test/model"
+
+
+def test_raise_model_resolution_error_includes_last_exception():
+    try:
+        _raise_model_resolution_error("lc700x/InfiniDepth-Large", ValueError("mirror timeout"), local_only=False)
+    except RuntimeError as exc:
+        text = str(exc)
+        assert "unable to resolve InfiniDepth weights" in text
+        assert "ValueError: mirror timeout" in text
+    else:
+        raise AssertionError("expected RuntimeError")
+
+
+def test_incomplete_download_progress_close_does_not_redraw_last_progress(capsys):
+    progress = _ConsoleDownloadProgress(total=100, desc="model.safetensors")
+    progress.update(25)
+    capsys.readouterr()
+
+    progress.close()
+
+    out = capsys.readouterr().out
+    assert "Downloading model.safetensors" not in out
 
 
 def test_runtime_slow_frame_log_is_debug_only(monkeypatch, caplog, capsys):

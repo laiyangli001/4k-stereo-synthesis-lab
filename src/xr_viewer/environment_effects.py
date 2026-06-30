@@ -40,6 +40,15 @@ class EnvironmentEffectsMixin:
         )
 
 
+    def _should_render_source_screen_effects(self):
+        should_show_source_border = getattr(self, '_should_show_source_border', None)
+        if not callable(should_show_source_border):
+            return True
+        if not hasattr(self, '_runtime_direct_source'):
+            return True
+        return should_show_source_border()
+
+
     def _render_glow(self, mgl_fbo, vp_mat):
         intensity = float(getattr(self, '_glow_intensity', 0.0)) * float(getattr(self, '_glow_intensity_multiplier', 0.0))
         if intensity <= 0.0 or self.screen_height is None:
@@ -257,6 +266,8 @@ class EnvironmentEffectsMixin:
 
 
     def _render_screen_background_effects(self, mgl_fbo, vp_mat):
+        if not self._should_render_source_screen_effects():
+            return
         if self._default_blank_fast_path():
             return
         mode = str(getattr(self, '_glow_mode', 'screen') or 'screen').strip().lower()
@@ -277,6 +288,8 @@ class EnvironmentEffectsMixin:
                 self._render_glow_shell(mgl_fbo, vp_mat, intensity_multiplier=screen_mult * 0.72)
 
     def _render_screen_foreground_effects(self, mgl_fbo, vp_mat):
+        if not self._should_render_source_screen_effects():
+            return
         mode = str(getattr(self, '_glow_mode', 'screen') or 'screen').strip().lower()
         if mode == 'off':
             return

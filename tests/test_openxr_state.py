@@ -17,6 +17,18 @@ def make_runtime():
     )
 
 
+def test_openxr_initial_inactive_state_is_silent(capsys):
+    state = OpenXRStateController(
+        run_mode="OpenXR",
+        depth_strength=1.0,
+        convergence=0.5,
+    )
+
+    assert state.source_paused() is False
+    assert state.hard_idle_active() is False
+    assert capsys.readouterr().out == ""
+
+
 def test_openxr_source_paused_depends_on_bootstrap_and_source_active(capsys):
     state = OpenXRStateController(
         run_mode="OpenXR",
@@ -31,8 +43,8 @@ def test_openxr_source_paused_depends_on_bootstrap_and_source_active(capsys):
     assert state.source_paused() is False
 
     output = capsys.readouterr().out
-    assert "OpenXR source inference paused" in output
-    assert "OpenXR source inference resumed" in output
+    assert "OpenXR source gate closed" in output
+    assert "OpenXR source gate opened; waiting for runtime frame" in output
 
 
 def test_openxr_hard_idle_on_enter_runs_once_per_transition(capsys):
@@ -53,7 +65,7 @@ def test_openxr_hard_idle_on_enter_runs_once_per_transition(capsys):
     assert calls == ["enter"]
     output = capsys.readouterr().out
     assert "OpenXR hard idle entered" in output
-    assert "OpenXR hard idle exited" in output
+    assert "OpenXR hard idle exited; waiting for source gate" in output
 
 
 def test_openxr_render_config_from_snapshot_resolves_normalized_fields():
@@ -174,3 +186,24 @@ def test_viewer_runtime_config_publish_defaults_to_screen_roll_only():
         "depth_strength": 2.5,
         "convergence": 0.1,
     }
+
+
+def test_should_show_source_border_requires_active_non_idle_fresh_renderable_source():
+    state = RuntimeConfigPublisher(lambda **kwargs: None)
+    state._hard_idle_active = False
+    state._source_active_event = SimpleNamespace(is_set=lambda: True)
+    state._has_renderable_source_frame = lambda: True
+    state._has_fresh_source_frame = lambda now=None: True
+
+    assert state._should_show_source_border() is True
+
+    state._hard_idle_active = True
+    assert state._should_show_source_border() is False
+
+    state._hard_idle_active = False
+    state._source_active_event = SimpleNamespace(is_set=lambda: False)
+    assert state._should_show_source_border() is False
+
+    state._source_active_event = SimpleNamespace(is_set=lambda: True)
+    state._has_renderable_source_frame = lambda: False
+    assert state._should_show_source_border() is False

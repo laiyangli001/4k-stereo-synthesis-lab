@@ -320,3 +320,17 @@ class CoreSourceStateMixin:
         if self._runtime_direct_source:
             return all(self._runtime_eye_textures) and self._runtime_depth_texture is not None
         return self.color_tex is not None and self.depth_tex is not None
+
+    def _should_show_source_border(self, now=None):
+        if getattr(self, "_hard_idle_active", False):
+            return False
+        source_active_event = getattr(self, "_source_active_event", None)
+        if source_active_event is not None:
+            try:
+                if not source_active_event.is_set():
+                    return False
+            except Exception:
+                return False
+        if not self._has_renderable_source_frame():
+            return False
+        return self._has_fresh_source_frame(now)

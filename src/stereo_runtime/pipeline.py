@@ -118,8 +118,19 @@ def _apply_latest_settings_snapshot(ctx: RuntimePipelineContext):
     return change_class
 
 
-def _enable_openxr_depth_cuda_graph_if_needed(ctx: RuntimePipelineContext, openxr_full_synthesis: bool) -> None:
+def _captured_frame_uses_cuda_capture(captured_frame: CapturedFrame | None) -> bool:
+    return str(getattr(captured_frame, "capture_tool", "") or "").strip().lower() == "windowscapturecuda"
+
+
+def _enable_openxr_depth_cuda_graph_if_needed(
+    ctx: RuntimePipelineContext,
+    openxr_full_synthesis: bool,
+    captured_frame: CapturedFrame | None = None,
+) -> None:
     if not openxr_full_synthesis:
+        return
+    if _captured_frame_uses_cuda_capture(captured_frame):
+        ctx.source_stat_inc("openxr_depth_cuda_graph_skipped_cuda_capture")
         return
     config = getattr(ctx.stereo_runtime, "config", None)
     if config is None or bool(getattr(config, "use_cuda_graph", False)):
@@ -367,6 +378,23 @@ def _runtime_pending_depth_limit() -> int:
         return 2
 
 
+def _is_fatal_runtime_preparation_error(exc: Exception) -> bool:
+    if isinstance(exc, FileNotFoundError):
+        return True
+    text = str(exc or "").lower()
+    if not text:
+        return False
+    fatal_markers = (
+        "unable to resolve infinidepth weights",
+        "model directory not found",
+        "onnx artifact not found",
+        "tensorrt engine not found",
+        "download completed but model directory was not found",
+        "model weights resolved but model directory was not found",
+    )
+    return any(marker in text for marker in fatal_markers)
+
+
 def _cuda_elapsed_ms(events: dict, start: str, end: str) -> float | None:
     first = events.get(start)
     second = events.get(end)
@@ -604,8 +632,7 @@ class RuntimePipelineLoop:
                 ctx.apply_stereo_hot_reload_if_needed()
                 _apply_latest_settings_snapshot(ctx)
                 openxr_full_synthesis = ctx.run_mode == "OpenXR" and _openxr_full_synthesis_enabled(ctx)
-                _enable_openxr_depth_cuda_graph_if_needed(ctx, openxr_full_synthesis)
-                ctx.warmup_stereo_once_for_frame(runtime_rgb)
+                _enable_openxr_depth_cuda_graph_if_needed(ctx, openxr_full_synthesis, captured_frame)
                 runtime_call_start_time = time.perf_counter()
                 if ctx.run_mode == "OpenXR" and not openxr_full_synthesis:
                     runtime_result = ctx.stereo_runtime.process_openxr_frame(
@@ -656,6 +683,7 @@ class RuntimePipelineLoop:
                     ctx.queue_clear(ctx.runtime_q)
                     ctx.source_stat_inc("runtime_none")
                     continue
+                ctx.warmup_stereo_once_for_frame(runtime_rgb)
                 if diag_stage == "runtime_sync" or _runtime_sync_after_frame_enabled(ctx):
                     sync_start_time = time.perf_counter()
                     _synchronize_runtime_device(runtime_rgb)
@@ -691,10 +719,19 @@ class RuntimePipelineLoop:
             except (RuntimeSettingsPipelineRebuildRequired, RuntimeSettingsRestartRequired):
                 raise
             except Exception as exc:
+                fatal_error = _is_fatal_runtime_preparation_error(exc)
                 ctx.source_stat_inc(
                     "runtime_errors",
                     last_error=f"process_runtime_loop {type(exc).__name__}: {exc}",
                 )
+                if fatal_error:
+                    ctx.source_stat_inc("runtime_fatal_errors")
+                    print(f"[process_runtime_loop] Fatal: {type(exc).__name__}: {exc}", flush=True)
+                    try:
+                        ctx.shutdown_event.set()
+                    except Exception:
+                        pass
+                    break
                 print(f"[process_runtime_loop] Error: {type(exc).__name__}: {exc}", flush=True)
                 time.sleep(0.05)
                 continue

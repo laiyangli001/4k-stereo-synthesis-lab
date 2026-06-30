@@ -35,6 +35,7 @@ _ASYNCIO_SHUTDOWN_UNRAISABLE_MESSAGES = (
     "I/O operation on closed pipe",
 )
 _asyncio_shutdown_noise_filter_installed = False
+_console_logging_installed = False
 
 
 def _is_asyncio_shutdown_unraisable(unraisable):
@@ -79,6 +80,11 @@ def _is_key_console_output(data):
 
 def _setup_console_logging():
     """Write full stdout/stderr to the rolling log and keep console concise."""
+    global _console_logging_installed
+    if _console_logging_installed:
+        _install_asyncio_shutdown_noise_filter()
+        return
+
     import datetime
     import threading
     from utils.logging_setup import configure_debug_file_logging
@@ -148,6 +154,7 @@ def _setup_console_logging():
 
     sys.stdout = _TeeStream(sys.stdout, "out")
     sys.stderr = _TeeStream(sys.stderr, "err")
+    _console_logging_installed = True
 
 
 def _set_console_quick_edit(enabled: bool):
@@ -297,6 +304,7 @@ class GUIProcessMixin:
             ]
             child_env = os.environ.copy()
             child_env["PYTHONIOENCODING"] = "utf-8"
+            child_env["D2S_FORCE_TQDM"] = "1"
             if OS_NAME == "Windows":
                 self.process = await asyncio.create_subprocess_exec(
                     *child_args,
@@ -343,17 +351,19 @@ class GUIProcessMixin:
             if stream is None:
                 return
             while True:
-                raw = await stream.readline()
+                raw = await stream.read(4096)
                 if not raw:
                     break
                 try:
-                    text = raw.decode("utf-8", errors="replace").rstrip("\r\n")
+                    text = raw.decode("utf-8", errors="replace")
                 except Exception:
                     text = repr(raw)
                 if text:
-                    print(text)
+                    sys.stdout.write(text)
+                    sys.stdout.flush()
         except Exception as e:
             self._diag(f"_pump_child_output exception: {e}\n{traceback.format_exc()}", error=True)
+
 
     async def _monitor_process_task(self):
         proc = self.process

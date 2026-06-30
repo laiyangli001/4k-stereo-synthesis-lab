@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Literal
 
 from .model_registry import DepthModelSpec, ModelRegistry, resolve_model_dir
+from .progress import stage_progress
 
 OnnxDtypeMode = Literal["auto", "fp16", "fp32"]
 
@@ -112,9 +113,17 @@ def ensure_model_downloaded(
 ) -> Path:
     """Download or validate a Hugging Face model without importing D2S settings."""
     model_dir = model_spec.model_dir(cache_dir)
-    if local_files_only and not model_dir.exists():
-        raise FileNotFoundError(f"model directory not found: {model_dir}")
-    if model_dir.exists() and not force_download:
+    if model_spec.family == "infinidepth":
+        from .depth_provider import _resolve_hf_model_file
+
+        _resolve_hf_model_file(
+            model_spec.model_id,
+            cache_dir,
+            local_files_only=local_files_only,
+            force_download=force_download,
+        )
+        if not model_dir.exists():
+            raise FileNotFoundError(f"model weights resolved but model directory was not found: {model_dir}")
         return model_dir
 
     from huggingface_hub import snapshot_download
@@ -235,45 +244,56 @@ def prepare_model_artifacts(
     )
 
     notes: list[str] = []
-    if download_if_missing or force_download:
-        ensure_model_downloaded(
-            spec,
-            cache_dir=cache_dir,
-            local_files_only=local_files_only,
-            force_download=force_download,
-        )
-    elif local_files_only and not paths.model_dir.exists():
-        raise FileNotFoundError(f"model directory not found: {paths.model_dir}")
-    downloaded = paths.model_dir.exists()
+    with stage_progress("Runtime preparation", 4) as progress:
+        progress.set_postfix_str("checking model cache", refresh=True)
+        if download_if_missing or export_onnx_if_missing or force_download:
+            ensure_model_downloaded(
+                spec,
+                cache_dir=cache_dir,
+                local_files_only=local_files_only,
+                force_download=force_download,
+            )
+        elif local_files_only and not paths.model_dir.exists():
+            raise FileNotFoundError(f"model directory not found: {paths.model_dir}")
+        downloaded = paths.model_dir.exists()
+        progress.update(1)
 
-    selected_onnx = select_existing_onnx(paths, onnx_dtype)
-    if selected_onnx is None and export_onnx_if_missing:
-        selected_onnx = ensure_onnx_exported(
-            spec,
-            cache_dir=cache_dir,
-            model_dir=paths.model_dir,
-            height=export_height,
-            width=export_width,
-            dtype=onnx_dtype,
-            local_files_only=local_files_only,
-            export_if_missing=True,
-        )
-    elif selected_onnx is None:
-        notes.append("onnx artifact missing")
+        progress.set_postfix_str("checking ONNX artifact", refresh=True)
+        selected_onnx = select_existing_onnx(paths, onnx_dtype)
+        progress.update(1)
+        if selected_onnx is None and export_onnx_if_missing:
+            progress.set_postfix_str("exporting ONNX", refresh=True)
+            selected_onnx = ensure_onnx_exported(
+                spec,
+                cache_dir=cache_dir,
+                model_dir=paths.model_dir,
+                height=export_height,
+                width=export_width,
+                dtype=onnx_dtype,
+                local_files_only=local_files_only,
+                export_if_missing=True,
+            )
+        elif selected_onnx is None:
+            notes.append("onnx artifact missing")
+        progress.update(1)
 
-    trt_ready = paths.trt_fp16_path.exists()
-    if not trt_ready and build_trt_if_missing and selected_onnx is not None:
-        ensure_tensorrt_engine(
-            spec,
-            onnx_path=selected_onnx,
-            engine_path=paths.trt_fp16_path,
-            build_if_missing=True,
-            force_rebuild=force_rebuild_trt,
-            workspace_gb=trt_workspace_gb,
-        )
+        progress.set_postfix_str("checking TensorRT engine", refresh=True)
         trt_ready = paths.trt_fp16_path.exists()
-    elif not trt_ready:
-        notes.append("TensorRT engine missing")
+        if not trt_ready and build_trt_if_missing and selected_onnx is not None:
+            progress.set_postfix_str("building TensorRT engine", refresh=True)
+            ensure_tensorrt_engine(
+                spec,
+                onnx_path=selected_onnx,
+                engine_path=paths.trt_fp16_path,
+                build_if_missing=True,
+                force_rebuild=force_rebuild_trt,
+                workspace_gb=trt_workspace_gb,
+            )
+            trt_ready = paths.trt_fp16_path.exists()
+        elif not trt_ready:
+            notes.append("TensorRT engine missing")
+        progress.set_postfix_str("ready", refresh=True)
+        progress.update(1)
 
     return PreparedModelArtifacts(
         paths=paths,

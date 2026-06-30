@@ -1,3 +1,4 @@
+import os
 import math
 
 import moderngl
@@ -27,6 +28,8 @@ class CoreScreenQualityMixin:
         return footprint_w, footprint_h
 
     def _log_screen_footprint_once(self, eye_index, mvp, swapchain_size):
+        if str(os.environ.get("D2S_DEBUG", "0") or "0").strip().lower() not in {"1", "true", "yes", "on"}:
+            return
         view_distance = self._screen_view_distance()
         key = (
             int(eye_index),
@@ -34,7 +37,6 @@ class CoreScreenQualityMixin:
             tuple(self._texture_size or (0, 0)),
             round(float(self.screen_width), 3),
             round(float(self.screen_height or 0.0), 3),
-            round(float(view_distance), 3),
         )
         if key in self._screen_footprint_logged:
             return

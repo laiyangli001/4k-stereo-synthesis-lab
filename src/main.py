@@ -13,6 +13,7 @@ from app_runtime.app_runner import build_app_mode_callbacks, build_current_app_m
 from app_runtime.shutdown import build_cleanup_handler, build_signal_handler, register_signal_handlers
 from app_runtime.runtime_context import build_capture_callbacks, build_runtime_pipeline_context, create_runtime_context
 from app_runtime.runtime_callbacks import RuntimeCallbacks
+from stereo_runtime.progress import progress_write
 from streaming.rtmp import global_processes, rtmp_stream
 from viewer.window_utils import is_window_visible_on_screen, list_windows
 
@@ -103,7 +104,7 @@ def _watch_stop_request_file():
     while not shutdown_event.is_set():
         try:
             if os.path.exists(STOP_REQUEST_FILE):
-                print("[Signal] Stop requested by GUI, shutting down gracefully...")
+                progress_write("[Signal] Stop requested by GUI, shutting down gracefully...")
                 shutdown_event.set()
                 try:
                     os.remove(STOP_REQUEST_FILE)
@@ -120,19 +121,16 @@ def _set_rtmp_thread(thread):
     rtmp_thread = thread
 
 def main(mode="Viewer"):
-    # Start capture and processing threads
-    threading.Thread(target=_watch_stop_request_file, name="StopRequestWatcher", daemon=True).start()
-    threading.Thread(target=capture_loop, daemon=True).start()
-    # Replace separate process_loop and depth_loop with combined thread
-    threading.Thread(target=process_runtime_loop, daemon=True).start()
-
     stats = None
 
     try:
+        threading.Thread(target=_watch_stop_request_file, name="StopRequestWatcher", daemon=True).start()
+
         app_settings = build_current_app_mode_settings(
             use_cudart=context.use_cudart,
             time_sleep=context.time_sleep,
         )
+
         app_callbacks = build_app_mode_callbacks(
             shutdown_is_set=shutdown_event.is_set,
             breakdown_inc=runtime_callbacks.breakdown_inc,
@@ -152,6 +150,12 @@ def main(mode="Viewer"):
             wait_idle_clear=context.openxr_state.wait_idle_active.clear,
             bootstrap_done_set=context.openxr_state.bootstrap_done.set,
         )
+
+        threading.Thread(target=capture_loop, name="CaptureLoop", daemon=True).start()
+
+        # Replace separate process_loop and depth_loop with combined thread.
+        threading.Thread(target=process_runtime_loop, name="RuntimePipeline", daemon=True).start()
+
         result = run_app_mode(
             mode,
             runtime_q=context.runtime_q,
@@ -164,7 +168,7 @@ def main(mode="Viewer"):
         globals()["window"] = result.window
 
     except KeyboardInterrupt:
-        print("\n[Main] Keyboard interrupt received, shutting down...")
+        progress_write("[Main] Keyboard interrupt received, shutting down...")
     # except Exception as e:
     #     print(f"[Main] Error: {e}")
     finally:
@@ -177,7 +181,7 @@ def main(mode="Viewer"):
             if stats.fps_values:
                 print(f"Recent Average FPS: {stats.avg_fps:.1f}")
                 print(f"Recent 1% Low Average FPS: {stats.low_fps_avg:.1f}")
-        print(f"[Main] Stopped")
+        progress_write("[Main] Stopped")
 
 if __name__ == "__main__":
     main(mode=RUN_MODE)

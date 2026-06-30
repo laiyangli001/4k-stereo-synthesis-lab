@@ -54,6 +54,30 @@ def test_no_room_background_effects_skip_shadow_and_ground(monkeypatch):
     assert not viewer._render_ground_light_called
 
 
+def test_no_room_screen_effects_wait_for_source_ready(monkeypatch):
+    viewer = _make_no_room_viewer(monkeypatch)
+    viewer._screen_effects_enabled = True
+    viewer.screen_height = 9.0
+    viewer._runtime_direct_source = False
+    viewer._should_show_source_border = lambda: False
+    viewer._render_glow_called = False
+    viewer._render_metallic_border_called = False
+
+    def _render_glow(*_args):
+        viewer._render_glow_called = True
+
+    def _render_metallic_border(*_args):
+        viewer._render_metallic_border_called = True
+
+    viewer._render_glow = _render_glow
+    viewer._render_metallic_border = _render_metallic_border
+    viewer._render_screen_background_effects(None, None)
+    viewer._render_screen_foreground_effects(None, None)
+
+    assert not viewer._render_glow_called
+    assert not viewer._render_metallic_border_called
+
+
 def test_default_screen_state_persistence_is_disabled(monkeypatch):
     viewer = _make_default_viewer(monkeypatch)
     viewer.screen_width = 16.0
@@ -273,6 +297,40 @@ def test_default_surround_glow_uses_shell_render_path(monkeypatch):
     assert not viewer._default_blank_fast_path()
     assert not viewer._render_glow_called
     assert viewer._render_glow_shell_called
+
+
+def test_environment_screen_effects_wait_for_source_ready(monkeypatch):
+    viewer = _make_default_viewer(monkeypatch)
+    viewer._environment_model = "Default"
+    viewer._active_environment = None
+    viewer._env_model_visible = False
+    viewer._env_model_prims = []
+    viewer._dark_room_prims = []
+    viewer._bg_color_idx = 0
+    viewer._glow_mode = "surround"
+    viewer._glow_intensity_multiplier = 0.0
+    viewer._glow_shell_intensity_multiplier = 1.0
+    viewer._runtime_direct_source = False
+    viewer._should_show_source_border = lambda: False
+    viewer._render_glow_shell_called = False
+    viewer._render_frosted_glow_called = False
+
+    def _render_glow_shell(*_args):
+        viewer._render_glow_shell_called = True
+
+    def _render_frosted_glow(*_args):
+        viewer._render_frosted_glow_called = True
+
+    viewer._render_glow_shell = _render_glow_shell
+    viewer._render_frosted_glow = _render_frosted_glow
+    viewer._render_screen_background_effects(None, None)
+    viewer._glow_mode = "frosted"
+    viewer._glow_intensity_multiplier = 1.0
+    viewer._glow_shell_intensity_multiplier = 0.0
+    viewer._render_screen_foreground_effects(None, None)
+
+    assert not viewer._render_glow_shell_called
+    assert not viewer._render_frosted_glow_called
 
 
 def test_default_frosted_glow_uses_frosted_render_path(monkeypatch):

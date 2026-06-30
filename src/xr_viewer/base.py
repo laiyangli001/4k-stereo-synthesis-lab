@@ -69,10 +69,20 @@ class ScreenEffectsMixin:
         T[2, 3] = -self.screen_distance + z_offset + getattr(self, '_breath_dz', 0.0)
         return T @ R @ S
 
+    def _should_render_source_screen_effects(self):
+        should_show_source_border = getattr(self, '_should_show_source_border', None)
+        if not callable(should_show_source_border):
+            return True
+        if not hasattr(self, '_runtime_direct_source'):
+            return True
+        return should_show_source_border()
+
     def _render_screen_background_effects(self, mgl_fbo, vp_mat):
         if not getattr(self, '_screen_effects_enabled', True):
             return
         if self.screen_height is None:
+            return
+        if not self._should_render_source_screen_effects():
             return
         self._render_glow(mgl_fbo, vp_mat)
 
@@ -80,6 +90,8 @@ class ScreenEffectsMixin:
         if not getattr(self, '_screen_effects_enabled', True):
             return
         if self.screen_height is None:
+            return
+        if not self._should_render_source_screen_effects():
             return
         self._render_metallic_border(mgl_fbo, vp_mat)
 
@@ -178,11 +190,16 @@ class ScreenEffectsMixin:
     def _render_metallic_border(self, mgl_fbo, vp_mat):
         if not getattr(self, '_metallic_border_enabled', True):
             return
+        should_show_source_border = getattr(self, '_should_show_source_border', None)
+        if callable(should_show_source_border) and not should_show_source_border():
+            return
         prog = getattr(self, '_metallic_border_prog', None)
         vao = getattr(self, '_metallic_border_vao', None)
         if prog is None or vao is None:
             return
-        alpha = max(float(getattr(self, '_border_alpha', 1.0)), 0.35)
+        alpha = max(float(getattr(self, '_border_alpha', 0.0)), 0.0)
+        if alpha <= 0.0:
+            return
         self.ctx.disable(moderngl.DEPTH_TEST)
         self.ctx.depth_mask = False
         self.ctx.enable(moderngl.BLEND)

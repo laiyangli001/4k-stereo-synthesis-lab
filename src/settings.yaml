@@ -312,10 +312,10 @@ Model List:
   DepthPro-Large:
     resolutions:
     - 1536
-Depth Model: Distill-Any-Depth-Base
+Depth Model: InfiniDepth-Large
 Depth Strength: 0.25
 Depth Quick: Standard
-Depth Resolution: 518
+Depth Resolution: 512
 Anti-aliasing: 1
 Depth Antialias Strength: 1.0
 Foreground Scale: 0.0
@@ -348,18 +348,18 @@ Recompile OpenVINO: false
 Computing Device: 0
 Language: CN
 Run Mode: OpenXR Link
-XR Headset Model: Meta Quest Pro
+XR Headset Model: Pico 4 / 4 Ultra
 XR Preview Window: false
 VSync: false
 Target FPS: 0
 Processing Resolution: Auto
 Render Size Policy: scaled
-Render Scale: 4K / 100%
+Render Scale: 3K / 85%
 Render Fixed Width: 1920
 Render Fixed Height: 1080
 Render Max Pixels: 8294400
 Render Min Dimension: 480
-Render Align: 8
+Render Align: 16
 Upscaler: 'Off'
 Upscaler Sharpness: 0.0
 Stream Protocol: HLS

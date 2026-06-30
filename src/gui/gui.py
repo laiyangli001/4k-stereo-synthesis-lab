@@ -119,6 +119,7 @@ class Desktop2StereoGUI(
 
 def main():
     """Entry point for the GUI application."""
+    _setup_console_logging()
     ensure_vendored_flet_view()
     ft.run(_async_main)
 

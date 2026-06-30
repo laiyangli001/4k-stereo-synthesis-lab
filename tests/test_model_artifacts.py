@@ -7,7 +7,8 @@ from stereo_runtime import (
     artifact_paths_for_model,
     prepare_model_artifacts,
 )
-from stereo_runtime.model_artifacts import select_existing_onnx
+from stereo_runtime.model_artifacts import ensure_model_downloaded, select_existing_onnx
+from stereo_runtime.model_registry import ModelRegistry
 
 
 def test_artifact_paths_follow_d2s_naming():
@@ -76,6 +77,7 @@ def test_prepare_model_artifacts_passes_local_files_only_to_onnx_export(monkeypa
 
     import stereo_runtime.onnx_export as onnx_export
 
+    monkeypatch.setattr("huggingface_hub.snapshot_download", lambda **kwargs: str(paths.model_dir / "snapshots" / "fake"))
     monkeypatch.setattr(onnx_export, "export_depth_model_onnx", fake_export)
 
     result = prepare_model_artifacts(
@@ -87,6 +89,84 @@ def test_prepare_model_artifacts_passes_local_files_only_to_onnx_export(monkeypa
 
     assert result.onnx_ready is True
     assert calls["local_files_only"] is True
+    assert calls["force_download"] is False
+
+
+def test_prepare_model_artifacts_confirms_model_before_onnx_export(monkeypatch, tmp_path: Path):
+    calls = []
+    paths = artifact_paths_for_model("Distill-Any-Depth-Base", cache_dir=tmp_path)
+
+    def fake_snapshot_download(**kwargs):
+        calls.append("download")
+        paths.model_dir.mkdir(parents=True, exist_ok=True)
+        return str(paths.model_dir / "snapshots" / "fake")
+
+    def fake_export(**kwargs):
+        calls.append("onnx")
+        output_path = Path(kwargs["output_path"])
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"onnx")
+        return SimpleNamespace(output_path=output_path)
+
+    import stereo_runtime.onnx_export as onnx_export
+
+    monkeypatch.setattr("huggingface_hub.snapshot_download", fake_snapshot_download)
+    monkeypatch.setattr(onnx_export, "export_depth_model_onnx", fake_export)
+
+    result = prepare_model_artifacts(
+        "Distill-Any-Depth-Base",
+        cache_dir=tmp_path,
+        local_files_only=False,
+        download_if_missing=False,
+        export_onnx_if_missing=True,
+    )
+
+    assert result.onnx_ready is True
+    assert calls == ["download", "onnx"]
+
+
+def test_infinidepth_download_requires_resolved_weight_file(monkeypatch, tmp_path: Path):
+    calls = {}
+    spec = ModelRegistry.default().get("InfiniDepth-Base")
+    model_dir = spec.model_dir(tmp_path)
+    model_dir.mkdir(parents=True)
+
+    def fake_resolve(model_id, cache_dir, *, local_files_only=False, force_download=False):
+        calls["model_id"] = model_id
+        calls["cache_dir"] = Path(cache_dir)
+        calls["local_files_only"] = local_files_only
+        calls["force_download"] = force_download
+        return str(model_dir / "model.safetensors")
+
+    import stereo_runtime.depth_provider as depth_provider
+
+    monkeypatch.setattr(depth_provider, "_resolve_hf_model_file", fake_resolve)
+
+    assert ensure_model_downloaded(spec, cache_dir=tmp_path, local_files_only=False) == model_dir
+    assert calls == {
+        "model_id": "lc700x/InfiniDepth-Base",
+        "cache_dir": tmp_path,
+        "local_files_only": False,
+        "force_download": False,
+    }
+
+
+def test_generic_download_confirms_snapshot_even_when_cache_dir_exists(monkeypatch, tmp_path: Path):
+    calls = {}
+    spec = ModelRegistry.default().get("Distill-Any-Depth-Base")
+    model_dir = spec.model_dir(tmp_path)
+    model_dir.mkdir(parents=True)
+
+    def fake_snapshot_download(**kwargs):
+        calls.update(kwargs)
+        return str(model_dir / "snapshots" / "fake")
+
+    monkeypatch.setattr("huggingface_hub.snapshot_download", fake_snapshot_download)
+
+    assert ensure_model_downloaded(spec, cache_dir=tmp_path, local_files_only=False) == model_dir
+    assert calls["repo_id"] == "lc700x/Distill-Any-Depth-Base-hf"
+    assert calls["cache_dir"] == str(tmp_path)
+    assert calls["local_files_only"] is False
     assert calls["force_download"] is False
 
 

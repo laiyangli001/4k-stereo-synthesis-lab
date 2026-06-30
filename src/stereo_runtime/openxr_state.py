@@ -35,9 +35,9 @@ class OpenXRStateController:
         )
         self.screen_roll = 0.0
         self.source_pause_notice_lock = threading.Lock()
-        self.source_pause_noticed = None
+        self.source_pause_noticed = False
         self.wait_idle_notice_lock = threading.Lock()
-        self.wait_idle_noticed = None
+        self.wait_idle_noticed = False
 
     def source_paused(self) -> bool:
         paused = (
@@ -49,9 +49,9 @@ class OpenXRStateController:
             if self.source_pause_noticed is not paused:
                 self.source_pause_noticed = paused
                 if paused:
-                    print("[Main] OpenXR source inference paused")
+                    print("[Main] OpenXR source gate closed")
                 else:
-                    print("[Main] OpenXR source inference resumed")
+                    print("[Main] OpenXR source gate opened; waiting for runtime frame")
         return paused
 
     def hard_idle_active(self, on_enter=None) -> bool:
@@ -68,7 +68,7 @@ class OpenXRStateController:
                         on_enter()
                     print("[Main] OpenXR hard idle entered")
                 else:
-                    print("[Main] OpenXR hard idle exited")
+                    print("[Main] OpenXR hard idle exited; waiting for source gate")
         return idle
 
     def update_runtime_config(

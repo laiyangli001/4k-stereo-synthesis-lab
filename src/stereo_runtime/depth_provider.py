@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict, field
+import os
+import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +12,7 @@ import torch.nn.functional as F
 
 from .depth_upsample import DepthUpsampleMode, upsample_depth
 from .output import ensure_bchw, ensure_b1hw, match_depth
+from .progress import make_tqdm_progress, progress_write, supports_live_progress
 
 DISTILL_ANY_DEPTH_BASE_NAME = "Distill-Any-Depth-Base"
 DISTILL_ANY_DEPTH_BASE_MODEL_ID = "lc700x/Distill-Any-Depth-Base-hf"
@@ -155,6 +159,112 @@ def _infinidepth_encoder_for_model(model_id: str) -> str:
     return INFINIDEPTH_ENCODERS.get(str(model_id).strip().lower(), "vitl16")
 
 
+class _ConsoleDownloadProgress:
+    """tqdm-backed progress bar tuned for the GUI-forwarded Windows console."""
+
+    def __init__(self, *args, **kwargs):
+        self._plain = not supports_live_progress()
+        self._last_reported_percent = -1
+        self._desc = str(kwargs.get("desc") or "download")
+        self._total = kwargs.get("total")
+        self._n = 0
+        if self._plain:
+            self._tqdm = None
+            return
+        kwargs.setdefault("ascii", True)
+        kwargs.setdefault("mininterval", 0.1)
+        kwargs.setdefault("unit", "B")
+        kwargs.setdefault("unit_scale", True)
+        kwargs.setdefault("unit_divisor", 1024)
+        kwargs.setdefault("leave", True)
+        kwargs.setdefault(
+            "bar_format",
+            "[Main] Download {desc} [{bar:10}] {percentage:3.0f}% {n_fmt}/{total_fmt} {rate_fmt} {remaining}",
+        )
+        self._tqdm = make_tqdm_progress(*args, **kwargs)
+
+    @property
+    def n(self):
+        return self._n if self._plain else self._tqdm.n
+
+    @property
+    def total(self):
+        return self._total if self._plain else self._tqdm.total
+
+    def __enter__(self):
+        if not self._plain:
+            self._tqdm.__enter__()
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+        return False
+
+    def update(self, amount=1):
+        if not self._plain:
+            return self._tqdm.update(amount)
+        self._n += amount
+        total = self.total or 0
+        if total <= 0:
+            return None
+        percent = int((self._n / total) * 100)
+        bucket = min(100, (percent // 10) * 10)
+        if bucket > self._last_reported_percent:
+            self._last_reported_percent = bucket
+            sys.stdout.write(f"\r[Main] Downloading {self._desc} {bucket:3d}%  {self._n}/{total}")
+            sys.stdout.flush()
+        return None
+
+    def refresh(self):
+        if not self._plain:
+            return self._tqdm.refresh()
+        return None
+
+    def set_description(self, desc):
+        self._desc = str(desc or "download")
+        if not self._plain:
+            return self._tqdm.set_description(self._desc, refresh=False)
+        return None
+
+    def close(self):
+        if self._plain:
+            total = self.total or 0
+            if total > 0 and self._n >= total and self._last_reported_percent < 100:
+                sys.stdout.write(f"\r[Main] Downloading {self._desc} 100%  {self._n}/{total}")
+            if self._last_reported_percent >= 0:
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+            return
+        incomplete = self.total is not None and self.n < self.total
+        if incomplete:
+            self._tqdm.leave = False
+        self._tqdm.close()
+        if incomplete:
+            try:
+                self._tqdm.fp.write("\n")
+                self._tqdm.fp.flush()
+            except Exception:
+                pass
+
+
+def _progress_print(message):
+    progress_write(str(message))
+
+
+def _print_download_preparing_progress(filename):
+    _progress_print(f"[Main] Preparing download {filename}: waiting for server response...")
+
+
+def _raise_model_resolution_error(model_id: str, last_error: Exception | None, *, local_only: bool) -> None:
+    scope = "local InfiniDepth weights" if local_only else "InfiniDepth weights"
+    if last_error is None:
+        raise RuntimeError(f"unable to resolve {scope} for {model_id!r}")
+    raise RuntimeError(
+        f"unable to resolve {scope} for {model_id!r}: "
+        f"{type(last_error).__name__}: {last_error}"
+    ) from last_error
+
+
 def _resolve_hf_model_file(
     model_id: str,
     cache_dir: str | Path,
@@ -165,32 +275,45 @@ def _resolve_hf_model_file(
     from huggingface_hub import hf_hub_download
 
     filenames = ("model.safetensors", "model.pt", "model.ckpt")
+    cache_dir_text = str(cache_dir)
     last_error: Exception | None = None
+    _progress_print(f"[Main] Runtime preparation: checking depth model {model_id}")
     if not force_download:
+        _progress_print(f"[Main] Checking local depth model cache: {model_id} in {cache_dir_text}")
         for filename in filenames:
             try:
-                return hf_hub_download(
+                path = hf_hub_download(
                     repo_id=model_id,
                     filename=filename,
-                    cache_dir=str(cache_dir),
+                    cache_dir=cache_dir_text,
                     local_files_only=True,
                 )
+                _progress_print(f"[Main] Depth model cache hit: {path}")
+                return path
             except Exception as exc:
                 last_error = exc
     if local_files_only:
-        raise RuntimeError(f"unable to resolve local InfiniDepth weights for {model_id!r}") from last_error
+        _raise_model_resolution_error(model_id, last_error, local_only=True)
 
+    endpoint = os.environ.get("HF_ENDPOINT", "https://huggingface.co")
+    _progress_print(f"[Main] Depth model not found in local cache; preparing download from {endpoint}: {model_id}")
     for filename in filenames:
         try:
+            _progress_print(
+                f"[Main] Preparing depth model download: {model_id}/{filename} "
+                f"to {cache_dir_text}. First download may take several minutes."
+            )
+            _print_download_preparing_progress(filename)
             return hf_hub_download(
                 repo_id=model_id,
                 filename=filename,
-                cache_dir=str(cache_dir),
+                cache_dir=cache_dir_text,
                 force_download=force_download,
+                tqdm_class=_ConsoleDownloadProgress,
             )
         except Exception as exc:
             last_error = exc
-    raise RuntimeError(f"unable to resolve InfiniDepth weights for {model_id!r}") from last_error
+    _raise_model_resolution_error(model_id, last_error, local_only=False)
 
 
 class DistillAnyDepthBase518:
@@ -249,8 +372,6 @@ class DistillAnyDepthBase518:
         return self.predict_profile(rgb).depth
 
     def predict_profile(self, rgb: torch.Tensor) -> DepthProfileResult:
-        import time
-
         def sync() -> None:
             if self.device.type == "cuda" and torch.cuda.is_available():
                 torch.cuda.synchronize()
@@ -368,8 +489,6 @@ class GenericAutoDepthProvider:
         return self.predict_profile(rgb).depth
 
     def predict_profile(self, rgb: torch.Tensor) -> DepthProfileResult:
-        import time
-
         def sync() -> None:
             if self.device.type == "cuda" and torch.cuda.is_available():
                 torch.cuda.synchronize()
@@ -482,8 +601,6 @@ class InfiniDepthProvider:
         return self.predict_profile(rgb).depth
 
     def predict_profile(self, rgb: torch.Tensor) -> DepthProfileResult:
-        import time
-
         def sync() -> None:
             if self.device.type == "cuda" and torch.cuda.is_available():
                 torch.cuda.synchronize()

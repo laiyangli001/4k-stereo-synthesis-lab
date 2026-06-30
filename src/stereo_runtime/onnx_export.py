@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
+import warnings
 
 import torch
 
 OnnxDtypeMode = Literal["auto", "fp16", "fp32"]
 
 from .model_capabilities import FORCE_FP32_KEYWORDS
+from .progress import activity_progress
 
 
 @dataclass(frozen=True)
@@ -108,6 +111,20 @@ def _is_infinidepth_model(model_id: str) -> bool:
     return "infinidepth" in str(model_id).lower()
 
 
+@contextmanager
+def _quiet_onnx_export_warnings():
+    import torch
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=torch.jit.TracerWarning)
+        warnings.filterwarnings(
+            "ignore",
+            message=r"ONNX export mode is set to TrainingMode\.EVAL, but operator 'instance_norm' is set to train=True.*",
+            category=UserWarning,
+        )
+        yield
+
+
 def load_model_for_dtype(
     auto_model_cls,
     model_id: str,
@@ -176,17 +193,19 @@ def export_depth_model_onnx(
     output_path = Path(output_path)
     cache_dir = Path(cache_dir)
 
-    model = load_model_for_dtype(
-        auto_model_cls,
-        model_id,
-        dtype=dtype_obj,
-        device=device_obj,
-        cache_dir=cache_dir,
-        local_files_only=local_files_only,
-        force_download=force_download,
-    )
+    with activity_progress(f"Loading model for ONNX export: {model_id}"):
+        model = load_model_for_dtype(
+            auto_model_cls,
+            model_id,
+            dtype=dtype_obj,
+            device=device_obj,
+            cache_dir=cache_dir,
+            local_files_only=local_files_only,
+            force_download=force_download,
+        )
 
-    ok, probe_reason = probe_model_dtype(model, device=device_obj, dtype=dtype_obj, height=height, width=width)
+    with activity_progress(f"Probing ONNX export dtype: {dtype_name}"):
+        ok, probe_reason = probe_model_dtype(model, device=device_obj, dtype=dtype_obj, height=height, width=width)
     if dtype == "auto" and not ok and dtype_name == "fp16":
         del model
         if device_obj.type == "cuda":
@@ -195,34 +214,37 @@ def export_depth_model_onnx(
         dtype_name = "fp32"
         dtype_reason = f"auto: fp16 probe failed ({probe_reason}); fallback fp32"
         output_path = output_path.with_name(output_path.name.replace("model_fp16_", "model_fp32_"))
-        model = load_model_for_dtype(
-            auto_model_cls,
-            model_id,
-            dtype=dtype_obj,
-            device=device_obj,
-            cache_dir=cache_dir,
-            local_files_only=local_files_only,
-            force_download=False,
-        )
-        ok, probe_reason = probe_model_dtype(model, device=device_obj, dtype=dtype_obj, height=height, width=width)
+        with activity_progress(f"Reloading model for ONNX export: {dtype_name}"):
+            model = load_model_for_dtype(
+                auto_model_cls,
+                model_id,
+                dtype=dtype_obj,
+                device=device_obj,
+                cache_dir=cache_dir,
+                local_files_only=local_files_only,
+                force_download=False,
+            )
+        with activity_progress(f"Probing ONNX export dtype: {dtype_name}"):
+            ok, probe_reason = probe_model_dtype(model, device=device_obj, dtype=dtype_obj, height=height, width=width)
     if not ok:
         raise RuntimeError(f"export dtype probe failed for {dtype_name}: {probe_reason}")
 
     dummy_input = torch.randn(1, 3, height, width, device=device_obj, dtype=dtype_obj)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with torch.no_grad():
-        torch.onnx.export(
-            model,
-            dummy_input,
-            str(output_path),
-            input_names=["pixel_values"],
-            output_names=["predicted_depth"],
-            do_constant_folding=True,
-            export_params=True,
-            verbose=False,
-            training=torch.onnx.TrainingMode.EVAL,
-            dynamo=False,
-        )
+    with activity_progress(f"Exporting ONNX: {output_path.name}"):
+        with torch.no_grad(), _quiet_onnx_export_warnings():
+            torch.onnx.export(
+                model,
+                dummy_input,
+                str(output_path),
+                input_names=["pixel_values"],
+                output_names=["predicted_depth"],
+                do_constant_folding=True,
+                export_params=True,
+                verbose=False,
+                training=torch.onnx.TrainingMode.EVAL,
+                dynamo=False,
+            )
 
     return OnnxExportResult(
         output_path=output_path,

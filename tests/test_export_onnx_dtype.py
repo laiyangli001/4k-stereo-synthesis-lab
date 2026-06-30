@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from stereo_runtime.model_artifacts import artifact_paths_for_model
-from stereo_runtime.onnx_export import choose_export_dtype, probe_model_dtype
+from stereo_runtime.onnx_export import _quiet_onnx_export_warnings, choose_export_dtype, probe_model_dtype
 
 
 def test_choose_export_dtype_auto_cuda_defaults_fp16():
@@ -73,3 +73,22 @@ def test_probe_model_dtype_accepts_finite_dynamic_output():
 
     assert ok is True
     assert "ok:" in reason
+
+
+def test_quiet_onnx_export_warnings_only_suppresses_known_export_noise():
+    import warnings
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        with _quiet_onnx_export_warnings():
+            warnings.warn(
+                "Converting a tensor to a Python boolean might cause the trace to be incorrect",
+                torch.jit.TracerWarning,
+            )
+            warnings.warn(
+                "ONNX export mode is set to TrainingMode.EVAL, but operator 'instance_norm' is set to train=True. Exporting with train=True.",
+                UserWarning,
+            )
+            warnings.warn("real warning", UserWarning)
+
+    assert [str(item.message) for item in caught] == ["real warning"]

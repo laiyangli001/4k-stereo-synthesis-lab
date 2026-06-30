@@ -197,10 +197,35 @@ def test_console_output_is_filtered_after_full_log_write():
     assert "[warmup] same version" in text
     assert "[INFO] [flet] Session was garbage collected:" in text
     assert "_DEBUG_CONSOLE_PREFIXES" in text
+    assert "_console_logging_installed = False" in text
+    assert "if _console_logging_installed:" in text
     log_write_index = text.index("with open(LOG_FILE")
     filter_index = text.index("if _is_key_console_output(data):", log_write_index)
     console_write_index = text.index("self.original.write(data)", filter_index)
     assert log_write_index < filter_index < console_write_index
+
+
+def test_console_filter_suppresses_flet_startup_noise_lines():
+    import ast
+
+    source = _file_text("process.py")
+    tree = ast.parse(source)
+    noisy_prefixes = []
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(getattr(target, "id", None) == "_NOISY_CONSOLE_PREFIXES" for target in node.targets):
+            noisy_prefixes = list(ast.literal_eval(node.value))
+            break
+
+    assert any("[NativeUtil] sogou_native_util_pc loaded successfully on %s win32".startswith(prefix) for prefix in noisy_prefixes)
+    assert any("[warmup] same version (1.0.263), skip renderer warmup".startswith(prefix) for prefix in noisy_prefixes)
+    assert not any("[Main] Runtime preparation: checking depth model lc700x/InfiniDepth-Large".startswith(prefix) for prefix in noisy_prefixes)
+
+
+def test_gui_console_logging_starts_before_flet_view_launch():
+    text = _file_text("gui.py")
+    main_block = text[text.index("def main():"):text.index("async def _async_main")]
+    assert main_block.index("_setup_console_logging()") < main_block.index("ensure_vendored_flet_view()")
+    assert main_block.index("_setup_console_logging()") < main_block.index("ft.run(_async_main)")
 
 
 def test_gui_suppresses_known_asyncio_shutdown_unraisable_noise_only():
@@ -239,6 +264,10 @@ def test_gui_uses_single_rolling_log_for_gui_and_child_output():
     assert 'stderr=asyncio.subprocess.STDOUT' in process_text
     assert 'child_env["PYTHONIOENCODING"] = "utf-8"' in process_text
     assert "async def _pump_child_output" in process_text
+    assert "raw = await stream.read(4096)" in process_text
+    assert "raw = await stream.readline()" not in process_text
+    assert "sys.stdout.write(text)" in process_text
+    assert "print(text)" not in process_text
     assert "asyncio.create_task(self._pump_child_output(self.process))" in process_text
 
 

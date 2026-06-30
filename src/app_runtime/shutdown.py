@@ -7,6 +7,7 @@ import threading
 import time
 
 from app_runtime.cleanup import cleanup_resources
+from stereo_runtime.progress import progress_write
 
 
 def build_cleanup_handler(
@@ -52,7 +53,7 @@ def build_signal_handler(
 
     def signal_handler(signum, frame):
         nonlocal watchdog_started
-        print(f"\n[Signal] Received signal {signum}, shutting down gracefully...")
+        progress_write(f"[Signal] Received signal {signum}, shutting down gracefully...")
         shutdown_event.set()
         if exit_fn is not None:
             if cleanup_all_resources is not None:
