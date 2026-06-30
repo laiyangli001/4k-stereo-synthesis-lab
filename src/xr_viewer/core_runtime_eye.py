@@ -1,4 +1,5 @@
 import ctypes
+import logging
 import os
 import time
 
@@ -31,6 +32,9 @@ try:
     from viewer.viewer import CUDART_GL
 except ImportError:
     CUDART_GL = None
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _openxr_runtime_eye_sync_enabled() -> bool:
@@ -104,7 +108,7 @@ class CoreRuntimeEyeMixin:
         output_dtype = getattr(runtime_result, 'output_dtype', None) or debug.get('runtime_output_dtype', 'unknown')
         output_eye_size = getattr(runtime_result, 'output_eye_size', None) or debug.get('runtime_output_eye_size', 'unknown')
         output_pack_backend = getattr(runtime_result, 'output_pack_backend', None) or debug.get('runtime_output_pack_backend', 'unknown')
-        print(
+        LOGGER.debug(
             "[OpenXRViewer] runtime eye stats:"
             f" upload={upload_path}"
             f" format={output_format}"
@@ -112,8 +116,7 @@ class CoreRuntimeEyeMixin:
             f" eye_size={output_eye_size}"
             f" pack={output_pack_backend}"
             f" left=({_stats('left', runtime_result.left_eye)})"
-            f" right=({_stats('right', runtime_result.right_eye)})",
-            flush=True,
+            f" right=({_stats('right', runtime_result.right_eye)})"
         )
 
     def _verify_runtime_eye_gpu_upload_once(self, eyes, w, h):

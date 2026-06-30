@@ -404,13 +404,7 @@ class DistillAnyDepthBaseNativeTensorRt:
         self._preprocessor.fixed_input_size = self._engine.input_image_size
         print(
             "[TensorRT] native provider loaded:"
-            f" engine={self.engine_path}"
-            f" onnx={self.onnx_path}"
-            f" dtype={_dtype_label(self.dtype)}"
-            f" input_size={self._engine.input_image_size}"
-            f" cuda_graph={self.use_cuda_graph}"
-            f" profile_sync={self.profile_sync}"
-            f" dll_dirs={trt_lib_dirs or 'none'}",
+            f" engine={self.engine_path}",
             flush=True,
         )
         self.info = replace(

@@ -90,6 +90,85 @@ def test_cinema_giant_is_default_y_screen_preset():
     assert "self._apply_preset(3)" not in impl_text
 
 
+def test_right_grip_screen_rotation_is_disabled_by_default_but_kept():
+    impl_text = (SRC / "xr_viewer" / "implementation.py").read_text(encoding="utf-8")
+
+    assert "os.environ.get('D2S_OPENXR_RIGHT_GRIP_SCREEN_ROTATION', '0')" in impl_text
+    assert "self._right_grip_screen_rotation_enabled" in impl_text
+    guarded = impl_text.split("if self._right_grip_screen_rotation_enabled:", 1)[1]
+    guarded = guarded.split("elif both_grips and not grip_now:", 1)[0]
+    assert "self.screen_yaw" in guarded
+    assert "self.screen_pitch" in guarded
+    assert "self.screen_roll" in guarded
+
+
+def test_laser_hit_circles_render_without_depth_test_like_keyboard_cursor():
+    impl_text = (SRC / "xr_viewer" / "implementation.py").read_text(encoding="utf-8")
+    render_eye = impl_text.split("def _render_eye(self, eye_index, mgl_fbo, view_mat, proj_mat, flip_y=False):", 1)[1]
+    hit_circle_block = render_eye.split("# 9. Laser hit circles", 1)[1]
+    hit_circle_block = hit_circle_block.split("# 10. FPS/status overlays", 1)[0]
+
+    disable_depth = hit_circle_block.index("self.ctx.disable(moderngl.DEPTH_TEST)")
+    draw_hit_circles = hit_circle_block.index("self._render_lasers(mgl_fbo, vp_mat, blend=True)")
+    enable_depth = hit_circle_block.index("self.ctx.enable(moderngl.DEPTH_TEST)")
+    assert disable_depth < draw_hit_circles < enable_depth
+    assert "self.ctx.depth_mask = False" in hit_circle_block
+    assert "self.ctx.depth_mask = True" in hit_circle_block
+
+
+def test_openxr_keyboard_hover_pulses_controller_haptics_on_key_changes():
+    impl_text = (SRC / "xr_viewer" / "implementation.py").read_text(encoding="utf-8")
+    actions_text = (SRC / "xr_viewer" / "core_controller_actions.py").read_text(encoding="utf-8")
+    input_text = (SRC / "xr_viewer" / "core_openxr_input.py").read_text(encoding="utf-8")
+    helpers_text = (SRC / "xr_viewer" / "core_input_helpers.py").read_text(encoding="utf-8")
+    cleanup_text = (SRC / "xr_viewer" / "core_cleanup.py").read_text(encoding="utf-8")
+
+    assert "self._haptic_last_l       = 0.0" in impl_text
+    assert "self._haptic_last_r       = 0.0" in impl_text
+    assert "action_type=xr.ActionType.VIBRATION_OUTPUT" in actions_text
+    assert 'action_name="haptic"' in actions_text
+    assert actions_text.count('/user/hand/left/output/haptic') >= 6
+    assert actions_text.count('/user/hand/right/output/haptic') >= 6
+    assert "self._act_haptic = None" in cleanup_text
+    assert "def _pulse_haptic(" in input_text
+    assert "xr.HapticVibration(" in input_text
+    assert "xr.HapticActionInfo(action=action, subaction_path=path)" in input_text
+    assert "xr.apply_haptic_feedback(" in input_text
+    assert "min_interval_s=0.045" in helpers_text
+    assert "idx is not None and idx != prev_hover and not gripping" in helpers_text
+    assert "self._pulse_haptic(hand_path, amplitude=0.18, duration_s=0.018, min_interval_s=0.045)" in helpers_text
+
+
+def test_openxr_controller_button_press_animates_controller_model():
+    impl_text = (SRC / "xr_viewer" / "implementation.py").read_text(encoding="utf-8")
+    input_text = (SRC / "xr_viewer" / "core_openxr_input.py").read_text(encoding="utf-8")
+    laser_text = (SRC / "xr_viewer" / "core_laser_render.py").read_text(encoding="utf-8")
+
+    assert "self._ctrl_press_l        = 0.0" in impl_text
+    assert "self._ctrl_press_r        = 0.0" in impl_text
+    assert "self._update_controller_press_animation_state(dt)" in impl_text
+    assert "def _update_controller_press_animation_state" in input_text
+    for action_name in (
+        "_act_left_trigger",
+        "_act_right_trigger",
+        "_act_left_grip",
+        "_act_right_grip",
+        "_act_x_btn",
+        "_act_y_btn",
+        "_act_a_btn",
+        "_act_b_btn",
+        "_act_left_stick_click",
+        "_act_right_stick_click",
+        "_act_menu_btn",
+    ):
+        assert action_name in input_text
+    assert "_ctrl_press_l" in laser_text
+    assert "_ctrl_press_r" in laser_text
+    assert "press_mat" in laser_text
+    assert "press_glow" in laser_text
+    assert "r_mat @ t_mat @ press_mat" in laser_text
+
+
 def test_reset_screen_to_default_uses_cinema_giant(monkeypatch):
     monkeypatch.chdir(SRC)
     from xr_viewer.implementation import OpenXRViewerCore
@@ -223,7 +302,9 @@ def test_openxr_screen_shader_uniforms_are_initialized_for_flat_and_curved_paths
     assert "runtime_rgb_depth_max_disparity_px = (" in render_eye
     assert "runtime_rgb_depth_render_width = (" in render_eye
     assert "screen_disparity_uv = max(0.0, runtime_rgb_depth_max_disparity_px) / float(runtime_rgb_depth_render_width)" in render_eye
-    assert "screen_depth_strength = 0.0 if self._runtime_direct_source else 1.0" in render_eye
+    assert "screen_depth_strength = (" in render_eye
+    assert "if self._runtime_direct_source" in render_eye
+    assert "_runtime_rgb_depth_depth_strength" in render_eye
     assert "screen_eye_offset = 0.0 if self._runtime_direct_source else eye_sign * screen_disparity_uv / 2.0" in render_eye
     assert "runtime_rgb_depth_stereo_scale" not in render_eye
     assert "runtime_rgb_depth_max_shift_ratio" not in render_eye

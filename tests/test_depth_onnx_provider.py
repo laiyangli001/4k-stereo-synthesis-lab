@@ -382,6 +382,35 @@ def test_native_tensorrt_defers_load_until_frame_artifact_size_is_known(tmp_path
     assert provider._engine is None
 
 
+def test_native_tensorrt_load_prints_compact_engine_path(monkeypatch, tmp_path, capsys):
+    import stereo_runtime.providers.nvidia.tensorrt_native as native_module
+
+    class FakeEngine:
+        input_image_size = (294, 518)
+
+        def __init__(self, engine_path, *, device, dtype):
+            self.engine_path = engine_path
+
+    engine_path = tmp_path / "model.trt"
+    onnx_path = tmp_path / "model.onnx"
+    engine_path.write_bytes(b"trt")
+    provider = native_module.NativeTensorRtDepthProvider(
+        device="cuda",
+        onnx_path=onnx_path,
+        engine_path=engine_path,
+    )
+
+    monkeypatch.setattr(native_module, "ensure_tensorrt_dll_path", lambda: [tmp_path / "dlls"])
+    monkeypatch.setattr(native_module, "NativeTensorRtEngine", FakeEngine)
+
+    provider.load()
+
+    output = capsys.readouterr().out.strip()
+    assert output == f"[TensorRT] native provider loaded: engine={engine_path}"
+    assert " onnx=" not in output
+    assert " dll_dirs=" not in output
+
+
 def test_native_tensorrt_provider_uses_engine_static_input_size(monkeypatch, tmp_path):
     import stereo_runtime.providers.nvidia.tensorrt_native as native_module
 

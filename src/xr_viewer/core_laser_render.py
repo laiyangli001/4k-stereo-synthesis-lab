@@ -308,9 +308,9 @@ class CoreLaserRenderMixin:
         """Render PICO 4 Ultra 3D controller models with Blinn-Phong lighting."""
         now = self._frame_now
         controllers = []
-        for grip_mat, prims, last_move_attr in [
-            (self._grip_mat_l, self._ctrl_prims_l, "_laser_last_move_l"),
-            (self._grip_mat_r, self._ctrl_prims_r, "_laser_last_move_r"),
+        for grip_mat, prims, last_move_attr, press_attr in [
+            (self._grip_mat_l, self._ctrl_prims_l, "_laser_last_move_l", "_ctrl_press_l"),
+            (self._grip_mat_r, self._ctrl_prims_r, "_laser_last_move_r", "_ctrl_press_r"),
         ]:
             if (now - getattr(self, last_move_attr)) > self._LASER_HIDE_AFTER:
                 continue
@@ -319,7 +319,8 @@ class CoreLaserRenderMixin:
             r_t = view_mat[:3, :3].T
             eye_pos = -r_t @ view_mat[:3, 3]
             dist = float(np.linalg.norm(grip_mat[:3, 3].astype(np.float64) - eye_pos.astype(np.float64)))
-            controllers.append((dist, grip_mat, prims))
+            press_amount = max(0.0, min(1.0, float(getattr(self, press_attr, 0.0) or 0.0)))
+            controllers.append((dist, grip_mat, prims, press_amount))
 
         if not controllers:
             return
@@ -329,7 +330,7 @@ class CoreLaserRenderMixin:
         view_inv = np.linalg.inv(view_mat)
         cam_pos = view_inv[:3, 3].astype(np.float32)
 
-        for _dist, grip_mat, prims in controllers:
+        for _dist, grip_mat, prims, press_amount in controllers:
             t_mat = np.eye(4, dtype=np.float32)
             _off = self._calibration_temp_offset if self._calibration_mode else self._ctrl_model_offset
             _rot = self._calibration_temp_rot if self._calibration_mode else self._ctrl_model_rot_deg
@@ -345,13 +346,22 @@ class CoreLaserRenderMixin:
             r_mat[2, 1] = _sa
             r_mat[2, 2] = _ca
 
-            _corr = (r_mat @ t_mat).astype(np.float32)
+            press_mat = np.eye(4, dtype=np.float32)
+            if press_amount > 0.001:
+                press_mat[1, 3] = -0.0045 * press_amount
+                press_mat[2, 3] = -0.0020 * press_amount
+                press_mat[0, 0] = 1.0 + 0.0040 * press_amount
+                press_mat[1, 1] = 1.0 - 0.0075 * press_amount
+                press_mat[2, 2] = 1.0 + 0.0030 * press_amount
+
+            _corr = (r_mat @ t_mat @ press_mat).astype(np.float32)
             model_mat = (grip_mat @ _corr).astype(np.float32)
 
+            press_glow = 0.14 * press_amount
             self._controller_prog['u_mvp'].write(vp_mat.astype(np.float32).T.tobytes())
             self._controller_prog['u_model'].write(model_mat.T.tobytes())
-            self._controller_prog['u_light_color'].value = (0.60, 0.60, 0.65)
-            self._controller_prog['u_ambient_color'].value = (0.22, 0.22, 0.24)
+            self._controller_prog['u_light_color'].value = (0.60 + press_glow, 0.60 + press_glow, 0.65 + press_glow)
+            self._controller_prog['u_ambient_color'].value = (0.22 + press_glow * 0.35, 0.22 + press_glow * 0.35, 0.24 + press_glow * 0.35)
             self._controller_prog['u_camera_pos'].write(cam_pos.tobytes())
 
             sorted_prims = sorted(prims, key=lambda p: p['tri_count'], reverse=True)

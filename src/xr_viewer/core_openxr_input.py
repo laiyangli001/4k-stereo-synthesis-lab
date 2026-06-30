@@ -252,3 +252,70 @@ class CoreOpenXRInputMixin:
             return float(state.current_state) if state.is_active else 0.0
         except Exception:
             return 0.0
+
+    def _update_controller_press_animation_state(self, dt=0.0):
+        """Cache per-hand button pressure used by controller render feedback."""
+        def _hand_pressure(hand_path, trigger_action, grip_action, face_actions):
+            pressure = max(0.0, min(1.0, self._read_float_action(trigger_action, hand_path)))
+            if self._read_bool_action(grip_action, hand_path):
+                pressure = max(pressure, 1.0)
+            for action in face_actions:
+                if self._read_bool_action(action, hand_path):
+                    pressure = max(pressure, 1.0)
+                    break
+            return pressure
+
+        left_target = _hand_pressure(
+            "/user/hand/left",
+            self._act_left_trigger,
+            self._act_left_grip,
+            (self._act_x_btn, self._act_y_btn, self._act_left_stick_click, self._act_menu_btn),
+        )
+        right_target = _hand_pressure(
+            "/user/hand/right",
+            self._act_right_trigger,
+            self._act_right_grip,
+            (self._act_a_btn, self._act_b_btn, self._act_right_stick_click),
+        )
+        dt = max(0.0, min(0.050, float(dt or 0.0)))
+        alpha = 1.0 if dt <= 0.0 else min(1.0, dt * 24.0)
+        left_current = float(getattr(self, "_ctrl_press_l", 0.0) or 0.0)
+        right_current = float(getattr(self, "_ctrl_press_r", 0.0) or 0.0)
+        self._ctrl_press_l = left_current + (left_target - left_current) * alpha
+        self._ctrl_press_r = right_current + (right_target - right_current) * alpha
+
+    def _pulse_haptic(
+        self,
+        hand_path_str="/user/hand/right",
+        *,
+        amplitude=0.18,
+        duration_s=0.018,
+        min_interval_s=0.045,
+    ):
+        """Send a short controller haptic pulse; failures are non-fatal."""
+        action = getattr(self, "_act_haptic", None)
+        if action is None or self._xr_session is None:
+            return False
+        now = time.perf_counter()
+        last_attr = "_haptic_last_l" if hand_path_str == "/user/hand/left" else "_haptic_last_r"
+        if now - float(getattr(self, last_attr, 0.0) or 0.0) < float(min_interval_s):
+            return False
+        try:
+            path = self._path_left if hand_path_str == "/user/hand/left" else self._path_right
+            if path is None:
+                path = xr.string_to_path(self._xr_instance, hand_path_str)
+            duration_ns = max(1, int(float(duration_s) * 1_000_000_000))
+            vibration = xr.HapticVibration(
+                duration=duration_ns,
+                frequency=xr.FREQUENCY_UNSPECIFIED,
+                amplitude=max(0.0, min(1.0, float(amplitude))),
+            )
+            xr.apply_haptic_feedback(
+                self._xr_session,
+                xr.HapticActionInfo(action=action, subaction_path=path),
+                vibration,
+            )
+            setattr(self, last_attr, now)
+            return True
+        except Exception:
+            return False

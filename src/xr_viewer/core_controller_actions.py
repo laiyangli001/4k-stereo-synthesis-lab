@@ -128,6 +128,17 @@ class CoreControllerActionsMixin:
         self._act_left_trigger  = make_float("left_trigger",  "Left Trigger")
         self._act_right_trigger = make_float("right_trigger", "Right Trigger")
 
+        self._act_haptic = xr.create_action(
+            self._action_set,
+            xr.ActionCreateInfo(
+                action_type=xr.ActionType.VIBRATION_OUTPUT,
+                action_name="haptic",
+                localized_action_name="Controller Haptic",
+                count_subaction_paths=len(subpaths),
+                subaction_paths=subpaths,
+            ),
+        )
+
         self._act_aim_left = xr.create_action(
             self._action_set,
             xr.ActionCreateInfo(
@@ -194,6 +205,8 @@ class CoreControllerActionsMixin:
                 ("/user/hand/right/input/aim/pose",          self._act_aim_right),
                 ("/user/hand/left/input/grip/pose",          self._act_grip_left),
                 ("/user/hand/right/input/grip/pose",         self._act_grip_right),
+                ("/user/hand/left/output/haptic",            self._act_haptic),
+                ("/user/hand/right/output/haptic",           self._act_haptic),
             ],
             "/interaction_profiles/valve/index_controller": [
                 ("/user/hand/left/input/thumbstick",         self._act_left_stick),
@@ -211,6 +224,8 @@ class CoreControllerActionsMixin:
                 ("/user/hand/right/input/aim/pose",         self._act_aim_right),
                 ("/user/hand/left/input/grip/pose",         self._act_grip_left),
                 ("/user/hand/right/input/grip/pose",        self._act_grip_right),
+                ("/user/hand/left/output/haptic",           self._act_haptic),
+                ("/user/hand/right/output/haptic",          self._act_haptic),
             ],
             # HTC Vive wand: trackpad (no thumbstick), squeeze/click (boolean,
             # no analog value), trigger value/click, menu, no A/B/X/Y buttons.
@@ -231,6 +246,8 @@ class CoreControllerActionsMixin:
                 ("/user/hand/right/input/aim/pose",          self._act_aim_right),
                 ("/user/hand/left/input/grip/pose",          self._act_grip_left),
                 ("/user/hand/right/input/grip/pose",         self._act_grip_right),
+                ("/user/hand/left/output/haptic",            self._act_haptic),
+                ("/user/hand/right/output/haptic",           self._act_haptic),
             ],
             # Windows Mixed Reality motion controllers expose a clickable trackpad.
             "/interaction_profiles/microsoft/motion_controller": [
@@ -247,6 +264,8 @@ class CoreControllerActionsMixin:
                 ("/user/hand/right/input/aim/pose",          self._act_aim_right),
                 ("/user/hand/left/input/grip/pose",          self._act_grip_left),
                 ("/user/hand/right/input/grip/pose",         self._act_grip_right),
+                ("/user/hand/left/output/haptic",            self._act_haptic),
+                ("/user/hand/right/output/haptic",           self._act_haptic),
             ],
             # KHR simple only has select/click (boolean) and menu -no sticks or grip
             "/interaction_profiles/khr/simple_controller": [
@@ -255,6 +274,8 @@ class CoreControllerActionsMixin:
                 ("/user/hand/right/input/aim/pose",     self._act_aim_right),
                 ("/user/hand/left/input/grip/pose",     self._act_grip_left),
                 ("/user/hand/right/input/grip/pose",    self._act_grip_right),
+                ("/user/hand/left/output/haptic",       self._act_haptic),
+                ("/user/hand/right/output/haptic",      self._act_haptic),
             ],
             # PICO 4 Ultra controller interaction profile
             "/interaction_profiles/bytedance/pico_4u_controller": [
@@ -275,6 +296,8 @@ class CoreControllerActionsMixin:
                 ("/user/hand/right/input/aim/pose",          self._act_aim_right),
                 ("/user/hand/left/input/grip/pose",          self._act_grip_left),
                 ("/user/hand/right/input/grip/pose",         self._act_grip_right),
+                ("/user/hand/left/output/haptic",            self._act_haptic),
+                ("/user/hand/right/output/haptic",           self._act_haptic),
             ],
         }
 

@@ -154,6 +154,9 @@ class CoreInputHelpersMixin:
                 else:
                     idx = prev_hover
             setattr(self, hover_attr, idx)
+            if idx is not None and idx != prev_hover and not gripping:
+                hand_path = "/user/hand/left" if hover_attr.endswith('_l') else "/user/hand/right"
+                self._pulse_haptic(hand_path, amplitude=0.18, duration_s=0.018, min_interval_s=0.045)
 
             if held_key is not None:
                 release = False

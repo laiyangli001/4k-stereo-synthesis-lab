@@ -1,3 +1,4 @@
+import logging
 import os
 import queue
 import subprocess
@@ -171,7 +172,7 @@ def test_runtime_eye_tensor_hwc_u8_scales_near_normalized_float_range(monkeypatc
     assert int(out[0, 0, 0]) == 255
 
 
-def test_runtime_eye_stats_log_prefers_structured_output_fields(monkeypatch, capsys):
+def test_runtime_eye_stats_log_prefers_structured_output_fields(monkeypatch, caplog, capsys):
     torch = pytest.importorskip("torch")
     monkeypatch.chdir(SRC)
     from xr_viewer.core_runtime_eye import CoreRuntimeEyeMixin
@@ -194,9 +195,10 @@ def test_runtime_eye_stats_log_prefers_structured_output_fields(monkeypatch, cap
         },
     )
 
-    viewer._log_runtime_eye_stats_once(result, upload_path="cpu")
+    with caplog.at_level(logging.DEBUG, logger="xr_viewer.core_runtime_eye"):
+        viewer._log_runtime_eye_stats_once(result, upload_path="cpu")
 
-    output = capsys.readouterr().out
+    output = caplog.text
     assert "format=openxr_full_synthesis_eyes" in output
     assert "runtime_dtype=uint8" in output
     assert "eye_size=(3840, 2160)" in output
@@ -205,6 +207,7 @@ def test_runtime_eye_stats_log_prefers_structured_output_fields(monkeypatch, cap
     assert "legacy_dtype" not in output
     assert "eye_size=1x1" not in output
     assert "legacy_pack" not in output
+    assert "[OpenXRViewer] runtime eye stats:" not in capsys.readouterr().out
 
 
 def test_cpu_fallback_paths_emit_red_console_warnings(monkeypatch):

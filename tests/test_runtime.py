@@ -1,6 +1,7 @@
 import sys
 from pathlib import Path
 
+import logging
 import pytest
 import torch
 
@@ -93,6 +94,49 @@ def test_runtime_process_rgb_frame_uses_persistent_provider_and_returns_report()
     assert provider.close_count == 1
 
 
+def test_runtime_slow_frame_log_is_debug_only(monkeypatch, caplog, capsys):
+    provider = FakeDepthProvider()
+    config = StereoRuntimeConfig(
+        model_id="lc700x/Distill-Any-Depth-Base-hf",
+        model_dir=r"D:\Desktop2Stereo\models\models--lc700x--Distill-Any-Depth-Base-hf",
+        depth_backend="pytorch_cuda",
+        stereo_quality="fast",
+        output_format="half_sbs",
+        temporal=False,
+    )
+    runtime = StereoRuntime(config, depth_provider=provider, collect_memory_stats=False)
+    rgb = torch.rand(1, 3, 8, 12)
+
+    monkeypatch.setenv("D2S_SLOW_RUNTIME_LOG_MS", "0")
+    with caplog.at_level(logging.DEBUG, logger="stereo_runtime.runtime"):
+        runtime.process_rgb_frame(rgb)
+
+    assert "[StereoRuntime] slow frame:" in caplog.text
+    assert "[StereoRuntime] slow frame:" not in capsys.readouterr().out
+
+
+def test_runtime_frame_refresh_debug_log_is_capped(monkeypatch, caplog):
+    provider = FakeDepthProvider()
+    config = StereoRuntimeConfig(
+        model_id="lc700x/Distill-Any-Depth-Base-hf",
+        model_dir=r"D:\Desktop2Stereo\models\models--lc700x--Distill-Any-Depth-Base-hf",
+        depth_backend="pytorch_cuda",
+        stereo_quality="fast",
+        output_format="half_sbs",
+        temporal=False,
+    )
+    runtime = StereoRuntime(config, depth_provider=provider, collect_memory_stats=False)
+    rgb = torch.rand(1, 3, 8, 12)
+
+    monkeypatch.setenv("D2S_SLOW_RUNTIME_LOG_MS", "999999")
+    monkeypatch.setenv("D2S_RUNTIME_FRAME_LOG_REFRESH_S", "0.001")
+    with caplog.at_level(logging.DEBUG, logger="stereo_runtime.runtime"):
+        for _ in range(7):
+            runtime._last_runtime_perf_log_ts = -1e9
+            runtime.process_rgb_frame(rgb)
+
+    assert caplog.text.count("[StereoRuntime] frame refresh:") == 5
+
 def test_rolling_runtime_stats_reports_percentiles_fps_and_memory():
     stats = RollingRuntimeStats(maxlen=3)
     stats.update({"total_ms": 10.0, "synthesis_ms": 4.0}, {"cuda_peak_memory_allocated_mb": 100.0})
@@ -168,4 +212,3 @@ def test_fast_plus_fused_runtime_emits_uint8_half_sbs(monkeypatch):
     assert result.debug_info["runtime_output_pack_backend"] == "triton_half_sbs_uint8"
     assert result.debug_info["fast_plus_fused_backend"] == "triton_half_sbs_uint8"
     assert result.debug_info["fast_plus_fused_temporal_bypass"] == 1
-

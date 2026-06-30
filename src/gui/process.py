@@ -20,11 +20,47 @@ from .localization import UI_MESSAGES
 _NOISY_CONSOLE_PREFIXES = (
     "[NativeUtil] sogou_native_util_pc loaded successfully",
     "[warmup] same version",
+    "[INFO] [flet] Session was garbage collected:",
 )
 _DEBUG_CONSOLE_PREFIXES = (
     "[debug]",
     "debug:",
 )
+_ASYNCIO_SHUTDOWN_UNRAISABLE_MODULES = (
+    "asyncio.base_subprocess",
+    "asyncio.proactor_events",
+)
+_ASYNCIO_SHUTDOWN_UNRAISABLE_MESSAGES = (
+    "Event loop is closed",
+    "I/O operation on closed pipe",
+)
+_asyncio_shutdown_noise_filter_installed = False
+
+
+def _is_asyncio_shutdown_unraisable(unraisable):
+    exc = getattr(unraisable, "exc_value", None)
+    if str(exc) not in _ASYNCIO_SHUTDOWN_UNRAISABLE_MESSAGES:
+        return False
+    obj = getattr(unraisable, "object", None)
+    module = getattr(obj, "__module__", "")
+    qualname = getattr(obj, "__qualname__", "")
+    return module in _ASYNCIO_SHUTDOWN_UNRAISABLE_MODULES and qualname.endswith(".__del__")
+
+
+def _install_asyncio_shutdown_noise_filter():
+    """Suppress known Windows asyncio transport __del__ noise during GUI shutdown."""
+    global _asyncio_shutdown_noise_filter_installed
+    if _asyncio_shutdown_noise_filter_installed or not hasattr(sys, "unraisablehook"):
+        return
+    previous_hook = sys.unraisablehook
+
+    def _desktop2stereo_unraisable_hook(unraisable):
+        if _is_asyncio_shutdown_unraisable(unraisable):
+            return
+        previous_hook(unraisable)
+
+    sys.unraisablehook = _desktop2stereo_unraisable_hook
+    _asyncio_shutdown_noise_filter_installed = True
 
 
 def _is_key_console_output(data):
@@ -45,6 +81,7 @@ def _setup_console_logging():
     """Write full stdout/stderr to the rolling log and keep console concise."""
     import datetime
     import threading
+    from utils.logging_setup import configure_debug_file_logging
 
     os.makedirs(LOG_DIR, exist_ok=True)
 
@@ -64,6 +101,9 @@ def _setup_console_logging():
             f.write(f"=== Desktop2Stereo log started {datetime.datetime.now().isoformat(timespec='seconds')} ===\n")
     except Exception:
         pass
+
+    configure_debug_file_logging(LOG_FILE)
+    _install_asyncio_shutdown_noise_filter()
 
     lock = threading.Lock()
 

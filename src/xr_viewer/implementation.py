@@ -258,6 +258,9 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
 
         self._screen_grab_local_l = None
         self._screen_grab_local_r = None
+        self._right_grip_screen_rotation_enabled = str(
+            kwargs.get('openxr_right_grip_screen_rotation', os.environ.get('D2S_OPENXR_RIGHT_GRIP_SCREEN_ROTATION', '0')) or '0'
+        ).strip().lower() in ('1', 'true', 'yes', 'on')
         # Keyboard grip-to-move anchor -local (lx, ly) on keyboard plane
         # at the moment the grip was pressed.  Mirrors _screen_grab_local_*.
         self._kb_grab_local_l     = None
@@ -278,6 +281,10 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
         # key presses while repositioning the keyboard).
         self._grip_l_now          = False
         self._grip_r_now          = False
+        self._haptic_last_l       = 0.0
+        self._haptic_last_r       = 0.0
+        self._ctrl_press_l        = 0.0
+        self._ctrl_press_r        = 0.0
 
 
         # FPS display -timestamp ring: (len-1)/(last-first) is exact over the window
@@ -2369,13 +2376,14 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
 
         # 9. Laser hit circles (semi-transparent) -rendered on top of controllers.
         self.ctx.viewport = (0, 0, sc_w, sc_h)
-        # depth_mask = False  # do not write semi-transparent pixels to depth
+        self.ctx.disable(moderngl.DEPTH_TEST)
         self.ctx.depth_mask = False
         self.ctx.enable(moderngl.BLEND)
         self.ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
         self._render_lasers(mgl_fbo, vp_mat, blend=True)
         self.ctx.disable(moderngl.BLEND)
         self.ctx.depth_mask = True
+        self.ctx.enable(moderngl.DEPTH_TEST)
 
         # 10. FPS/status overlays -topmost UI, occlude laser beams
         if self._hand_fps_visible and self._overlay_tex is not None:
@@ -3198,6 +3206,7 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
         # the user is repositioning the keyboard with a grip press.
         self._grip_l_now = grip_l
         self._grip_r_now = grip_r
+        self._update_controller_press_animation_state(dt)
 
         # -- Left grip: record rotation for wrist-roll tracking on press --
         grip_l_was = self._grip_l_prev
@@ -3394,16 +3403,17 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
                                 self.screen_pan_x    = float(hx + dx * R3)
                                 self.screen_pan_y    = float(hy + dy * R3)
                                 self.screen_distance = float(-(hz + dz * R3))
-                                base_yaw   = math.atan2(-dx, -dz)
-                                base_pitch = math.asin(max(-1.0, min(1.0, dy)))
-                                self.screen_yaw   = base_yaw   + self._yaw_offset
-                                self.screen_pitch = base_pitch + self._pitch_offset
-                                # Wrist roll ->screen_roll
-                                if self._grip_r_ref_mat is not None:
-                                    R_cur = self._grip_mat_r[:3, :3].astype(np.float64)
-                                    Rd = R_cur @ self._grip_r_ref_mat.T
-                                    droll = math.atan2(Rd[1, 0], Rd[1, 1])
-                                    self.screen_roll = self._grip_r_base_roll + droll
+                                if self._right_grip_screen_rotation_enabled:
+                                    base_yaw   = math.atan2(-dx, -dz)
+                                    base_pitch = math.asin(max(-1.0, min(1.0, dy)))
+                                    self.screen_yaw   = base_yaw   + self._yaw_offset
+                                    self.screen_pitch = base_pitch + self._pitch_offset
+                                    # Wrist roll ->screen_roll
+                                    if self._grip_r_ref_mat is not None:
+                                        R_cur = self._grip_mat_r[:3, :3].astype(np.float64)
+                                        Rd = R_cur @ self._grip_r_ref_mat.T
+                                        droll = math.atan2(Rd[1, 0], Rd[1, 1])
+                                        self.screen_roll = self._grip_r_base_roll + droll
 
             elif both_grips and not grip_now:
                 # One grip released while both were held -clear grab state

@@ -29,6 +29,7 @@ class CoreCleanupMixin:
         self._act_right_stick_click = None
         self._act_left_trigger = None
         self._act_right_trigger = None
+        self._act_haptic = None
         self._act_aim_left = None
         self._act_aim_right = None
         self._act_grip_left = None

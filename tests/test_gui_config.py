@@ -172,11 +172,28 @@ def test_console_output_is_filtered_after_full_log_write():
     assert "def _is_key_console_output" in text
     assert "[NativeUtil] sogou_native_util_pc loaded successfully" in text
     assert "[warmup] same version" in text
+    assert "[INFO] [flet] Session was garbage collected:" in text
     assert "_DEBUG_CONSOLE_PREFIXES" in text
     log_write_index = text.index("with open(LOG_FILE")
     filter_index = text.index("if _is_key_console_output(data):", log_write_index)
     console_write_index = text.index("self.original.write(data)", filter_index)
     assert log_write_index < filter_index < console_write_index
+
+
+def test_gui_suppresses_known_asyncio_shutdown_unraisable_noise_only():
+    text = _file_text("process.py")
+
+    assert "def _install_asyncio_shutdown_noise_filter" in text
+    assert "sys.unraisablehook" in text
+    assert "asyncio.base_subprocess" in text
+    assert "asyncio.proactor_events" in text
+    assert "Event loop is closed" in text
+    assert "I/O operation on closed pipe" in text
+    assert "qualname.endswith(\".__del__\")" in text
+    assert "previous_hook(unraisable)" in text
+    setup_block = text.split("def _setup_console_logging():", 1)[1]
+    setup_block = setup_block.split("class GUIProcessMixin:", 1)[0]
+    assert "_install_asyncio_shutdown_noise_filter()" in setup_block
 
 
 def test_debug_mode_gui_control_removed():
@@ -193,6 +210,8 @@ def test_gui_uses_single_rolling_log_for_gui_and_child_output():
     process_text = _file_text("process.py")
     assert 'LOG_FILE = os.path.join(LOG_DIR, "desktop2stereo.log")' in paths_text
     assert "DIAG_LOG = LOG_FILE" in paths_text
+    assert "from utils.logging_setup import configure_debug_file_logging" in process_text
+    assert "configure_debug_file_logging(LOG_FILE)" in process_text
     assert 'stdout=asyncio.subprocess.PIPE' in process_text
     assert 'stderr=asyncio.subprocess.STDOUT' in process_text
     assert 'child_env["PYTHONIOENCODING"] = "utf-8"' in process_text
