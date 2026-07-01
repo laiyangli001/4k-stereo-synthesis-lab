@@ -14,6 +14,7 @@ from app_runtime.shutdown import build_cleanup_handler, build_signal_handler, re
 from app_runtime.runtime_context import build_capture_callbacks, build_runtime_pipeline_context, create_runtime_context
 from app_runtime.runtime_callbacks import RuntimeCallbacks
 from stereo_runtime.progress import progress_write
+from utils.i18n import status_log
 from streaming.rtmp import global_processes, rtmp_stream
 from viewer.window_utils import is_window_visible_on_screen, list_windows
 
@@ -168,6 +169,7 @@ def main(mode="Viewer"):
         globals()["window"] = result.window
 
     except KeyboardInterrupt:
+        status_log("Shutting down")
         progress_write("[Main] Keyboard interrupt received, shutting down...")
     # except Exception as e:
     #     print(f"[Main] Error: {e}")
@@ -181,6 +183,7 @@ def main(mode="Viewer"):
             if stats.fps_values:
                 print(f"Recent Average FPS: {stats.avg_fps:.1f}")
                 print(f"Recent 1% Low Average FPS: {stats.low_fps_avg:.1f}")
+        status_log("Stopped")
         progress_write("[Main] Stopped")
 
 if __name__ == "__main__":

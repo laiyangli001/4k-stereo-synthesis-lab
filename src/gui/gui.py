@@ -102,6 +102,7 @@ class Desktop2StereoGUI(
                     self._config.update(cfg)
                     self._yaml_loaded = True
                     self.locale = self._config.get("Language", "EN")
+                    os.environ["DESKTOP2STEREO_LOCALE"] = self.locale
                     self.apply_config(self._config)
                     self.set_status(UI_MESSAGES[self.locale]["Loaded settings.yaml at startup"],
                                     key="Loaded settings.yaml at startup")

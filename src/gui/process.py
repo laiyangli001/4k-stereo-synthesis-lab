@@ -347,6 +347,7 @@ class GUIProcessMixin:
                 os.path.join(BASE_DIR, "main.py"),
             ]
             child_env = os.environ.copy()
+            child_env["DESKTOP2STEREO_LOCALE"] = self.locale
             child_env["PYTHONIOENCODING"] = "utf-8"
             child_env["D2S_FORCE_TQDM"] = "1"
             if OS_NAME == "Windows":

@@ -596,6 +596,7 @@ class GUIHandlerMixin:
         lang = _LANG_MAP.get(lang_display, "EN")
         if is_supported_locale(lang):
             self.locale = lang
+            os.environ["DESKTOP2STEREO_LOCALE"] = self.locale
             self._config["Language"] = lang
             self.update_ui_texts()
             self._sync_visibility()

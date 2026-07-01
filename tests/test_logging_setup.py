@@ -48,6 +48,46 @@ def test_debug_file_logging_writes_debug_without_console_handler(tmp_path):
                 handler.close()
 
 
+def test_i18n_locale_completeness():
+    """All locale keys must match EN keys."""
+    from utils.i18n import MESSAGES
+
+    en_keys = set(MESSAGES["EN"].keys())
+    for loc in MESSAGES:
+        loc_keys = set(MESSAGES[loc].keys())
+        missing = en_keys - loc_keys
+        extra = loc_keys - en_keys
+        assert not missing, f"Locale {loc} missing keys: {missing}"
+        assert not extra, f"Locale {loc} has extra keys not in EN: {extra}"
+
+
+def test_i18n_t_function_fallback():
+    from utils.i18n import t
+
+    assert "nonexistent_key" == t("nonexistent_key")
+    assert "nonexistent_key" == t("nonexistent_key", "CN")
+    assert "📦 Preparing environment..." == t("Preparing environment", "EN")
+    assert "📦 正在准备运行环境..." == t("Preparing environment", "CN")
+
+
+def test_i18n_t_formatting():
+    from utils.i18n import t
+
+    result = t("Downloading model", "EN", model="DepthPro")
+    assert "DepthPro" in result
+    assert "⬇️" in result
+
+
+def test_i18n_status_log_accepts_level():
+    from utils.i18n import status_log
+    import logging
+    import os
+
+    os.environ["DESKTOP2STEREO_LOCALE"] = "EN"
+    status_log("Ready", level=logging.INFO)
+    status_log("Fatal error", level=logging.ERROR, error="test error")
+
+
 def test_main_process_configures_shared_debug_log():
     main_text = (Path(__file__).resolve().parents[1] / "src" / "main.py").read_text(encoding="utf-8")
 
