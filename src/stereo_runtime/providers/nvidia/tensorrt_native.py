@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+import threading
 import time
 
 import torch
@@ -20,7 +21,7 @@ from ...depth_provider import (
 )
 from ...depth_upsample import DepthUpsampleMode, upsample_depth
 from ...output import ensure_b1hw, ensure_bchw, match_depth
-from ...progress import activity_progress, file_size_progress, write_bytes_with_progress
+from ...progress import activity_progress, emit_progress_event, write_bytes_with_progress
 from .tensorrt_ort import ensure_tensorrt_dll_path
 
 
@@ -218,6 +219,76 @@ def _record_cuda_event(events: dict[str, object], name: str, tensor: torch.Tenso
         return
 
 
+class _TensorRtProgressState:
+    def __init__(self, desc: str) -> None:
+        self.desc = desc
+        self.started_at = time.perf_counter()
+        self.lock = threading.Lock()
+        self.phase_totals: dict[str, int] = {}
+        self.last_emit_at = 0.0
+
+    def phase_start(self, phase_name: str, parent_phase: str | None, num_steps: int) -> None:
+        del parent_phase
+        phase = str(phase_name or "TensorRT build")
+        total = max(1, int(num_steps or 1))
+        with self.lock:
+            self.phase_totals[phase] = total
+            self._emit_locked(phase, 0, total, force=True)
+
+    def step_complete(self, phase_name: str, step: int) -> bool:
+        phase = str(phase_name or "TensorRT build")
+        with self.lock:
+            total = self.phase_totals.get(phase)
+            if not total:
+                return True
+            completed = min(total, max(0, int(step) + 1))
+            self._emit_locked(phase, completed, total)
+        return True
+
+    def phase_finish(self, phase_name: str) -> None:
+        phase = str(phase_name or "TensorRT build")
+        with self.lock:
+            total = self.phase_totals.pop(phase, 1)
+            self._emit_locked(phase, total, total, force=True)
+
+    def _emit_locked(self, phase: str, completed: int, total: int, *, force: bool = False) -> None:
+        now = time.perf_counter()
+        if not force and completed < total and now - self.last_emit_at < 0.25:
+            return
+        self.last_emit_at = now
+        try:
+            emit_progress_event(f"{self.desc}: {phase}", completed, total, started_at=self.started_at, unit="steps")
+        except Exception:
+            return
+
+
+def _attach_tensorrt_progress_monitor(trt, config, desc: str):
+    if not hasattr(trt, "IProgressMonitor") or not hasattr(config, "progress_monitor"):
+        return None
+
+    state = _TensorRtProgressState(desc)
+
+    class _ProgressMonitor(trt.IProgressMonitor):
+        def __init__(self) -> None:
+            super().__init__()
+
+        def phase_start(self, phase_name: str, parent_phase: str | None, num_steps: int) -> None:
+            state.phase_start(phase_name, parent_phase, num_steps)
+
+        def step_complete(self, phase_name: str, step: int) -> bool:
+            return state.step_complete(phase_name, step)
+
+        def phase_finish(self, phase_name: str) -> None:
+            state.phase_finish(phase_name)
+
+    try:
+        monitor = _ProgressMonitor()
+        config.progress_monitor = monitor
+    except Exception:
+        return None
+    return monitor
+
+
 def build_native_tensorrt_engine(
     onnx_path: str | Path,
     engine_path: str | Path,
@@ -274,12 +345,13 @@ def build_native_tensorrt_engine(
     profile.set_shape(input_tensor.name, input_shape, input_shape, input_shape)
     config.add_optimization_profile(profile)
 
-    expected_engine_bytes = max(onnx_path.stat().st_size, 1)
-    with file_size_progress(
-        f"Building TensorRT engine: {engine_path.name}",
-        engine_path,
-        total_bytes=expected_engine_bytes,
-    ):
+    build_desc = f"Building TensorRT engine: {engine_path.name}"
+    monitor = _attach_tensorrt_progress_monitor(trt, config, build_desc)
+    print(f"[Main] {build_desc}...", flush=True)
+    if monitor is None:
+        with activity_progress(build_desc):
+            serialized = builder.build_serialized_network(network, config)
+    else:
         serialized = builder.build_serialized_network(network, config)
     if serialized is None:
         raise RuntimeError("TensorRT build_serialized_network returned None")
@@ -395,10 +467,11 @@ class DistillAnyDepthBaseNativeTensorRt:
             force_rebuild=self.force_rebuild,
         )
         artifacts = _prepare_accelerated_artifacts(cfg, build_trt=self.build_engine or self.force_rebuild, input_size=input_size)
-        if artifacts.selected_onnx_path is None:
+        if artifacts.selected_onnx_path is None and not artifacts.trt_ready:
             raise FileNotFoundError(f"ONNX artifact not found for {self.model_id} at input size {input_size}")
-        dtype_name = "fp32" if "fp32" in Path(artifacts.selected_onnx_path).name.lower() else "fp16"
-        self._set_artifact_paths(Path(artifacts.selected_onnx_path), artifacts.paths.trt_path_for_dtype(dtype_name), input_size)
+        source_path = Path(artifacts.selected_onnx_path) if artifacts.selected_onnx_path is not None else artifacts.paths.trt_path_for_dtype(self.onnx_dtype if self.onnx_dtype in ("fp16", "fp32") else "fp16")
+        dtype_name = "fp32" if "fp32" in source_path.name.lower() else "fp16"
+        self._set_artifact_paths(artifacts.paths.onnx_path_for_dtype(dtype_name), artifacts.paths.trt_path_for_dtype(dtype_name), input_size)
 
     def load(self) -> NativeTensorRtEngine | None:
         if self._engine is not None:

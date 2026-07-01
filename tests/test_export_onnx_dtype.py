@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from stereo_runtime.model_artifacts import artifact_paths_for_model
-from stereo_runtime.onnx_export import _quiet_onnx_export_warnings, choose_export_dtype, probe_model_dtype
+from stereo_runtime.onnx_export import _quiet_onnx_export_warnings, choose_export_dtype, export_depth_model_onnx, probe_model_dtype
 
 
 def test_choose_export_dtype_auto_cuda_defaults_fp16():
@@ -92,3 +92,35 @@ def test_quiet_onnx_export_warnings_only_suppresses_known_export_noise():
             warnings.warn("real warning", UserWarning)
 
     assert [str(item.message) for item in caught] == ["real warning"]
+
+
+def test_explicit_fp16_export_falls_back_to_fp32_when_probe_fails(monkeypatch, tmp_path):
+    calls = []
+
+    def fake_load_model_for_dtype(*_args, dtype, **_kwargs):
+        calls.append(dtype)
+        return object()
+
+    def fake_probe_model_dtype(_model, *, dtype, **_kwargs):
+        if dtype == torch.float16:
+            return False, "RuntimeError: Input type (float) and bias type (struct c10::Half) should be the same"
+        return True, "ok"
+
+    def fake_export(_model, _dummy_input, output_path, **_kwargs):
+        Path(output_path).write_bytes(b"onnx")
+
+    monkeypatch.setattr("stereo_runtime.onnx_export.load_model_for_dtype", fake_load_model_for_dtype)
+    monkeypatch.setattr("stereo_runtime.onnx_export.probe_model_dtype", fake_probe_model_dtype)
+    monkeypatch.setattr(torch.onnx, "export", fake_export)
+    result = export_depth_model_onnx(
+        model_id="test/model",
+        output_path=tmp_path / "model_fp16_294x518.onnx",
+        cache_dir=tmp_path,
+        device="cpu",
+        dtype="fp16",
+    )
+
+    assert calls == [torch.float16, torch.float32]
+    assert result.dtype_name == "fp32"
+    assert result.output_path.name == "model_fp32_294x518.onnx"
+    assert "fp16 probe failed" in result.dtype_reason

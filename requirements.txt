@@ -31,8 +31,5 @@ addict==2.4.0
 evo==1.36.5
 e3nn==0.6.0
 
-# gui
-rich==15.0.0
-
 # test
 pytest==9.1.1

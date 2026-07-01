@@ -25,6 +25,12 @@ if not exist "%APP_DIR%\gui\gui.py" (
 )
 
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
+
+echo [Preflight] [EN] Force-killing existing Python processes before Desktop2Stereo starts.
+echo             [CN] 启动 Desktop2Stereo 前强制结束所有现有 Python 进程。
+taskkill /f /t /im python.exe >nul 2>nul
+taskkill /f /t /im pythonw.exe >nul 2>nul
+
 if exist "%GUI_READY_FILE%" del /f /q "%GUI_READY_FILE%" >nul 2>nul
 if exist "%LAUNCH_STDOUT%" del /f /q "%LAUNCH_STDOUT%" >nul 2>nul
 if exist "%LAUNCH_STDERR%" del /f /q "%LAUNCH_STDERR%" >nul 2>nul

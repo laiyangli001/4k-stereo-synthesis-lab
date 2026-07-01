@@ -8,6 +8,8 @@ from .model_registry import DepthModelSpec, ModelRegistry, resolve_model_dir
 from .progress import stage_progress
 
 OnnxDtypeMode = Literal["auto", "fp16", "fp32"]
+ArtifactBackend = Literal["onnx", "tensorrt", "migraphx"]
+MODEL_WEIGHT_FILENAMES = ("model.safetensors", "model.pt", "model.ckpt")
 
 
 @dataclass(frozen=True)
@@ -53,6 +55,8 @@ class PreparedModelArtifacts:
     onnx_ready: bool
     trt_ready: bool
     selected_onnx_path: Path | None = None
+    migraphx_ready: bool = False
+    selected_migraphx_path: Path | None = None
     notes: tuple[str, ...] = ()
 
     def to_report(self) -> dict[str, object]:
@@ -62,6 +66,8 @@ class PreparedModelArtifacts:
             "onnx_ready": self.onnx_ready,
             "trt_ready": self.trt_ready,
             "selected_onnx_path": str(self.selected_onnx_path) if self.selected_onnx_path else None,
+            "migraphx_ready": self.migraphx_ready,
+            "selected_migraphx_path": str(self.selected_migraphx_path) if self.selected_migraphx_path else None,
             "notes": list(self.notes),
         }
 
@@ -113,6 +119,8 @@ def ensure_model_downloaded(
 ) -> Path:
     """Download or validate a Hugging Face model without importing D2S settings."""
     model_dir = model_spec.model_dir(cache_dir)
+    if not force_download and find_local_model_weight(model_dir) is not None:
+        return model_dir
     if model_spec.family == "infinidepth":
         from .depth_provider import _resolve_hf_model_file
 
@@ -126,8 +134,10 @@ def ensure_model_downloaded(
             raise FileNotFoundError(f"model weights resolved but model directory was not found: {model_dir}")
         return model_dir
 
+    from .depth_provider import _reachable_hf_endpoints
     from huggingface_hub import snapshot_download
 
+    _reachable_hf_endpoints(model_spec.model_id)
     snapshot_download(
         repo_id=model_spec.model_id,
         cache_dir=str(cache_dir),
@@ -139,9 +149,25 @@ def ensure_model_downloaded(
     return model_dir
 
 
+def find_local_model_weight(model_dir: str | Path) -> Path | None:
+    root = Path(model_dir)
+    if not root.exists():
+        return None
+    for filename in MODEL_WEIGHT_FILENAMES:
+        direct = root / filename
+        if direct.exists():
+            return direct
+        for path in root.rglob(filename):
+            if path.is_file():
+                return path
+    return None
+
+
 def select_existing_onnx(paths: ModelArtifactPaths, dtype: OnnxDtypeMode = "auto") -> Path | None:
     if dtype == "fp16":
-        return paths.onnx_fp16_path if paths.onnx_fp16_path.exists() else None
+        if paths.onnx_fp16_path.exists():
+            return paths.onnx_fp16_path
+        return paths.onnx_fp32_path if paths.onnx_fp32_path.exists() else None
     if dtype == "fp32":
         return paths.onnx_fp32_path if paths.onnx_fp32_path.exists() else None
     if paths.onnx_fp16_path.exists():
@@ -149,6 +175,34 @@ def select_existing_onnx(paths: ModelArtifactPaths, dtype: OnnxDtypeMode = "auto
     if paths.onnx_fp32_path.exists():
         return paths.onnx_fp32_path
     return None
+
+
+def select_existing_trt(paths: ModelArtifactPaths, dtype: OnnxDtypeMode = "auto") -> Path | None:
+    fp32_path = paths.trt_path_for_dtype("fp32")
+    if dtype == "fp16":
+        if paths.trt_fp16_path.exists():
+            return paths.trt_fp16_path
+        return fp32_path if fp32_path.exists() else None
+    if dtype == "fp32":
+        return fp32_path if fp32_path.exists() else None
+    if paths.trt_fp16_path.exists():
+        return paths.trt_fp16_path
+    if fp32_path.exists():
+        return fp32_path
+    return None
+
+
+def select_existing_migraphx(paths: ModelArtifactPaths, dtype: OnnxDtypeMode = "auto") -> Path | None:
+    if dtype == "fp32":
+        return None
+    return paths.migraphx_fp16_path if paths.migraphx_fp16_path.exists() else None
+
+
+def dtype_from_onnx_path(path: str | Path) -> str:
+    name = Path(path).name
+    if "model_fp32_" in name:
+        return "fp32"
+    return "fp16"
 
 
 def ensure_onnx_exported(
@@ -211,7 +265,32 @@ def ensure_tensorrt_engine(
     return build_native_tensorrt_engine(
         onnx_path,
         engine_path,
+        fp16=dtype_from_onnx_path(onnx_path) == "fp16",
         workspace_gb=workspace_gb,
+        force=force_rebuild,
+    )
+
+
+def ensure_migraphx_graph(
+    model_spec: DepthModelSpec,
+    *,
+    onnx_path: str | Path,
+    graph_path: str | Path,
+    build_if_missing: bool = False,
+    force_rebuild: bool = False,
+) -> Path:
+    graph_path = Path(graph_path)
+    if graph_path.exists() and not force_rebuild:
+        return graph_path
+    if not build_if_missing and not force_rebuild:
+        raise FileNotFoundError(f"MIGraphX graph not found for {model_spec.model_id}: {graph_path}")
+
+    from .providers.amd.migraphx import build_migraphx_graph
+
+    return build_migraphx_graph(
+        onnx_path,
+        graph_path,
+        fp16=dtype_from_onnx_path(onnx_path) == "fp16",
         force=force_rebuild,
     )
 
@@ -228,9 +307,12 @@ def prepare_model_artifacts(
     force_download: bool = False,
     download_if_missing: bool = False,
     export_onnx_if_missing: bool = False,
+    artifact_backend: ArtifactBackend = "onnx",
     build_trt_if_missing: bool = False,
     force_rebuild_trt: bool = False,
     trt_workspace_gb: int = 4,
+    build_migraphx_if_missing: bool = False,
+    force_rebuild_migraphx: bool = False,
 ) -> PreparedModelArtifacts:
     registry = ModelRegistry.default()
     spec = registry.get(model_name_or_id)
@@ -245,23 +327,30 @@ def prepare_model_artifacts(
 
     notes: list[str] = []
     with stage_progress("Runtime preparation", 4) as progress:
-        progress.set_postfix_str("checking model cache", refresh=True)
-        if download_if_missing or export_onnx_if_missing or force_download:
-            ensure_model_downloaded(
-                spec,
-                cache_dir=cache_dir,
-                local_files_only=local_files_only,
-                force_download=force_download,
-            )
-        elif local_files_only and not paths.model_dir.exists():
-            raise FileNotFoundError(f"model directory not found: {paths.model_dir}")
-        downloaded = paths.model_dir.exists()
+        progress.set_postfix_str("checking local artifacts", refresh=True)
+        wants_trt = artifact_backend == "tensorrt"
+        wants_migraphx = artifact_backend == "migraphx"
+        selected_onnx = select_existing_onnx(paths, onnx_dtype)
+        existing_trt = select_existing_trt(paths, onnx_dtype) if wants_trt and not force_rebuild_trt else None
+        existing_migraphx = select_existing_migraphx(paths, onnx_dtype) if wants_migraphx and not force_rebuild_migraphx else None
+        trt_path = existing_trt or (paths.trt_path_for_dtype(dtype_from_onnx_path(selected_onnx)) if selected_onnx is not None else paths.trt_path_for_dtype(onnx_dtype if onnx_dtype in ("fp16", "fp32") else "fp16"))
+        migraphx_path = existing_migraphx or paths.migraphx_fp16_path
+        trt_ready = existing_trt is not None
+        migraphx_ready = existing_migraphx is not None
+        local_weight = find_local_model_weight(paths.model_dir)
         progress.update(1)
 
         progress.set_postfix_str("checking ONNX artifact", refresh=True)
-        selected_onnx = select_existing_onnx(paths, onnx_dtype)
-        progress.update(1)
-        if selected_onnx is None and export_onnx_if_missing:
+        executable_ready = trt_ready or migraphx_ready
+        needs_onnx_export = export_onnx_if_missing or (wants_trt and build_trt_if_missing) or (wants_migraphx and build_migraphx_if_missing)
+        if selected_onnx is None and not executable_ready and needs_onnx_export:
+            if force_download or local_weight is None:
+                ensure_model_downloaded(
+                    spec,
+                    cache_dir=cache_dir,
+                    local_files_only=local_files_only,
+                    force_download=force_download,
+                )
             progress.set_postfix_str("exporting ONNX", refresh=True)
             selected_onnx = ensure_onnx_exported(
                 spec,
@@ -270,30 +359,47 @@ def prepare_model_artifacts(
                 height=export_height,
                 width=export_width,
                 dtype=onnx_dtype,
-                local_files_only=local_files_only,
+                local_files_only=local_files_only or local_weight is not None,
                 export_if_missing=True,
             )
-        elif selected_onnx is None:
+            trt_path = paths.trt_path_for_dtype(dtype_from_onnx_path(selected_onnx))
+            trt_ready = wants_trt and trt_path.exists()
+        elif selected_onnx is None and not executable_ready:
             notes.append("onnx artifact missing")
         progress.update(1)
 
-        progress.set_postfix_str("checking TensorRT engine", refresh=True)
-        trt_ready = paths.trt_fp16_path.exists()
-        if not trt_ready and build_trt_if_missing and selected_onnx is not None:
+        progress.set_postfix_str("checking runtime artifact", refresh=True)
+        if wants_trt and not trt_ready and build_trt_if_missing and selected_onnx is not None:
             progress.set_postfix_str("building TensorRT engine", refresh=True)
             ensure_tensorrt_engine(
                 spec,
                 onnx_path=selected_onnx,
-                engine_path=paths.trt_fp16_path,
+                engine_path=trt_path,
                 build_if_missing=True,
                 force_rebuild=force_rebuild_trt,
                 workspace_gb=trt_workspace_gb,
             )
-            trt_ready = paths.trt_fp16_path.exists()
-        elif not trt_ready:
+            trt_ready = trt_path.exists()
+        elif wants_migraphx and not migraphx_ready and build_migraphx_if_missing and selected_onnx is not None:
+            progress.set_postfix_str("building MIGraphX graph", refresh=True)
+            ensure_migraphx_graph(
+                spec,
+                onnx_path=selected_onnx,
+                graph_path=migraphx_path,
+                build_if_missing=True,
+                force_rebuild=force_rebuild_migraphx,
+            )
+            migraphx_ready = migraphx_path.exists()
+        elif wants_trt and not trt_ready:
             notes.append("TensorRT engine missing")
+        elif wants_migraphx and not migraphx_ready:
+            notes.append("MIGraphX graph missing")
         progress.set_postfix_str("ready", refresh=True)
         progress.update(1)
+
+        if not paths.model_dir.exists() and local_files_only and not (selected_onnx or trt_ready or migraphx_ready):
+            raise FileNotFoundError(f"model directory not found: {paths.model_dir}")
+        downloaded = paths.model_dir.exists()
 
     return PreparedModelArtifacts(
         paths=paths,
@@ -301,5 +407,7 @@ def prepare_model_artifacts(
         onnx_ready=selected_onnx is not None,
         trt_ready=trt_ready,
         selected_onnx_path=selected_onnx,
+        migraphx_ready=migraphx_ready,
+        selected_migraphx_path=migraphx_path if migraphx_ready else None,
         notes=tuple(notes),
     )

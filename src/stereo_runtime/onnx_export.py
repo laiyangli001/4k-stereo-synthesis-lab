@@ -206,13 +206,13 @@ def export_depth_model_onnx(
 
     with activity_progress(f"Probing ONNX export dtype: {dtype_name}"):
         ok, probe_reason = probe_model_dtype(model, device=device_obj, dtype=dtype_obj, height=height, width=width)
-    if dtype == "auto" and not ok and dtype_name == "fp16":
+    if dtype in ("auto", "fp16") and not ok and dtype_name == "fp16":
         del model
         if device_obj.type == "cuda":
             torch.cuda.empty_cache()
         dtype_obj = torch.float32
         dtype_name = "fp32"
-        dtype_reason = f"auto: fp16 probe failed ({probe_reason}); fallback fp32"
+        dtype_reason = f"{dtype}: fp16 probe failed ({probe_reason}); fallback fp32"
         output_path = output_path.with_name(output_path.name.replace("model_fp16_", "model_fp32_"))
         with activity_progress(f"Reloading model for ONNX export: {dtype_name}"):
             model = load_model_for_dtype(

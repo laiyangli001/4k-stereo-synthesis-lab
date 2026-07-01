@@ -1,30 +1,38 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass, asdict, field
+import importlib
 import os
-import sys
-import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import torch
 import torch.nn.functional as F
 
 from .depth_upsample import DepthUpsampleMode, upsample_depth
 from .output import ensure_bchw, ensure_b1hw, match_depth
-from .progress import make_rich_progress, progress_write, supports_live_progress
+from .progress import DownloadProgress, progress_write
 
 DISTILL_ANY_DEPTH_BASE_NAME = "Distill-Any-Depth-Base"
 DISTILL_ANY_DEPTH_BASE_MODEL_ID = "lc700x/Distill-Any-Depth-Base-hf"
 DISTILL_ANY_DEPTH_BASE_RESOLUTION = 518
 DISTILL_ANY_DEPTH_PATCH_SIZE = 14
 INFINIDEPTH_PATCH_SIZE = 16
+HF_ENDPOINT_DEFAULTS = ("https://hf-mirror.com", "https://huggingface.co")
+HF_DOWNLOAD_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+    "Accept": "*/*",
+    "Connection": "close",
+}
 INFINIDEPTH_ENCODERS = {
     "lc700x/infinidepth-small": "vits16",
     "lc700x/infinidepth-smallplus": "vits16plus",
     "lc700x/infinidepth-base": "vitb16",
     "lc700x/infinidepth-large": "vitl16",
 }
+_RESOLVED_HF_MODEL_FILES: dict[tuple[str, str], str] = {}
+_MODEL_WEIGHT_FILENAMES = ("model.safetensors", "model.pt", "model.ckpt")
 
 
 @dataclass(frozen=True)
@@ -159,96 +167,122 @@ def _infinidepth_encoder_for_model(model_id: str) -> str:
     return INFINIDEPTH_ENCODERS.get(str(model_id).strip().lower(), "vitl16")
 
 
-class _ConsoleDownloadProgress:
-    """Rich-backed progress bar tuned for the GUI-forwarded Windows console."""
-
-    def __init__(self, *args, **kwargs):
-        self._plain = not supports_live_progress()
-        self._last_reported_percent = -1
-        self._desc = str(kwargs.get("desc") or "download")
-        self._total = kwargs.get("total")
-        self._n = 0
-        if self._plain:
-            self._progress = None
-            return
-        kwargs.setdefault("ascii", True)
-        kwargs.setdefault("mininterval", 0.1)
-        kwargs.setdefault("unit", "B")
-        kwargs.setdefault("unit_scale", True)
-        kwargs.setdefault("unit_divisor", 1024)
-        kwargs.setdefault("leave", True)
-        kwargs.setdefault(
-            "bar_format",
-            "[Main] Download {desc} [{bar:10}] {percentage:3.0f}% {n_fmt}/{total_fmt} {rate_fmt} {remaining}",
-        )
-        self._progress = make_rich_progress(*args, **kwargs)
-
-    @property
-    def n(self):
-        return self._n if self._plain else self._progress.n
-
-    @property
-    def total(self):
-        return self._total if self._plain else self._progress.total
-
-    def __enter__(self):
-        if not self._plain:
-            self._progress.__enter__()
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        self.close()
-        return False
-
-    def update(self, amount=1):
-        if not self._plain:
-            return self._progress.update(amount)
-        self._n += amount
-        total = self.total or 0
-        if total <= 0:
-            return None
-        percent = int((self._n / total) * 100)
-        bucket = min(100, (percent // 10) * 10)
-        if bucket > self._last_reported_percent:
-            self._last_reported_percent = bucket
-            sys.stdout.write(f"\r[Main] Downloading {self._desc} {bucket:3d}%  {self._n}/{total}")
-            sys.stdout.flush()
+def _find_local_model_weight(model_dir: str | Path) -> str | None:
+    root = Path(model_dir)
+    if not root.exists():
         return None
-
-    def refresh(self):
-        if not self._plain:
-            return self._progress.refresh()
-        return None
-
-    def set_description(self, desc):
-        self._desc = str(desc or "download")
-        if not self._plain:
-            return self._progress.set_description(self._desc, refresh=False)
-        return None
-
-    def close(self):
-        if self._plain:
-            total = self.total or 0
-            if total > 0 and self._n >= total and self._last_reported_percent < 100:
-                sys.stdout.write(f"\r[Main] Downloading {self._desc} 100%  {self._n}/{total}")
-            if self._last_reported_percent >= 0:
-                sys.stdout.write("\n")
-                sys.stdout.flush()
-            return
-        incomplete = self.total is not None and self.n < self.total
-        if incomplete:
-            self._progress.leave = False
-        self._progress.close()
-        if incomplete:
-            try:
-                self._progress.fp.write("\n")
-                self._progress.fp.flush()
-            except Exception:
-                pass
+    for filename in _MODEL_WEIGHT_FILENAMES:
+        direct = root / filename
+        if direct.exists():
+            return str(direct)
+        for path in root.rglob(filename):
+            if path.is_file():
+                return str(path)
+    return None
 
 
 def _progress_print(message):
     progress_write(str(message))
+
+
+@contextmanager
+def _hf_download_progress_patch():
+    originals = []
+    try:
+        for module_name in ("huggingface_hub.utils.tqdm", "huggingface_hub.file_download"):
+            module = importlib.import_module(module_name)
+            originals.append((module, getattr(module, "tqdm", None)))
+            setattr(module, "tqdm", DownloadProgress)
+        yield
+    finally:
+        for module, original in reversed(originals):
+            if original is not None:
+                setattr(module, "tqdm", original)
+
+
+@contextmanager
+def _hf_endpoint(endpoint: str):
+    previous = os.environ.get("HF_ENDPOINT")
+    os.environ["HF_ENDPOINT"] = endpoint
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop("HF_ENDPOINT", None)
+        else:
+            os.environ["HF_ENDPOINT"] = previous
+
+
+def _hf_endpoint_candidates() -> tuple[str, ...]:
+    endpoint = os.environ.get("HF_ENDPOINT")
+    return (endpoint,) if endpoint else HF_ENDPOINT_DEFAULTS
+
+
+def _hf_resolve_url(endpoint: str, model_id: str, filename: str = "") -> str:
+    base = endpoint.rstrip("/")
+    if filename:
+        return f"{base}/{model_id}/resolve/main/{filename}"
+    return f"{base}/{model_id}"
+
+
+def _probe_download_url(url: str, opener: Callable[..., Any] | None = None) -> bool:
+    from urllib.error import HTTPError
+    from urllib.request import Request, urlopen
+
+    open_url = opener or urlopen
+    for method in ("HEAD", "GET"):
+        headers = dict(HF_DOWNLOAD_HEADERS)
+        if method == "GET":
+            headers["Range"] = "bytes=0-0"
+        try:
+            request = Request(url, headers=headers, method=method)
+            with open_url(request, timeout=10) as response:
+                final_url = getattr(response, "url", None) or response.geturl()
+                status = getattr(response, "status", None) or response.getcode()
+                length = response.headers.get("Content-Length", "unknown")
+                ctype = response.headers.get("Content-Type", "unknown")
+                _progress_print(
+                    f"[Main] Download probe {method}: HTTP {status}, "
+                    f"size={length}, type={ctype}, final={final_url}"
+                )
+                return True
+        except HTTPError as exc:
+            _progress_print(f"[Main] Download probe {method} failed: HTTP {exc.code} {exc.reason}, url={exc.geturl()}")
+        except Exception as exc:
+            _progress_print(f"[Main] Download probe {method} failed: {type(exc).__name__}: {exc}")
+    return False
+
+
+def _reachable_hf_endpoints(model_id: str) -> tuple[str, ...]:
+    reachable = []
+    for endpoint in _hf_endpoint_candidates():
+        model_url = _hf_resolve_url(endpoint, model_id)
+        _progress_print(f"[Main] Checking model download endpoint: {model_url}")
+        if _probe_download_url(model_url):
+            reachable.append(endpoint)
+    if not reachable:
+        candidates = ", ".join(_hf_endpoint_candidates())
+        raise RuntimeError(
+            f"unable to access model download endpoints ({candidates}). "
+            "Please check your network or enable VPN, then retry."
+        )
+    return tuple(reachable)
+
+
+def _load_hf_with_endpoint_fallback(load_fn: Callable[[str], Any], model_id: str):
+    last_error = None
+    for endpoint in _reachable_hf_endpoints(model_id):
+        model_url = _hf_resolve_url(endpoint, model_id)
+        _progress_print(f"[Main] Loading depth model from {endpoint}: {model_id}")
+        _progress_print(f"[Main] Model download URL: {model_url}")
+        _probe_download_url(model_url)
+        try:
+            with _hf_endpoint(endpoint), _hf_download_progress_patch():
+                return load_fn(model_id)
+        except Exception as exc:
+            last_error = exc
+            _progress_print(f"[Main] Depth model load failed from {endpoint}: {type(exc).__name__}: {exc}")
+    raise last_error
 
 
 def _print_download_preparing_progress(filename):
@@ -274,8 +308,20 @@ def _resolve_hf_model_file(
 ) -> str:
     from huggingface_hub import hf_hub_download
 
-    filenames = ("model.safetensors", "model.pt", "model.ckpt")
+    filenames = _MODEL_WEIGHT_FILENAMES
     cache_dir_text = str(cache_dir)
+    cache_key = (str(model_id), str(Path(cache_dir).resolve()))
+    if not force_download:
+        cached = _RESOLVED_HF_MODEL_FILES.get(cache_key)
+        if cached and Path(cached).exists():
+            return cached
+        from .model_registry import resolve_model_dir
+
+        local_path = _find_local_model_weight(resolve_model_dir(model_id, cache_dir))
+        if local_path:
+            _progress_print(f"[Main] Depth model local weight hit: {local_path}")
+            _RESOLVED_HF_MODEL_FILES[cache_key] = local_path
+            return local_path
     last_error: Exception | None = None
     _progress_print(f"[Main] Runtime preparation: checking depth model {model_id}")
     if not force_download:
@@ -289,30 +335,38 @@ def _resolve_hf_model_file(
                     local_files_only=True,
                 )
                 _progress_print(f"[Main] Depth model cache hit: {path}")
+                _RESOLVED_HF_MODEL_FILES[cache_key] = path
                 return path
             except Exception as exc:
                 last_error = exc
     if local_files_only:
         _raise_model_resolution_error(model_id, last_error, local_only=True)
 
-    endpoint = os.environ.get("HF_ENDPOINT", "https://huggingface.co")
-    _progress_print(f"[Main] Depth model not found in local cache; preparing download from {endpoint}: {model_id}")
-    for filename in filenames:
-        try:
-            _progress_print(
-                f"[Main] Preparing depth model download: {model_id}/{filename} "
-                f"to {cache_dir_text}. First download may take several minutes."
-            )
-            _print_download_preparing_progress(filename)
-            return hf_hub_download(
-                repo_id=model_id,
-                filename=filename,
-                cache_dir=cache_dir_text,
-                force_download=force_download,
-                tqdm_class=_ConsoleDownloadProgress,
-            )
-        except Exception as exc:
-            last_error = exc
+    for endpoint in _reachable_hf_endpoints(model_id):
+        _progress_print(f"[Main] Depth model not found in local cache; preparing download from {endpoint}: {model_id}")
+        with _hf_endpoint(endpoint):
+            for filename in filenames:
+                try:
+                    _progress_print(
+                        f"[Main] Preparing depth model download: {model_id}/{filename} "
+                        f"to {cache_dir_text}. First download may take several minutes."
+                    )
+                    download_url = _hf_resolve_url(endpoint, model_id, filename)
+                    _progress_print(f"[Main] Model download URL: {download_url}")
+                    _probe_download_url(download_url)
+                    _print_download_preparing_progress(filename)
+                    path = hf_hub_download(
+                        repo_id=model_id,
+                        filename=filename,
+                        cache_dir=cache_dir_text,
+                        force_download=force_download,
+                        tqdm_class=DownloadProgress,
+                    )
+                    _RESOLVED_HF_MODEL_FILES[cache_key] = path
+                    return path
+                except Exception as exc:
+                    last_error = exc
+                    _progress_print(f"[Main] Depth model download failed from {endpoint}: {type(exc).__name__}: {exc}")
     _raise_model_resolution_error(model_id, last_error, local_only=False)
 
 
@@ -360,9 +414,9 @@ class DistillAnyDepthBase518:
             "local_files_only": self.local_files_only,
             "force_download": self.force_download,
         }
-        model = AutoModelForDepthEstimation.from_pretrained(
+        model = _load_hf_with_endpoint_fallback(
+            lambda model_id: AutoModelForDepthEstimation.from_pretrained(model_id, **kwargs),
             DISTILL_ANY_DEPTH_BASE_MODEL_ID,
-            **kwargs,
         )
 
         self._model = model.to(self.device).eval()
@@ -478,9 +532,9 @@ class GenericAutoDepthProvider:
             "local_files_only": self.local_files_only,
             "force_download": self.force_download,
         }
-        model = AutoModelForDepthEstimation.from_pretrained(
+        model = _load_hf_with_endpoint_fallback(
+            lambda model_id: AutoModelForDepthEstimation.from_pretrained(model_id, **kwargs),
             self.model_id,
-            **kwargs,
         )
         self._model = model.to(self.device).eval()
         return self._model
@@ -717,6 +771,7 @@ def _prepare_accelerated_artifacts(
         download_if_missing=not cfg.local_files_only,
         onnx_dtype=cfg.onnx_dtype,
         export_onnx_if_missing=True,
+        artifact_backend="tensorrt" if build_trt else "onnx",
         build_trt_if_missing=build_trt,
         force_rebuild_trt=cfg.force_rebuild,
         **kwargs,

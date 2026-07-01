@@ -264,6 +264,25 @@ def create_migraphx_rocm_provider(
         provider.info = replace(provider.info, fallback_reason=reason)
         return provider
 
+    if onnx_path is None or graph_path is None:
+        from stereo_runtime.model_artifacts import prepare_model_artifacts
+
+        artifacts = prepare_model_artifacts(
+            model_id,
+            cache_dir=cache_dir or "./models",
+            model_dir=Path(onnx_path).parent if onnx_path is not None else None,
+            local_files_only=local_files_only,
+            force_download=force_download,
+            download_if_missing=not local_files_only,
+            onnx_dtype="fp16",
+            export_onnx_if_missing=True,
+            artifact_backend="migraphx",
+            build_migraphx_if_missing=build_graph or force_rebuild,
+            force_rebuild_migraphx=force_rebuild,
+        )
+        onnx_path = onnx_path or artifacts.selected_onnx_path
+        graph_path = graph_path or artifacts.selected_migraphx_path or artifacts.paths.migraphx_fp16_path
+
     return MIGraphXDepthProvider(
         device=device,
         cache_dir=cache_dir,

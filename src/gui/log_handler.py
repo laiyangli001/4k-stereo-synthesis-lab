@@ -13,6 +13,7 @@ class GuiLogHandler(logging.Handler):
         super().__init__()
         self.queue: queue.Queue[tuple[int, str, str, str]] = queue.Queue()
         self.cache: deque[tuple[int, str, str, str]] = deque(maxlen=maxlen)
+        self.status_cache: deque[tuple[int, str, str, str]] = deque(maxlen=200)
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
@@ -22,5 +23,7 @@ class GuiLogHandler(logging.Handler):
             item = (record.levelno, record.name, asctime, formatted)
             self.queue.put(item)
             self.cache.append(item)
+            if record.name == "status":
+                self.status_cache.append(item)
         except Exception:
             self.handleError(record)

@@ -845,11 +845,11 @@ right_shift_px = -disparity_px / 2
 
 | 通道 | 实现 | 级别 | 规则 |
 |------|------|------|------|
-| CMD 控制台 | `RichHandler` | DEBUG+ | 用于彩色分级输出和 traceback 展示；不得解析 Rich markup，避免日志内容误触发样式 |
+| CMD 控制台 | `logging.StreamHandler` | DEBUG+ | 用于开发者诊断；保持纯文本，避免 GUI / 文件日志与终端样式耦合 |
 | 文件日志 | `desktop2stereo.log` / `FileHandler` | DEBUG+ | 每次 GUI 启动使用 `w` 模式刷新；记录完整技术细节、logger name、级别和时间 |
-| GUI 日志窗口 | `GuiLogHandler` + Flet queue polling | DEBUG+，默认显示 ALL | 点击 Run 后在 GUI 右侧打开，展示实时运行状态、子进程输出、警告和错误 |
+| GUI 日志窗口 | `GuiLogHandler` + Flet queue polling | DEBUG+，默认显示 ALL | 点击 Run 后在 GUI 右侧打开，展示实时运行状态、子进程输出、警告、错误和 Flet 原生进度控件 |
 
-`RichHandler` 必须绑定到原始 `sys.__stderr__` 或等效未重定向 stream，避免 stdout/stderr fallback 转 logging 后形成递归。GUI 日志窗口只能由 GUI 主线程轮询队列并更新控件；子线程、子进程 pump、logging handler 不得直接操作 Flet 控件。
+GUI 日志窗口只能由 GUI 主线程轮询队列并更新控件；子线程、子进程 pump、logging handler 不得直接操作 Flet 控件。运行端输出必须保持纯文本或结构化进度事件，GUI 负责颜色、进度条和用户可见样式。
 
 #### 5.8.2 Logger 分层
 
@@ -884,7 +884,7 @@ right_shift_px = -disparity_px / 2
 - 清除功能：同时清空 ListView、handler cache 和 queue 中残留项。
 - 异常反馈按钮：出现 ERROR 后显示或高亮，点击后复制 bug report。
 
-颜色规则：DEBUG 灰色，INFO 默认色，WARNING 橙色，ERROR 红色。`status` logger 的消息应比普通技术日志更醒目；但技术细节不得为了用户界面美化而丢失原文。
+颜色规则：DEBUG 灰色，INFO 默认色，WARNING 橙色，ERROR 红色，模型下载 / 准备相关日志蓝色，完成 / cache hit 绿色。下载进度必须使用 Flet 原生 `ProgressBar`，旁边显示百分比、已下载/总量、速度和 ETA。`status` logger 的消息应比普通技术日志更醒目；但技术细节不得为了用户界面美化而丢失原文。
 
 #### 5.8.5 关键阶段 i18n
 
@@ -925,9 +925,10 @@ Depth model
 
 | 测试项 | 验证方法 |
 |--------|----------|
-| Rich 控制台接入 | 静态检查 `_setup_console_logging()` 使用 `RichHandler` 且不依赖 `_TeeStream` |
+| 控制台 logging 接入 | 静态检查 `_setup_console_logging()` 使用标准 `logging.StreamHandler` 且不依赖 `_TeeStream` |
 | 文件日志 | 检查 `FileHandler(LOG_FILE, mode="w", encoding="utf-8")` |
 | GUI 日志队列 | 检查 `GuiLogHandler`、queue polling、ListView 更新和自动裁剪 |
+| Flet 原生下载进度 | 检查结构化进度事件、`ft.ProgressBar`、百分比、速度、ETA 和完成态颜色 |
 | 右侧日志窗口 | 检查日志 panel 默认隐藏，Run 后显示 |
 | 子进程日志 | 检查 stdout/stderr pipe、行缓冲和 ERROR/WARNING 自动分级 |
 | GUI print 清理 | `src/gui` 新代码不得残留裸 `print()` |

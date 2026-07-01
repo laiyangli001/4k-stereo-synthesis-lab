@@ -1,49 +1,77 @@
 from __future__ import annotations
 
-import os
+import json
 import sys
 import threading
 import time
 from contextlib import contextmanager
-
-from rich.console import Console
-from rich.progress import (
-    BarColumn,
-    DownloadColumn,
-    Progress,
-    TextColumn,
-    TimeElapsedColumn,
-    TimeRemainingColumn,
-    TransferSpeedColumn,
-)
-
-
-def supports_live_progress(stream=None) -> bool:
-    if os.environ.get("D2S_FORCE_RICH_PROGRESS", "").strip().lower() in {"1", "true", "yes", "on"}:
-        return True
-    stream = sys.stdout if stream is None else stream
-    try:
-        return bool(stream.isatty())
-    except Exception:
-        return False
-
-
-def _forced_live_progress() -> bool:
-    return os.environ.get("D2S_FORCE_RICH_PROGRESS", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def progress_write(message: str, *, leading_newline: bool = False) -> None:
     text = str(message)
     if leading_newline:
         text = "\n" + text
-    Console(file=sys.stdout, force_terminal=False, color_system=None).print(text)
+    sys.stdout.write(text + "\n")
+    sys.stdout.flush()
+
+
+def _format_bytes(value: int | float | None) -> str:
+    if value is None:
+        return "unknown"
+    size = float(value)
+    units = ("B", "KiB", "MiB", "GiB", "TiB")
+    for unit in units:
+        if abs(size) < 1024.0 or unit == units[-1]:
+            return f"{size:.1f} {unit}" if unit != "B" else f"{int(size)} B"
+        size /= 1024.0
+    return f"{int(value)} B"
+
+
+def _format_duration(seconds: float | None) -> str:
+    if seconds is None or seconds < 0:
+        return "unknown"
+    total = int(seconds)
+    h, rem = divmod(total, 3600)
+    m, s = divmod(rem, 60)
+    return f"{h:02d}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
+
+
+def emit_progress_event(desc: str, completed: int, total: int | None, *, started_at: float, unit: str = "bytes") -> None:
+    elapsed = max(0.001, time.perf_counter() - started_at)
+    percent = (float(completed) / float(total) * 100.0) if total else None
+    speed = float(completed) / elapsed
+    remaining = ((float(total) - float(completed)) / speed) if total and speed > 0 and completed < total else 0.0
+    if unit == "steps":
+        downloaded = f"{int(completed)} steps"
+        size = f"{int(total)} steps" if total else "unknown"
+        speed_text = f"{speed:.1f} steps/s"
+    else:
+        unit = "bytes"
+        downloaded = _format_bytes(completed)
+        size = _format_bytes(total)
+        speed_text = f"{_format_bytes(speed)}/s"
+    payload = {
+        "desc": str(desc or "Progress"),
+        "completed": int(completed),
+        "total": int(total) if total else None,
+        "percent": round(min(100.0, max(0.0, percent)), 1) if percent is not None else None,
+        "elapsed": _format_duration(elapsed),
+        "downloaded": downloaded,
+        "size": size,
+        "speed": speed_text,
+        "eta": _format_duration(remaining) if total else "unknown",
+        "unit": unit,
+    }
+    progress_write("[D2S_PROGRESS] " + json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
 
 
 class _NullProgress:
-    def __init__(self, desc: str = "") -> None:
+    def __init__(self, desc: str = "", total: int | None = None) -> None:
         self.desc = desc
         self.n = 0
-        self.total = None
+        self.total = total
+        self._started_at = time.perf_counter()
+        self._last_emit_at = 0.0
 
     def update(self, amount=1):
         self.n += amount
@@ -59,6 +87,16 @@ class _NullProgress:
 
     def close(self):
         return None
+
+    def _emit(self, *, force: bool = False, interval_s: float = 0.25) -> None:
+        if not self.total:
+            return
+        now = time.perf_counter()
+        complete = self.n >= self.total
+        if not force and not complete and now - self._last_emit_at < interval_s:
+            return
+        self._last_emit_at = now
+        emit_progress_event(self.desc, min(self.n, self.total), self.total, started_at=self._started_at)
 
 
 class _StageLogProgress(_NullProgress):
@@ -77,43 +115,15 @@ class _StageLogProgress(_NullProgress):
             self._last_postfix = postfix
 
 
-def create_download_progress(*, console=None, transient=False):
-    return Progress(
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-        TimeElapsedColumn(),
-        DownloadColumn(),
-        TransferSpeedColumn(),
-        TimeRemainingColumn(),
-        console=console or Console(file=sys.stdout, force_terminal=False, color_system=None),
-        transient=transient,
-    )
-
-
-def create_activity_progress(*, console=None, transient=False):
-    return Progress(
-        TextColumn("[progress.description]{task.description}"),
-        TimeElapsedColumn(),
-        console=console or Console(file=sys.stdout, force_terminal=False, color_system=None),
-        transient=transient,
-    )
-
-
-class _RichProgressAdapter:
-    """Bridge external update callbacks to Rich Progress."""
-
+class DownloadProgress(_NullProgress):
     def __init__(self, *args, **kwargs):
-        self.total = kwargs.get("total", args[0] if args else None)
-        self.desc = str(kwargs.get("desc") or "")
-        self.n = 0
-        self.leave = bool(kwargs.get("leave", False))
-        self._progress = create_download_progress(transient=not self.leave) if self.total is not None else create_activity_progress(transient=True)
-        self._task = self._progress.add_task(self.desc, total=self.total)
-        self._started = False
+        total = kwargs.get("total", args[0] if args else None)
+        super().__init__(str(kwargs.get("desc") or "download"), total=total)
+        self.n = int(kwargs.get("initial") or 0)
+        self._mininterval = float(kwargs.get("mininterval") or 0.25)
+        self.leave = bool(kwargs.get("leave", True))
 
     def __enter__(self):
-        self._start()
         return self
 
     def __exit__(self, exc_type, exc, tb):
@@ -125,91 +135,49 @@ class _RichProgressAdapter:
         return sys.stdout
 
     def update(self, amount=1):
-        self._start()
         self.n += amount
-        self._progress.update(self._task, completed=self.n)
+        self._emit(interval_s=self._mininterval)
         return None
 
     def set_description(self, desc, refresh=True):
-        self._start()
         self.desc = str(desc or "")
-        self._progress.update(self._task, description=self.desc)
         return None
 
     def set_postfix_str(self, value, refresh=True):
-        self._start()
-        postfix = str(value or "").strip()
-        if postfix:
-            self.desc = f"{self.desc}: {postfix}" if self.desc else postfix
-            self._progress.update(self._task, description=self.desc)
-        return None
+        return _StageLogProgress.set_postfix_str(self, value, refresh=refresh)
 
     def refresh(self):
-        self._start()
-        self._progress.refresh()
+        self._emit(force=True)
         return None
 
     def close(self):
-        if self._started:
-            self._progress.stop()
+        self._emit(force=True)
         return None
-
-    def _start(self):
-        if not self._started:
-            self._progress.start()
-            self._started = True
-
-
-def make_rich_progress(*args, **kwargs):
-    return _RichProgressAdapter(*args, **kwargs)
 
 
 @contextmanager
 def activity_progress(desc: str, *, interval_s: float = 0.2):
     """Show a live activity line for long operations without real percent callbacks."""
-    if not supports_live_progress():
-        print(f"[Main] {desc}...", flush=True)
-        yield _NullProgress(desc)
-        return
-
+    print(f"[Main] {desc}...", flush=True)
     stop_event = threading.Event()
-    bar = make_rich_progress(
-        total=None,
-        desc=f"[Main] {desc}",
-        bar_format="{desc} | {elapsed} elapsed",
-        leave=False,
-    )
+    progress = _NullProgress(desc)
 
     def _pulse() -> None:
         while not stop_event.wait(interval_s):
-            bar.update(1)
+            progress.update(1)
 
     thread = threading.Thread(target=_pulse, name=f"Progress:{desc}", daemon=True)
     thread.start()
     try:
-        yield bar
+        yield progress
     finally:
         stop_event.set()
         thread.join(timeout=1.0)
-        bar.close()
 
 
 @contextmanager
 def stage_progress(desc: str, total: int):
-    if not supports_live_progress():
-        yield _StageLogProgress(desc, total)
-        return
-
-    bar = make_rich_progress(
-        total=total,
-        desc=f"[Main] {desc}",
-        bar_format="{desc} [{bar}] {n_fmt}/{total_fmt} {postfix}",
-        leave=False,
-    )
-    try:
-        yield bar
-    finally:
-        bar.close()
+    yield _StageLogProgress(desc, total)
 
 @contextmanager
 def file_size_progress(desc: str, path, *, total_bytes: int, interval_s: float = 0.2):
@@ -218,31 +186,8 @@ def file_size_progress(desc: str, path, *, total_bytes: int, interval_s: float =
 
     target = Path(path)
     total = max(1, int(total_bytes or 1))
-    if not supports_live_progress():
-        started = time.perf_counter()
-        print(f"[Main] {desc}...", flush=True)
-        try:
-            yield _NullProgress(desc)
-        finally:
-            try:
-                size = target.stat().st_size if target.exists() else 0
-            except OSError:
-                size = 0
-            size = min(size, total)
-            percent = (size / total) * 100.0 if total else 100.0
-            print(f"[Main] {desc} {percent:6.2f}%  {size}/{total}  {time.perf_counter() - started:0.1f}s", flush=True)
-        return
-
     stop_event = threading.Event()
-    bar = make_rich_progress(
-        total=total,
-        desc=f"[Main] {desc}",
-        unit="B",
-        unit_scale=True,
-        unit_divisor=1024,
-        bar_format="{desc} {bar} {percentage:6.2f}%  {n_fmt}/{total_fmt}  {elapsed}",
-        leave=True,
-    )
+    progress = _NullProgress(desc, total)
     last_size = 0
 
     def _poll() -> None:
@@ -253,16 +198,14 @@ def file_size_progress(desc: str, path, *, total_bytes: int, interval_s: float =
             except OSError:
                 size = last_size
             size = min(size, total)
-            if size > last_size:
-                bar.update(size - last_size)
-                last_size = size
-            else:
-                bar.refresh()
+            progress.n = size
+            progress._emit()
+            last_size = size
 
     thread = threading.Thread(target=_poll, name=f"Progress:{desc}", daemon=True)
     thread.start()
     try:
-        yield bar
+        yield progress
     finally:
         stop_event.set()
         thread.join(timeout=1.0)
@@ -271,10 +214,8 @@ def file_size_progress(desc: str, path, *, total_bytes: int, interval_s: float =
         except OSError:
             size = last_size
         size = min(size, total)
-        if size > last_size:
-            bar.update(size - last_size)
-            last_size = size
-        bar.close()
+        progress.n = size
+        progress._emit(force=True)
 
 
 def write_bytes_with_progress(path, data, desc: str, *, chunk_size: int = 8 * 1024 * 1024):
@@ -287,27 +228,10 @@ def write_bytes_with_progress(path, data, desc: str, *, chunk_size: int = 8 * 10
     except TypeError:
         blob = memoryview(bytes(data))
     total = len(blob)
-    if not supports_live_progress():
-        with target.open("wb") as file:
-            for offset in range(0, total, chunk_size):
-                file.write(blob[offset:offset + chunk_size])
-        print(f"[Main] {desc} 100.00%  {total}/{total}", flush=True)
-        return
-
-    bar = make_rich_progress(
-        total=total,
-        desc=f"[Main] {desc}",
-        unit="B",
-        unit_scale=True,
-        unit_divisor=1024,
-        bar_format="{desc} {bar} {percentage:6.2f}%  {n_fmt}/{total_fmt}",
-        leave=True,
-    )
-    try:
-        with target.open("wb") as file:
-            for offset in range(0, total, chunk_size):
-                chunk = blob[offset:offset + chunk_size]
-                file.write(chunk)
-                bar.update(len(chunk))
-    finally:
-        bar.close()
+    progress = DownloadProgress(total=total, desc=desc)
+    with target.open("wb") as file:
+        for offset in range(0, total, chunk_size):
+            chunk = blob[offset:offset + chunk_size]
+            file.write(chunk)
+            progress.update(len(chunk))
+    progress.close()

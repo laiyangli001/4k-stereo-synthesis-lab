@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 
@@ -12,10 +13,18 @@ from stereo_runtime import StereoRuntime, StereoRuntimeConfig
 from stereo_runtime.depth_provider import (
     DepthProfileResult,
     DepthProviderInfo,
-    _ConsoleDownloadProgress,
+    DownloadProgress,
+    _RESOLVED_HF_MODEL_FILES,
+    _hf_endpoint_candidates,
+    _hf_download_progress_patch,
+    _load_hf_with_endpoint_fallback,
+    _probe_download_url,
+    _reachable_hf_endpoints,
+    _hf_resolve_url,
     _print_download_preparing_progress,
     _progress_print,
     _raise_model_resolution_error,
+    _resolve_hf_model_file,
 )
 from stereo_runtime.runtime import RollingRuntimeStats
 
@@ -101,27 +110,170 @@ def test_runtime_process_rgb_frame_uses_persistent_provider_and_returns_report()
     assert provider.close_count == 1
 
 
-def test_console_download_progress_prints_dynamic_bar(capsys):
-    progress = _ConsoleDownloadProgress(total=100, desc="model.safetensors")
+def test_download_progress_prints_structured_event(capsys):
+    progress = DownloadProgress(total=100, desc="model.safetensors", mininterval=0)
     progress.update(50)
     progress.update(50)
     progress.close()
 
     out = capsys.readouterr().out
-    assert "\r[Main] " in out
-    assert "Downloading model.safetensors" in out
-    assert "100" in out
-    assert "100/100" in out
+    assert "[D2S_PROGRESS]" in out
+    assert '"desc":"model.safetensors"' in out
+    assert '"percent":100.0' in out
 
 
-def test_console_download_progress_live_path_uses_rich(monkeypatch):
-    monkeypatch.setenv("D2S_FORCE_RICH_PROGRESS", "1")
+def test_download_progress_reports_download_size(capsys):
+    progress = DownloadProgress(total=100, desc="model.safetensors", mininterval=0)
+    progress.update(10)
+    progress.update(40)
+    progress.close()
 
-    progress = _ConsoleDownloadProgress(total=100, desc="model.safetensors")
+    out = capsys.readouterr().out
+    assert '"downloaded":"50 B"' in out
+    assert '"size":"100 B"' in out
 
-    assert progress.total == 100
-    assert hasattr(progress, "_progress")
 
+def test_hf_endpoint_candidates_default_to_mirror_then_official(monkeypatch):
+    monkeypatch.delenv("HF_ENDPOINT", raising=False)
+
+    assert _hf_endpoint_candidates() == ("https://hf-mirror.com", "https://huggingface.co")
+
+    monkeypatch.setenv("HF_ENDPOINT", "https://custom.example")
+
+    assert _hf_endpoint_candidates() == ("https://custom.example",)
+
+
+def test_hf_resolve_url_formats_download_links():
+    assert _hf_resolve_url("https://hf-mirror.com/", "test/model") == "https://hf-mirror.com/test/model"
+    assert _hf_resolve_url("https://hf-mirror.com/", "test/model", "model.safetensors") == "https://hf-mirror.com/test/model/resolve/main/model.safetensors"
+
+
+class FakeProbeResponse:
+    status = 206
+    url = "https://cdn.example/model.safetensors"
+    headers = {"Content-Length": "1", "Content-Type": "application/octet-stream"}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def geturl(self):
+        return self.url
+
+    def getcode(self):
+        return self.status
+
+
+def test_probe_download_url_logs_http_status(capsys):
+    requests = []
+
+    def opener(request, timeout):
+        requests.append((request.get_method(), request.headers.get("Range"), timeout))
+        return FakeProbeResponse()
+
+    _probe_download_url("https://hf-mirror.com/test/model/resolve/main/model.safetensors", opener=opener)
+
+    out = capsys.readouterr().out
+    assert requests == [("HEAD", None, 10)]
+    assert "Download probe HEAD: HTTP 206" in out
+    assert "final=https://cdn.example/model.safetensors" in out
+
+
+def test_probe_download_url_falls_back_to_range_get(capsys):
+    from urllib.error import URLError
+
+    requests = []
+
+    def opener(request, timeout):
+        requests.append((request.get_method(), request.headers.get("Range"), timeout))
+        if len(requests) == 1:
+            raise URLError("HEAD blocked")
+        return FakeProbeResponse()
+
+    _probe_download_url("https://hf-mirror.com/test/model/resolve/main/model.safetensors", opener=opener)
+
+    out = capsys.readouterr().out
+    assert requests == [("HEAD", None, 10), ("GET", "bytes=0-0", 10)]
+    assert "Download probe HEAD failed: URLError" in out
+    assert "Download probe GET: HTTP 206" in out
+
+
+def test_reachable_hf_endpoints_raises_when_all_probes_fail(monkeypatch):
+    monkeypatch.delenv("HF_ENDPOINT", raising=False)
+    monkeypatch.setattr("stereo_runtime.depth_provider._probe_download_url", lambda url: False)
+
+    with pytest.raises(RuntimeError, match="check your network or enable VPN"):
+        _reachable_hf_endpoints("test/model")
+
+
+def test_resolve_hf_model_file_reuses_cached_path(monkeypatch, tmp_path, capsys):
+    import sys
+    import types
+
+    _RESOLVED_HF_MODEL_FILES.clear()
+    model_file = tmp_path / "model.safetensors"
+    model_file.write_bytes(b"weights")
+    calls = []
+
+    def fake_hf_hub_download(**kwargs):
+        calls.append(kwargs)
+        return str(model_file)
+
+    fake_module = types.SimpleNamespace(hf_hub_download=fake_hf_hub_download)
+    monkeypatch.setitem(sys.modules, "huggingface_hub", fake_module)
+
+    try:
+        first = _resolve_hf_model_file("test/model", tmp_path)
+        second = _resolve_hf_model_file("test/model", tmp_path)
+
+        out = capsys.readouterr().out
+        assert first == second == str(model_file)
+        assert len(calls) == 1
+        assert out.count("Depth model cache hit:") == 1
+    finally:
+        _RESOLVED_HF_MODEL_FILES.clear()
+
+
+def test_hf_endpoint_fallback_restores_environment(monkeypatch, capsys):
+    monkeypatch.delenv("HF_ENDPOINT", raising=False)
+    monkeypatch.setattr("stereo_runtime.depth_provider._reachable_hf_endpoints", lambda model_id: ("https://hf-mirror.com", "https://huggingface.co"))
+    monkeypatch.setattr("stereo_runtime.depth_provider._probe_download_url", lambda url: True)
+    calls = []
+
+    def load(model_id):
+        calls.append((model_id, os.environ.get("HF_ENDPOINT")))
+        if len(calls) == 1:
+            raise RuntimeError("mirror down")
+        return "model"
+
+    assert _load_hf_with_endpoint_fallback(load, "test/model") == "model"
+    assert calls == [
+        ("test/model", "https://hf-mirror.com"),
+        ("test/model", "https://huggingface.co"),
+    ]
+    out = capsys.readouterr().out
+    assert "Model download URL: https://hf-mirror.com/test/model" in out
+    assert "Model download URL: https://huggingface.co/test/model" in out
+    assert "HF_ENDPOINT" not in os.environ
+
+
+def test_hf_download_progress_patch_is_scoped_to_context():
+    import importlib
+
+    file_download = importlib.import_module("huggingface_hub.file_download")
+    hf_tqdm = importlib.import_module("huggingface_hub.utils.tqdm")
+
+    original_file_download_tqdm = file_download.tqdm
+    original_hf_tqdm = hf_tqdm.tqdm
+
+    with _hf_download_progress_patch():
+        assert file_download.tqdm is DownloadProgress
+        assert hf_tqdm.tqdm is DownloadProgress
+
+    assert file_download.tqdm is original_file_download_tqdm
+    assert hf_tqdm.tqdm is original_hf_tqdm
 
 
 def test_download_preparing_progress_prints_waiting_status_without_fake_bar(capsys):
@@ -133,9 +285,7 @@ def test_download_preparing_progress_prints_waiting_status_without_fake_bar(caps
     assert "[>" not in out
 
 
-def test_progress_print_uses_rich_console_when_live(monkeypatch, capsys):
-    monkeypatch.setenv("D2S_FORCE_RICH_PROGRESS", "1")
-
+def test_progress_print_uses_plain_logging(capsys):
     _progress_print("[Main] Runtime preparation: checking depth model test/model")
 
     assert "[Main] Runtime preparation: checking depth model test/model" in capsys.readouterr().out
@@ -153,7 +303,7 @@ def test_raise_model_resolution_error_includes_last_exception():
 
 
 def test_incomplete_download_progress_close_does_not_redraw_last_progress(capsys):
-    progress = _ConsoleDownloadProgress(total=100, desc="model.safetensors")
+    progress = DownloadProgress(total=100, desc="model.safetensors")
     progress.update(25)
     capsys.readouterr()
 

@@ -23,7 +23,7 @@ Desktop2Stereo engineering-spec refactor tasks from prompts/codex-refactor-promp
 Latest pushed task commit:
 
 ```text
-94f22d6 perf: optimize gpu runtime upload paths
+599981e feat: add GUI log panel controls and progress
 ```
 
 Canonical specs for current work:
@@ -67,6 +67,59 @@ Current task queue:
 10. Keep `docs/26-desktop2stereo-engineering-design-specification.md` aligned to the `docs/28-Realtime-2d-to-3d-specification.md` eleven-step runtime flow.
 
 ## Current Status
+
+### 2026-07-01 GUI Log Panel, Standard Logging, and Download Progress Pass
+
+Implemented and pushed:
+
+```text
+599981e feat: add GUI log panel controls and progress
+```
+
+Summary:
+
+- Added a right-side Flet log panel with persistent show/hide preference via `Show Log Panel`, status-bar link control, live GUI log queue display, log-level filtering, `反馈bug`, and `查看log文件` actions.
+- Kept the Flet in-window log panel as the canonical GUI log surface. The abandoned pywebview / HTML viewer path was removed and must not be reintroduced unless explicitly requested.
+- Kept the existing Python `logging` pipeline on standard `logging.StreamHandler`, `FileHandler`, and `GuiLogHandler`. Console/file/GUI handlers share the same log stream, while noisy Flet startup messages are downgraded or filtered so they do not flood INFO output.
+- Replaced terminal-styled progress output with structured `[D2S_PROGRESS]` events. The GUI renders those events with Flet native `ProgressBar`, percent, downloaded / total size, speed, ETA, and blue / green status coloring. Plain status lines from `progress_write()` intentionally use raw stdout so long messages are not wrapped into multiple GUI log rows.
+- Updated the Flet log layout to avoid wrapping long log strings; the log body uses horizontal scrolling while preserving simple selectable `ft.Text` log rows.
+- Adjusted log-panel window sizing behavior: when the log panel is hidden it contributes zero width; when visible it starts at 500 px. The total window target width follows the current visible layout, while `page.window.min_width` is constrained to the left parameter pane width so hiding the log panel can shrink back to the main GUI.
+- GUI window close now force-kills the child process tree immediately instead of relying on the graceful stop-file path, because model downloads may not poll `stop.request`; the Stop button still tries graceful stop before forced cleanup. `run_windows.bat` also force-kills existing `python.exe` and `pythonw.exe` processes before launching Desktop2Stereo, by design, to prevent orphaned model-download processes from accumulating.
+- `max_width` is used only as a short-lived Flet/Windows resize trigger during log show/hide and is cleared afterward so the user can manually resize the window.
+
+Current local follow-up not yet pushed:
+
+- Ordinary `transformers.AutoModelForDepthEstimation.from_pretrained()` downloads and manual InfiniDepth `hf_hub_download(..., tqdm_class=...)` downloads now use the same scoped HuggingFace Hub tqdm patch, backed by the standard-library `DownloadProgress`.
+- `DownloadProgress` respects HuggingFace's `initial` byte count so resumed downloads do not start from zero, and emits structured events instead of terminal control output.
+- Model artifact preparation is now backend-aware and shared: ONNX/XPU/CPU paths only treat `.onnx` as executable, TensorRT/CUDA paths only treat `.trt` as executable, and MIGraphX/ROCm paths only treat `.mgx` as executable. A local artifact skips weight/download work only for its matching backend.
+- The common model preparation order is now: selected model -> matching local executable artifact -> local weight file (`model.safetensors`, `model.pt`, `model.ckpt`) -> endpoint probe/download (`https://hf-mirror.com`, then `https://huggingface.co` unless `HF_ENDPOINT` is explicitly set). If no endpoint is reachable, runtime stops with a network/VPN retry message.
+- MIGraphX artifact preparation runs only after MIGraphX availability is confirmed, so unsupported ROCm environments still keep the existing PyTorch ROCm fallback instead of failing early in the shared artifact layer.
+
+Verification for the pushed GUI/log pass:
+
+```powershell
+src\python3\python.exe -m py_compile src\gui\builders.py src\gui\process.py tests\test_gui_config.py
+src\python3\python.exe -m pytest tests\test_gui_config.py tests\test_progress.py tests\test_runtime.py -q
+git diff --check
+```
+
+Result:
+
+```text
+py_compile passed
+71 passed before the HuggingFace download-progress follow-up
+72 passed after the local HuggingFace download-progress follow-up
+44 passed for backend-aware model artifact / endpoint tests
+git diff --check passed with CRLF warnings only
+```
+
+Handoff notes:
+
+- Do not commit runtime preference churn from `src/settings.yaml` unless explicitly requested; the current uncommitted `Show Log Panel: true` entry is local runtime state.
+- Do not re-add `pywebview`; the active user decision is to keep the built-in Flet log panel.
+- For download progress visibility in the GUI, ensure model downloads go through `DownloadProgress` or the scoped HuggingFace tqdm patch. When `HF_ENDPOINT` is unset, HuggingFace downloads try `https://hf-mirror.com` first and fall back to `https://huggingface.co`; an explicit `HF_ENDPOINT` is respected as the only endpoint. Download preparation logs print the model URL before network access starts, then run a lightweight HEAD probe with a Range GET fallback so the GUI log captures HTTP status, content length/type, final redirected URL, and connection errors before the real download begins.
+- Do not reintroduce backend-blind artifact checks. `.trt` is not valid evidence for ONNX/XPU/CPU or ROCm paths, and `.mgx` is not valid evidence for CUDA/TensorRT paths.
+- Keep `flet`, `flet-desktop`, and `flet-cli` out of `requirements.txt`; Flet is supplied by the vendored/built-in GUI path.
 
 ### 2026-06-30 OpenXR Screen Presets, Controller Interaction, and OSD Pass
 

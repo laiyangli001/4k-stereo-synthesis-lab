@@ -1,6 +1,5 @@
 """GUI Process Mixin — subprocess lifecycle, ESC monitoring, URL actions."""
 import os
-import io
 import re
 import sys
 import time
@@ -14,16 +13,6 @@ import queue
 import subprocess
 import traceback
 import flet as ft
-try:
-    from rich.console import Console
-    from rich.logging import RichHandler
-    from rich.progress import BarColumn, Progress, TaskProgressColumn, TextColumn
-    _RICH_AVAILABLE = True
-except ModuleNotFoundError:
-    Console = None
-    RichHandler = None
-    BarColumn = Progress = TaskProgressColumn = TextColumn = None
-    _RICH_AVAILABLE = False
 from utils import OS_NAME, DEFAULT_PORT, shutdown_event, read_yaml
 from . import devices as devices_module
 from .config import DEFAULTS, default_base_depth_model, save_yaml
@@ -49,6 +38,8 @@ _FLET_LOGGER_NAMES = ("flet", "flet_desktop", "flet_controls", "flet_transport")
 _FLET_MESSAGE_PREFIXES = ("[flet]", "[flet_desktop]", "[flet_controls]", "[flet_transport]")
 _PROGRESS_PERCENT_RE = re.compile(r"(?P<percent>\d{1,3}(?:\.\d+)?)%")
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+_LOG_FILE_LINE_RE = re.compile(r"^\[(?P<asctime>\d\d:\d\d:\d\d)\] \[(?P<level>[A-Z]+)\] \[(?P<name>[^\]]+)\] (?P<message>.*)$")
+_PROGRESS_PREFIX = "[D2S_PROGRESS] "
 _ASYNCIO_SHUTDOWN_UNRAISABLE_MODULES = (
     "asyncio.base_subprocess",
     "asyncio.proactor_events",
@@ -73,6 +64,24 @@ def _is_asyncio_shutdown_unraisable(unraisable):
     module = getattr(obj, "__module__", "")
     qualname = getattr(obj, "__qualname__", "")
     return module in _ASYNCIO_SHUTDOWN_UNRAISABLE_MODULES and qualname.endswith(".__del__")
+
+
+def _log_item_from_file_line(line: str):
+    text = str(line or "").rstrip("\r\n")
+    match = _LOG_FILE_LINE_RE.match(text)
+    if not match:
+        return None
+    level_name = match.group("level")
+    levelno = getattr(logging, level_name, logging.INFO)
+    return levelno, match.group("name"), match.group("asctime"), text
+
+
+def _read_log_file_items():
+    try:
+        with open(LOG_FILE, "r", encoding="utf-8") as file:
+            return [item for line in file if (item := _log_item_from_file_line(line)) is not None]
+    except OSError:
+        return []
 
 
 def _install_asyncio_shutdown_noise_filter():
@@ -116,8 +125,13 @@ class _FletInfoAsDebugFilter(logging.Filter):
         return True
 
 
+class _HideStructuredProgressFilter(logging.Filter):
+    def filter(self, record):
+        return _PROGRESS_PREFIX not in record.getMessage()
+
+
 def _setup_console_logging():
-    """Configure Rich console logging, file logging, and GUI log queue."""
+    """Configure console logging, file logging, and GUI log queue."""
     global _console_logging_installed, _gui_log_handler
     if _console_logging_installed:
         _install_asyncio_shutdown_noise_filter()
@@ -140,25 +154,18 @@ def _setup_console_logging():
     root.setLevel(logging.DEBUG)
 
     console_stream = sys.__stderr__ or sys.stderr or open(os.devnull, "w", encoding="utf-8")
-    if _RICH_AVAILABLE:
-        console_handler = RichHandler(
-            console=Console(file=console_stream),
-            rich_tracebacks=True,
-            markup=False,
-            show_path=False,
-            omit_repeated_times=False,
-        )
-    else:
-        console_handler = logging.StreamHandler(console_stream)
+    console_handler = logging.StreamHandler(console_stream)
     console_handler.setLevel(logging.DEBUG)
     console_handler.addFilter(_FletInfoAsDebugFilter())
     console_handler.addFilter(_NoisyThirdPartyDebugFilter())
+    console_handler.addFilter(_HideStructuredProgressFilter())
     console_handler.setFormatter(logging.Formatter("%(message)s"))
 
     file_handler = logging.FileHandler(LOG_FILE, mode="w", encoding="utf-8")
     file_handler.setLevel(logging.DEBUG)
     file_handler.addFilter(_FletInfoAsDebugFilter())
     file_handler.addFilter(_NoisyThirdPartyDebugFilter())
+    file_handler.addFilter(_HideStructuredProgressFilter())
     file_handler.setFormatter(logging.Formatter(
         "[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s", "%H:%M:%S"
     ))
@@ -175,8 +182,6 @@ def _setup_console_logging():
     root.addHandler(file_handler)
     root.addHandler(gui_handler)
     _gui_log_handler = gui_handler
-    if not _RICH_AVAILABLE:
-        logger.warning("Rich is not installed; using standard console logging until Rich is available.")
 
     class _StreamToLogger:
         def __init__(self, stream_logger, level):
@@ -371,7 +376,6 @@ class GUIProcessMixin:
             child_env = os.environ.copy()
             child_env["DESKTOP2STEREO_LOCALE"] = self.locale
             child_env["PYTHONIOENCODING"] = "utf-8"
-            child_env["D2S_FORCE_RICH_PROGRESS"] = "1"
             if OS_NAME == "Windows":
                 self.process = await asyncio.create_subprocess_exec(
                     *child_args,
@@ -492,8 +496,32 @@ class GUIProcessMixin:
             self._log_poll_task.cancel()
         await self._async_stop()
 
+    async def _kill_process_tree(self, proc, pid):
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        try:
+            if OS_NAME == "Windows":
+                p = await asyncio.create_subprocess_exec(
+                    'taskkill', '/f', '/t', '/pid', str(pid),
+                    stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+                await p.wait()
+            else:
+                import signal
+                try:
+                    os.killpg(os.getpgid(pid), signal.SIGTERM)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
     async def _async_stop(self):
         if self._stopping:
+            if self._closed and self.process and self.process.returncode is None:
+                proc = self.process
+                self.process = None
+                await self._kill_process_tree(proc, proc.pid)
             return
         self._stopping = True
         self._esc_stopped = True
@@ -504,55 +532,44 @@ class GUIProcessMixin:
             shutdown_event.set()
             saved_pid = None
             proc = None
+            force_kill = False
             async with self._proc_lock:
                 proc = self.process
                 if proc and proc.returncode is None:
                     saved_pid = proc.pid
-                    try:
-                        if OS_NAME == "Windows":
-                            os.makedirs(LOG_DIR, exist_ok=True)
-                            with open(STOP_REQUEST_FILE, "w", encoding="utf-8") as f:
-                                f.write(str(saved_pid))
-                        else:
-                            import signal
-                            os.killpg(os.getpgid(saved_pid), signal.SIGINT)
-                    except Exception:
-                        self._diag(f"graceful stop failed:\n{traceback.format_exc()}", error=True)
+                    force_kill = self._closed
+                    if not force_kill:
                         try:
-                            proc.terminate()
+                            if OS_NAME == "Windows":
+                                os.makedirs(LOG_DIR, exist_ok=True)
+                                with open(STOP_REQUEST_FILE, "w", encoding="utf-8") as f:
+                                    f.write(str(saved_pid))
+                            else:
+                                import signal
+                                os.killpg(os.getpgid(saved_pid), signal.SIGINT)
                         except Exception:
-                            self._diag(f"proc.terminate() failed:\n{traceback.format_exc()}", error=True)
+                            self._diag(f"graceful stop failed:\n{traceback.format_exc()}", error=True)
+                            try:
+                                proc.terminate()
+                            except Exception:
+                                self._diag(f"proc.terminate() failed:\n{traceback.format_exc()}", error=True)
                 self.process = None
 
             if saved_pid and proc:
                 exited_cleanly = False
-                try:
-                    await asyncio.wait_for(proc.wait(), timeout=1)
-                    exited_cleanly = True
-                except asyncio.TimeoutError:
-                    exited_cleanly = False
-                except Exception:
-                    self._diag(f"proc.wait() exception:\n{traceback.format_exc()}", error=True)
-                    exited_cleanly = True
-                if not exited_cleanly:
+                if force_kill:
+                    await self._kill_process_tree(proc, saved_pid)
+                else:
                     try:
-                        proc.kill()
+                        await asyncio.wait_for(proc.wait(), timeout=1)
+                        exited_cleanly = True
+                    except asyncio.TimeoutError:
+                        exited_cleanly = False
                     except Exception:
-                        pass
-                    try:
-                        if OS_NAME == "Windows":
-                            p = await asyncio.create_subprocess_exec(
-                                'taskkill', '/f', '/t', '/pid', str(saved_pid),
-                                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
-                            await p.wait()
-                        else:
-                            import signal
-                            try:
-                                os.killpg(os.getpgid(saved_pid), signal.SIGTERM)
-                            except Exception:
-                                pass
-                    except Exception:
-                        pass
+                        self._diag(f"proc.wait() exception:\n{traceback.format_exc()}", error=True)
+                        exited_cleanly = True
+                    if not exited_cleanly:
+                        await self._kill_process_tree(proc, saved_pid)
         status_logger.info(UI_MESSAGES[self.locale].get("Runtime stopped", "Stopped"))
         self._starting = False
         self.set_status(UI_MESSAGES[self.locale]["Stopped"], key="Stopped")
@@ -621,11 +638,16 @@ class GUIProcessMixin:
         except RuntimeError:
             pass
 
-    def _log_color(self, levelno):
+    def _log_color(self, levelno, text=""):
+        lower = str(text or "").lower()
         if levelno >= logging.ERROR:
             return ft.Colors.RED
         if levelno >= logging.WARNING:
             return ft.Colors.ORANGE
+        if "100%" in lower or "complete" in lower or "finished" in lower or "cache hit" in lower:
+            return ft.Colors.GREEN
+        if any(token in lower for token in ("download", "model.safetensors", "model download", "depth model")):
+            return ft.Colors.BLUE
         if levelno < logging.INFO:
             return ft.Colors.GREY
         return None
@@ -665,7 +687,7 @@ class GUIProcessMixin:
         line = self._format_gui_log_line(item)
         return ft.Text(
             line,
-            color=self._log_color(levelno),
+            color=self._log_color(levelno, line),
             size=12,
             weight=ft.FontWeight.BOLD if name == "status" else ft.FontWeight.NORMAL,
             selectable=True,
@@ -674,6 +696,44 @@ class GUIProcessMixin:
             overflow=ft.TextOverflow.VISIBLE,
             width=self._log_text_width(line),
         )
+
+    def _progress_event(self, item):
+        levelno, name, _, formatted = item
+        if levelno >= logging.WARNING or name not in ("child", "stdout"):
+            return None
+        marker = "] "
+        message = formatted.split(marker, 2)[-1] if marker in formatted else formatted
+        text = _ANSI_RE.sub("", message).replace("\r", "").strip()
+        if _PROGRESS_PREFIX not in text:
+            return None
+        text = text[text.index(_PROGRESS_PREFIX):]
+        try:
+            return json.loads(text[len(_PROGRESS_PREFIX):])
+        except Exception:
+            return None
+
+    def _update_download_progress(self, data):
+        panel = getattr(self, "download_progress_panel", None)
+        if panel is None:
+            return
+        percent = data.get("percent")
+        desc = str(data.get("desc") or "Download")
+        completed = data.get("downloaded") or ""
+        total = data.get("size") or ""
+        speed = data.get("speed") or ""
+        eta = data.get("eta") or ""
+        value = 0.0 if percent is None else max(0.0, min(1.0, float(percent) / 100.0))
+        done = percent is not None and float(percent) >= 100.0
+        color = ft.Colors.GREEN if done else ft.Colors.BLUE
+        panel.visible = True
+        self.download_progress_title.value = desc
+        self.download_progress_title.color = color
+        self.download_progress_percent.value = "?" if percent is None else f"{float(percent):.1f}%"
+        self.download_progress_percent.color = color
+        self.download_progress_bar.value = value
+        self.download_progress_bar.color = color
+        self.download_progress_detail.value = f"{completed} / {total}  {speed}  ETA {eta}".strip()
+        self.download_progress_detail.color = ft.Colors.GREEN if done else ft.Colors.GREY
 
     def _progress_log_line(self, item):
         levelno, name, _, formatted = item
@@ -690,25 +750,7 @@ class GUIProcessMixin:
         if not desc:
             desc = "Progress"
         key = re.sub(r"\s+", " ", desc)
-        return key, self._render_rich_progress_line(desc, percent)
-
-    def _render_rich_progress_line(self, desc, percent):
-        if not _RICH_AVAILABLE:
-            return f"{desc} {percent:5.1f}%"
-        stream = io.StringIO()
-        console = Console(file=stream, width=82, force_terminal=False, color_system=None)
-        progress = Progress(
-            TextColumn("{task.description}"),
-            BarColumn(bar_width=24),
-            TaskProgressColumn(),
-            console=console,
-            transient=True,
-        )
-        with progress:
-            progress.add_task(desc, total=100, completed=percent)
-            progress.refresh()
-        lines = [line.strip() for line in stream.getvalue().splitlines() if line.strip()]
-        return lines[-1] if lines else f"{desc} {percent:5.1f}%"
+        return key, f"{desc} {percent:5.1f}%"
 
     def _append_log_item(self, item):
         min_level = self._selected_log_level()
@@ -716,6 +758,10 @@ class GUIProcessMixin:
             if item[1] != "status":
                 return
         elif item[0] < min_level:
+            return
+        event = self._progress_event(item)
+        if event is not None:
+            self._update_download_progress(event)
             return
         progress = self._progress_log_line(item)
         if progress is not None:
@@ -728,7 +774,7 @@ class GUIProcessMixin:
                 return
             text = ft.Text(
                 line,
-                color=self._log_color(item[0]),
+                color=self._log_color(item[0], line),
                 size=12,
                 selectable=True,
                 no_wrap=True,
@@ -762,7 +808,12 @@ class GUIProcessMixin:
                 pass
             if changed:
                 self._fit_window_to_content(update=False)
-                self._safe_update(listview, getattr(self, "log_title", None), getattr(self, "report_issue_btn", None))
+                self._safe_update(
+                    listview,
+                    getattr(self, "download_progress_panel", None),
+                    getattr(self, "log_title", None),
+                    getattr(self, "report_issue_btn", None),
+                )
             await asyncio.sleep(0.1)
 
     def _set_log_problem_state(self):
@@ -782,10 +833,19 @@ class GUIProcessMixin:
     def on_log_level_filter(self, e=None):
         self.log_listview.controls.clear()
         self._progress_log_controls.clear()
+        if getattr(self, "download_progress_panel", None) is not None:
+            self.download_progress_panel.visible = False
+        items = _read_log_file_items()
         handler = getattr(self, "gui_log_handler", None)
-        if handler is not None:
-            for item in handler.cache:
-                self._append_log_item(item)
+        if not items and handler is not None:
+            items = list(getattr(handler, "cache", []))
+            value = getattr(getattr(self, "log_level_dd", None), "value", "ALL")
+            if value == "STATUS":
+                items = list(getattr(handler, "status_cache", items))
+            elif value == "ALL" and not any(item[1] == "status" for item in items):
+                items.extend(getattr(handler, "status_cache", []))
+        for item in items:
+            self._append_log_item(item)
         self._safe_update(self.log_listview)
 
     def on_log_clear(self, e=None):
@@ -794,6 +854,8 @@ class GUIProcessMixin:
         handler = getattr(self, "gui_log_handler", None)
         if handler is not None:
             handler.cache.clear()
+            if hasattr(handler, "status_cache"):
+                handler.status_cache.clear()
             while True:
                 try:
                     handler.queue.get_nowait()
@@ -802,7 +864,7 @@ class GUIProcessMixin:
         if getattr(self, "log_title", None) is not None:
             self.log_title.value = UI_MESSAGES[self.locale].get("Log panel title", "Run Log")
             self.log_title.color = None
-        self._safe_update(self.log_listview, getattr(self, "log_title", None))
+        self._safe_update(self.log_listview, getattr(self, "download_progress_panel", None), getattr(self, "log_title", None))
 
     def on_report_issue(self, e=None):
         handler = getattr(self, "gui_log_handler", None)

@@ -1,4 +1,4 @@
-# 计划：Rich + logging + Flet GUI 日志面板
+# 计划：logging + Flet 原生日志和进度面板
 
 ## Context
 
@@ -10,7 +10,7 @@
 - **出异常时一键反馈**，自动收集日志+系统信息
 - **关键步骤支持中英文**，技术细节用英文原文
 
-目标：Rich 美化 CMD + logging 分级 + Flet GUI 运行状态面板
+目标：Python logging 分级 + Flet 原生日志着色 + Flet 原生运行进度面板
 
 ---
 
@@ -58,7 +58,7 @@
 [Main] Preparing depth model download... First download may take several minutes.
 [Main] Download {model_id} [{bar}] {percent}% ...
 ```
-→ **已经有 `_ConsoleDownloadProgress` tqdm 进度条**
+→ 使用 `DownloadProgress` 输出结构化 `[D2S_PROGRESS]` 事件，由 GUI 用 `ft.ProgressBar` 展示
 → 但消息都是英文，需要 i18n 包裹关键消息
 → i18n: `UI_MESSAGES[locale]["Downloading model..."]`
 
@@ -105,9 +105,9 @@
 
 ## 实施步骤
 
-### Step 1：安装 Rich
+### Step 1：使用 Flet 原生控件
 ```bash
-pip install rich
+不引入终端样式依赖；GUI 样式由 Flet 控件负责。
 ```
 
 ### Step 2：新建 `src/gui/log_handler.py`
@@ -141,7 +141,7 @@ class GuiLogHandler(logging.Handler):
 
 | Handler | 目的地 | 级别 |
 |---------|--------|------|
-| `RichHandler` | CMD 控制台（彩色） | DEBUG |
+| `StreamHandler` | CMD 控制台（纯文本） | DEBUG |
 | `FileHandler` | `desktop2stereo.log`（w 模式） | DEBUG |
 | `GuiLogHandler` | 队列 → Flet 面板 | INFO |
 
@@ -151,12 +151,12 @@ def _setup_logging():
     if root.handlers:  # 防重复
         return
 
-    # RichHandler — CMD 彩色输出
-    from rich.logging import RichHandler
+    # StreamHandler — CMD 纯文本输出
+    import logging
     logging.basicConfig(
         level=logging.DEBUG,
         format="%(message)s",
-        handlers=[RichHandler(rich_tracebacks=True, markup=False,
+        handlers=[logging.StreamHandler(console_stream),
                               show_path=False, omit_repeated_times=False)]
     )
 
@@ -355,7 +355,7 @@ Depth Model: {self.current_model_name}
 
 | 验证项 | 方法 |
 |--------|------|
-| CMD 彩色输出 | 启动 GUI，观察 RichHandler 带颜色级别标签 |
+| GUI 原生着色 | 启动 GUI，观察 Flet 日志行按级别和下载状态着色 |
 | GUI 状态面板 | 底部面板启动日志显示，标题栏状态动态变化 |
 | 颜色编码 | DEBUG=灰、INFO=默认、WARNING=橙、ERROR=红 |
 | Emoji 前缀 | status logger 消息带 🟢🔴 等 emoji |

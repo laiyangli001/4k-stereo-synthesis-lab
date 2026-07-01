@@ -624,13 +624,28 @@ class GUIBuilderMixin:
         )
         self.report_issue_btn = ft.Button(
             content=ft.Text(UI_MESSAGES[self.locale].get("Report issue", "Report bug"), size=FONT_SIZE),
-            width=S(120),
+            width=S(150),
             on_click=self.on_report_issue,
         )
         self.open_log_file_btn = ft.Button(
             content=ft.Text(UI_MESSAGES[self.locale].get("Open log file", "Open log"), size=FONT_SIZE),
-            width=S(120),
+            width=S(150),
             on_click=self.on_open_log_file,
+        )
+        self.download_progress_title = ft.Text("Download", size=12, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE)
+        self.download_progress_percent = ft.Text("0%", size=12, color=ft.Colors.BLUE)
+        self.download_progress_bar = ft.ProgressBar(value=0, height=S(8), color=ft.Colors.BLUE, bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST)
+        self.download_progress_detail = ft.Text("", size=11, color=ft.Colors.GREY, no_wrap=True, overflow=ft.TextOverflow.VISIBLE)
+        self.download_progress_panel = ft.Container(
+            content=ft.Column([
+                ft.Row([self.download_progress_title, ft.Container(expand=True), self.download_progress_percent]),
+                self.download_progress_bar,
+                self.download_progress_detail,
+            ], spacing=S(4)),
+            padding=ft.Padding(S(8), S(6), S(8), S(6)),
+            bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
+            border_radius=6,
+            visible=False,
         )
         self.log_listview = ft.Column(scroll=ft.ScrollMode.AUTO, auto_scroll=True, spacing=2)
         self.log_body = ft.Container(
@@ -644,6 +659,7 @@ class GUIBuilderMixin:
                     self.report_issue_btn, self.open_log_file_btn, ft.Container(expand=True),
                     self.log_level_dd,
                 ], spacing=S(6), vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                self.download_progress_panel,
                 self.log_body,
             ], spacing=S(6), expand=True),
             width=S(500),

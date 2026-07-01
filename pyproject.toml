@@ -7,7 +7,6 @@ dependencies = [
   "torch",
   "pillow",
   "transformers",
-  "rich",
   "onnx",
   "onnxruntime-gpu[cuda,cudnn]>=1.26.0",
 ]

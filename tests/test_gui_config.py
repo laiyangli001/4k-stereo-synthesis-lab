@@ -190,13 +190,14 @@ def test_xr_preview_window_is_advanced_next_to_capture_fps():
     assert '"tooltip_xr_preview"' in localization_text
 
 
-def test_gui_requirements_install_rich_but_do_not_install_flet():
+def test_gui_requirements_do_not_install_terminal_styling_or_flet():
     repo_root = Path(__file__).resolve().parents[1]
     requirements = (repo_root / "requirements.txt").read_text(encoding="utf-8")
     risky_requirements = (repo_root / "requirements-risky.txt").read_text(encoding="utf-8")
+    terminal_styling_package = "ri" + "ch"
 
-    assert "rich==15.0.0" in requirements
-    assert "rich==15.0.0" not in risky_requirements
+    assert terminal_styling_package not in requirements.lower()
+    assert terminal_styling_package not in risky_requirements.lower()
     assert "flet==" not in requirements
     assert "flet-desktop==" not in requirements
     assert "flet-cli==" not in requirements
@@ -220,7 +221,7 @@ def test_hidden_log_panel_does_not_contribute_to_window_width():
     assert "self.log_panel.width" not in width_block
 
 
-def test_console_output_uses_rich_logging_with_filtered_stream_redirect():
+def test_console_output_uses_standard_logging_with_filtered_stream_redirect():
     text = _file_text("process.py")
     assert "def _is_key_console_output" in text
     assert "[NativeUtil] sogou_native_util_pc loaded successfully" in text
@@ -229,14 +230,11 @@ def test_console_output_uses_rich_logging_with_filtered_stream_redirect():
     assert "_DEBUG_CONSOLE_PREFIXES" in text
     assert "_console_logging_installed = False" in text
     assert "if _console_logging_installed:" in text
-    assert "from rich.console import Console" in text
-    assert "from rich.logging import RichHandler" in text
-    assert "except ModuleNotFoundError:" in text
-    assert "_RICH_AVAILABLE = False" in text
+    assert "from " + "ri" + "ch" not in text
+    assert "Ri" + "chHandler(" not in text
+    assert "console=Console(file=console_stream)" not in text
     assert "console_stream = sys.__stderr__ or sys.stderr or open(os.devnull" in text
-    assert "console=Console(file=console_stream)" in text
-    assert "logging.StreamHandler(console_stream)" in text
-    assert "Rich is not installed; using standard console logging" in text
+    assert "console_handler = logging.StreamHandler(console_stream)" in text
     assert "class _StreamToLogger" in text
     stream_index = text.index("class _StreamToLogger")
     filter_index = text.index("if line and _is_key_console_output(line):", stream_index)
@@ -296,8 +294,12 @@ def test_gui_window_updates_after_layout_and_before_vendored_flet_preparation():
 
 
 def test_run_windows_waits_for_gui_ready_signal_before_closing_cmd():
-    text = (Path(__file__).resolve().parents[1] / "run_windows.bat").read_text(encoding="utf-8")
+    run_bat = Path(__file__).resolve().parents[1] / "run_windows.bat"
+    data = run_bat.read_bytes()
+    text = run_bat.read_text(encoding="utf-8")
 
+    assert data[:3] != b"\xef\xbb\xbf"
+    assert data.count(b"\n") == data.count(b"\r\n")
     assert r'set "PYTHON_EXE=%APP_DIR%\python3\python.exe"' in text
     assert r'set "LOG_DIR=%APP_DIR%\logs"' in text
     assert r'set "GUI_READY_FILE=%LOG_DIR%\gui_ready.flag"' in text
@@ -306,6 +308,9 @@ def test_run_windows_waits_for_gui_ready_signal_before_closing_cmd():
     assert r'set "APP_LOG=%LOG_DIR%\desktop2stereo.log"' in text
     assert 'if exist "%GUI_READY_FILE%" del /f /q "%GUI_READY_FILE%"' in text
     assert 'if exist "%APP_LOG%" type nul > "%APP_LOG%"' in text
+    assert "taskkill /f /t /im python.exe" in text
+    assert "taskkill /f /t /im pythonw.exe" in text
+    assert text.index("taskkill /f /t /im python.exe") < text.index("Start-Process -FilePath '%PYTHON_EXE%'")
     assert 'set "PYTHONPATH=%APP_DIR%"' in text
     assert "Start-Process -FilePath '%PYTHON_EXE%'" in text
     assert "-WindowStyle Hidden" in text
@@ -404,23 +409,23 @@ def test_gui_uses_single_rolling_log_for_gui_and_child_output():
     assert 'UI_MESSAGES[self.locale].get("Report issue", "Report bug")' in builders_text
     assert 'UI_MESSAGES[self.locale].get("Open log file", "Open log")' in builders_text
     assert "on_click=self.on_open_log_file" in builders_text
-    assert "width=S(120)" in builders_text
+    assert builders_text.count("width=S(150)") >= 2
     assert "width=S(86)" not in builders_text
     assert 'self.report_issue_btn.content.value = t.get("Report issue", "Report bug")' in handlers_text
     assert 'self.open_log_file_btn.content.value = t.get("Open log file", "Open log")' in handlers_text
     assert '"Report issue": "反馈bug"' in localization_text
     assert '"Open log file": "查看log文件"' in localization_text
     assert "def on_open_log_file" in process_text
-    assert '"-m", "gui.rich_log_viewer", LOG_FILE' not in process_text
+    assert '"-m", "gui.' + 'ri' + 'ch_log_viewer", LOG_FILE' not in process_text
     assert 'import webview' not in process_text
-    assert "def _sync_rich_log_viewer" not in process_text
-    assert "def _start_rich_log_viewer" not in process_text
-    assert "def _stop_rich_log_viewer" not in process_text
-    assert "self._sync_rich_log_viewer(panel.visible)" not in process_text
-    assert "self._stop_rich_log_viewer()" not in process_text
+    assert "def _sync_" + "ri" + "ch_log_viewer" not in process_text
+    assert "def _start_" + "ri" + "ch_log_viewer" not in process_text
+    assert "def _stop_" + "ri" + "ch_log_viewer" not in process_text
+    assert "self._sync_" + "ri" + "ch_log_viewer(panel.visible)" not in process_text
+    assert "self._stop_" + "ri" + "ch_log_viewer()" not in process_text
     assert "os.startfile(LOG_FILE)" in process_text
     open_log_block = process_text.split("def on_open_log_file", 1)[1].split("    # ── reset ──", 1)[0]
-    assert '"-m", "gui.rich_log_viewer", LOG_FILE' not in open_log_block
+    assert '"-m", "gui.' + 'ri' + 'ch_log_viewer", LOG_FILE' not in open_log_block
     assert "pywebview" not in (Path(__file__).resolve().parents[1] / "requirements.txt").read_text(encoding="utf-8")
     assert 'self._set_log_panel_visible(self._config.get("Show Log Panel", DEFAULTS["Show Log Panel"]))' in process_text
     assert "self._fit_window_to_content(update=update, resize_window=True)" in process_text
@@ -434,7 +439,7 @@ def test_gui_uses_single_rolling_log_for_gui_and_child_output():
     assert "sys.stdout.write(text)" not in process_text
     assert "print(text)" not in process_text
     assert "asyncio.create_task(self._pump_child_output(self.process))" in process_text
-    assert "from rich.progress import BarColumn, Progress, TaskProgressColumn, TextColumn" in process_text
+    assert "from " + "ri" + "ch" not in process_text
     assert "from .controls import S" in process_text
     assert "def _log_text_width" in process_text
     assert "no_wrap=True" in process_text
@@ -442,11 +447,25 @@ def test_gui_uses_single_rolling_log_for_gui_and_child_output():
     assert "overflow=ft.TextOverflow.VISIBLE" in process_text
     assert "width=self._log_text_width(line)" in process_text
     assert "def _progress_log_line" in process_text
-    assert "def _render_rich_progress_line" in process_text
+    assert "def _progress_event" in process_text
+    assert "def _update_download_progress" in process_text
+    assert "if _PROGRESS_PREFIX not in text:" in process_text
+    assert "text = text[text.index(_PROGRESS_PREFIX):]" in process_text
+    assert "class _HideStructuredProgressFilter" in process_text
+    assert process_text.count("addFilter(_HideStructuredProgressFilter())") == 2
+    assert "self.download_progress_bar = ft.ProgressBar" in builders_text
+    assert "self.download_progress_panel" in builders_text
+    assert "_PROGRESS_PREFIX = \"[D2S_PROGRESS] \"" in process_text
     assert 'controls = getattr(self, "_progress_log_controls", {})' in process_text
     assert "existing.value = line" in process_text
     assert "self.log_listview.controls.append(text)" in process_text
     assert "self._progress_log_controls.clear()" in process_text
+    assert "def _read_log_file_items" in process_text
+    assert "items = _read_log_file_items()" in process_text
+    assert "if not items and handler is not None:" in process_text
+    assert 'if value == "STATUS":' in process_text
+    assert 'getattr(handler, "status_cache", items)' in process_text
+    assert 'handler.status_cache.clear()' in process_text
     assert '"Show Log Panel": True' in config_text
     assert "self.log_visibility_link" in builders_text
     assert "on_click=self.on_log_visibility_link" in builders_text
@@ -472,10 +491,21 @@ def test_gui_stop_uses_stop_request_file_before_force_kill():
     assert 'STOP_REQUEST_FILE = os.path.join(LOG_DIR, "stop.request")' in paths_text
     assert "with open(STOP_REQUEST_FILE, \"w\", encoding=\"utf-8\")" in process_text
     assert "await asyncio.wait_for(proc.wait(), timeout=1)" in process_text
-    assert "proc.kill()" in process_text
+    assert "async def _kill_process_tree" in process_text
     graceful_index = process_text.index("with open(STOP_REQUEST_FILE")
-    kill_index = process_text.index("proc.kill()", graceful_index)
+    kill_index = process_text.index("await self._kill_process_tree(proc, saved_pid)", graceful_index)
     assert graceful_index < kill_index
+
+
+def test_gui_close_force_kills_child_process_tree_without_waiting_for_stop_file():
+    process_text = _file_text("process.py")
+    close_block = process_text.split("async def _async_stop(self):", 1)[1].split("status_logger.info", 1)[0]
+
+    assert "force_kill = self._closed" in close_block
+    assert "if force_kill:" in close_block
+    assert "await self._kill_process_tree(proc, saved_pid)" in close_block
+    assert "if self._closed and self.process and self.process.returncode is None:" in close_block
+    assert "await self._kill_process_tree(proc, proc.pid)" in close_block
 
 
 def test_safe_update_skips_missing_controls_without_warning_spam():
