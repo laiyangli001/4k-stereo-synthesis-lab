@@ -62,14 +62,35 @@ class GUIBuilderMixin:
         txt = getattr(ctrl, "label", None) or getattr(ctrl, "value", None) or ""
         return sum(13 if ord(ch) > 127 else 7 for ch in str(txt)) + 28
 
-    def _fit_window_to_content(self, update=True):
-        width = self._estimate_window_width()
-        self.page.window.min_width = min(width, S(520))
-        self.page.window.width = width
-        self.page.window.max_width = width
+    def _fit_window_to_content(self, update=True, resize_window=False):
+        main_width = self._estimate_main_panel_width()
+        if getattr(self, "_main_panel", None) is not None:
+            self._main_panel.width = main_width
+            self._main_panel.expand = False
+        log_panel = getattr(self, "log_panel", None)
+        if log_panel is not None:
+            if log_panel.visible:
+                log_panel.expand = True
+                log_panel.width = self._estimate_log_panel_width(main_width)
+            else:
+                log_panel.expand = False
+                log_panel.width = 0
+        width = self._estimate_window_width(main_width)
+        self.page.window.min_width = main_width
+        if resize_window:
+            self.page.window.width = width
+            self.page.window.max_width = width
         self.page.window.height = self._estimate_window_height()
+        if resize_window:
+            try:
+                self.page.window.update()
+            except RuntimeError:
+                pass
         if update:
             self.page.update()
+
+    def _on_page_resize(self, e=None):
+        self._fit_window_to_content()
 
     def _spacing_width(self, controls, spacing):
         visible_count = sum(1 for ctrl in controls if self._control_has_effective_content(ctrl))
@@ -112,22 +133,45 @@ class GUIBuilderMixin:
         border_x = 2
         return content_width + pad_x + border_x
 
-    def _estimate_window_width(self):
+    def _estimate_main_panel_width(self):
         if not getattr(self, "depth_group", None):
             return S(696)
         sections = [self.lang_group, self.depth_group, self.device_group]
         widths = [self._estimate_group_width(section) for section in sections]
         if getattr(self, "stream_container", None) and self.stream_container.visible:
             widths.append(self._estimate_group_width(self.stream_container))
-        content_width = max(widths + [0])
-        if getattr(self, "log_panel", None) and self.log_panel.visible:
-            content_width += S(430)
+        return max(S(520), min(S(1040), max(widths + [0]) + S(12)))
+
+    def _estimate_log_panel_width(self, main_width=None):
+        if not getattr(self, "log_panel", None) or not self.log_panel.visible:
+            return 0
+        main_width = self._estimate_main_panel_width() if main_width is None else main_width
+        min_log_width = S(500)
         page_padding = (getattr(self.page, "padding", 0) or 0) * 2
-        window_chrome = S(0)
+        spacing = S(10)
         safety_margin = S(12)
-        min_width = S(520)
-        max_width = S(1540)
-        return max(min_width, min(max_width, content_width + page_padding + window_chrome + safety_margin))
+        window_width = getattr(self.page.window, "width", None) or getattr(self.page, "width", None) or 0
+        available_width = window_width - main_width - page_padding - spacing - safety_margin if window_width else 0
+        controls = getattr(getattr(self, "log_listview", None), "controls", []) or []
+        text_widths = [self._ctrl_width(ctrl) for ctrl in controls[-200:]]
+        content_width = max(text_widths + [min_log_width])
+        padding = getattr(self.log_panel, "padding", None)
+        pad_x = (getattr(padding, "left", 0) or 0) + (getattr(padding, "right", 0) or 0) if padding else 0
+        desired_width = max(min_log_width, content_width + pad_x + S(24))
+        if available_width > min_log_width:
+            return min(desired_width, available_width)
+        return min_log_width
+
+    def _estimate_window_width(self, main_width=None):
+        if not getattr(self, "depth_group", None):
+            return S(696)
+        content_width = self._estimate_main_panel_width() if main_width is None else main_width
+        if getattr(self, "log_panel", None) and self.log_panel.visible:
+            content_width += S(500)
+        page_padding = (getattr(self.page, "padding", 0) or 0) * 2
+        spacing = S(10) if getattr(self, "log_panel", None) and self.log_panel.visible else 0
+        safety_margin = S(12)
+        return content_width + page_padding + spacing + safety_margin
 
     def _control_has_effective_content(self, ctrl):
         if ctrl is None:
@@ -531,6 +575,16 @@ class GUIBuilderMixin:
             self.theme_label, self.theme_dd], spacing=1)
 
         self.status_text = ft.Text("", italic=True, size=FONT_SIZE)
+        self.log_visibility_link = ft.Text(
+            UI_MESSAGES[self.locale].get("Hide log panel link", "Hide log window ->"),
+            size=FONT_SIZE,
+            color=ft.Colors.BLUE,
+        )
+        self.log_visibility_link_box = ft.Container(
+            content=self.log_visibility_link,
+            padding=ft.Padding(S(8), S(4), S(8), S(4)),
+            on_click=self.on_log_visibility_link,
+        )
 
         # Assembly
         depth_group = ft.Container(
@@ -562,42 +616,39 @@ class GUIBuilderMixin:
         scroll_area = ft.Column([
             self.lang_group, self.depth_group, self.device_group, self.stream_container,
         ], scroll=ft.ScrollMode.AUTO, expand=False, tight=True, spacing=S(8))
-        self.log_toggle_btn = ft.Button(content=ft.Text("▼", size=FONT_SIZE), width=S(36), on_click=self.on_log_toggle)
-        self.log_title = ft.Text(
-            UI_MESSAGES[self.locale].get("Log panel title", "Run Log"),
-            size=FONT_SIZE,
-            weight=ft.FontWeight.BOLD,
-        )
         self.log_level_dd = CompactDropdown(
             options=["ALL", "STATUS", "DEBUG", "INFO", "WARNING", "ERROR"],
             value="ALL",
             width=S(110),
             on_select=self.on_log_level_filter,
         )
-        self.log_clear_btn = ft.Button(
-            content=ft.Text(UI_MESSAGES[self.locale].get("Clear logs", "Clear"), size=FONT_SIZE),
-            width=S(74),
-            on_click=self.on_log_clear,
-        )
         self.report_issue_btn = ft.Button(
-            content=ft.Text(UI_MESSAGES[self.locale].get("Report issue", "Report"), size=FONT_SIZE),
-            width=S(86),
+            content=ft.Text(UI_MESSAGES[self.locale].get("Report issue", "Report bug"), size=FONT_SIZE),
+            width=S(120),
             on_click=self.on_report_issue,
-            visible=False,
         )
-        self.log_listview = ft.ListView(expand=True, auto_scroll=True, spacing=2)
-        self.log_body = ft.Container(content=self.log_listview, expand=True, visible=True)
+        self.open_log_file_btn = ft.Button(
+            content=ft.Text(UI_MESSAGES[self.locale].get("Open log file", "Open log"), size=FONT_SIZE),
+            width=S(120),
+            on_click=self.on_open_log_file,
+        )
+        self.log_listview = ft.Column(scroll=ft.ScrollMode.AUTO, auto_scroll=True, spacing=2)
+        self.log_body = ft.Container(
+            content=ft.Row([self.log_listview], scroll=ft.ScrollMode.AUTO, expand=True),
+            expand=True,
+            visible=True,
+        )
         self.log_panel = ft.Container(
             content=ft.Column([
                 ft.Row([
-                    self.log_toggle_btn, self.log_title, ft.Container(expand=True),
-                    self.report_issue_btn, self.log_clear_btn, self.log_level_dd,
+                    self.report_issue_btn, self.open_log_file_btn, ft.Container(expand=True),
+                    self.log_level_dd,
                 ], spacing=S(6), vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 self.log_body,
             ], spacing=S(6), expand=True),
-            width=S(420),
+            width=S(500),
             visible=False,
-            expand=False,
+            expand=True,
             padding=ft.Padding(S(10), S(10), S(10), S(10)),
             bgcolor=ft.Colors.SURFACE_CONTAINER,
             border=ft.Border(ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE),
@@ -612,13 +663,17 @@ class GUIBuilderMixin:
         self._btn_bar = ft.Container(content=btn_row)
         self._status_bar = ft.Row([
             ft.Container(content=self.status_text, bgcolor=ft.Colors.SURFACE_CONTAINER,
-                         border_radius=0, padding=ft.Padding(S(8), S(4), S(8), S(4)), expand=True)])
+                         border_radius=0, padding=ft.Padding(S(8), S(4), S(8), S(4)), expand=True),
+            self.log_visibility_link_box])
         footer = ft.Container(
             ft.Column([self._btn_bar, self._status_bar], spacing=S(6)),
             padding=ft.Padding(0, S(6), 0, 0))
         self._scroll_area = scroll_area
         self._footer = footer
-        self._main_panel = ft.Column([scroll_area, footer], expand=True, tight=True, spacing=0)
+        self._main_panel = ft.Container(
+            content=ft.Column([scroll_area, footer], expand=True, tight=True, spacing=0),
+            expand=False,
+        )
         page.add(ft.Row([self._main_panel, self.log_panel], expand=True, spacing=S(10)))
 
     # ── streamer rows ──

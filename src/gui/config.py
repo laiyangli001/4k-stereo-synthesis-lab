@@ -164,6 +164,7 @@ DEFAULTS = {
     "Fill 16:9": True,
     "Fix Viewer Aspect": False,
     "Stereo Output": None,
+    "Show Log Panel": True,
 }
 
 

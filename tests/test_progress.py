@@ -1,4 +1,4 @@
-from stereo_runtime.progress import file_size_progress, make_tqdm_progress, progress_write, write_bytes_with_progress
+from stereo_runtime.progress import file_size_progress, make_rich_progress, progress_write, write_bytes_with_progress
 from stereo_runtime.progress import supports_live_progress
 
 
@@ -25,29 +25,26 @@ def test_file_size_progress_uses_file_growth_as_approximation(tmp_path, capsys):
 
 
 def test_supports_live_progress_can_be_forced_by_env(monkeypatch):
-    monkeypatch.setenv("D2S_FORCE_TQDM", "1")
+    monkeypatch.setenv("D2S_FORCE_RICH_PROGRESS", "1")
 
     assert supports_live_progress(object()) is True
 
 
-def test_forced_tqdm_uses_fixed_width(monkeypatch):
-    calls = []
+def test_rich_progress_renders_single_line(monkeypatch, capsys):
+    monkeypatch.setenv("D2S_FORCE_RICH_PROGRESS", "1")
 
-    monkeypatch.setenv("D2S_FORCE_TQDM", "1")
-    monkeypatch.setattr("tqdm.tqdm", lambda *args, **kwargs: calls.append(kwargs) or object())
+    progress = make_rich_progress(total=100, desc="model.safetensors", leave=True)
+    progress.update(100)
+    progress.close()
 
-    make_tqdm_progress(total=100, desc="model.safetensors")
+    out = capsys.readouterr().out
+    assert "model.safetensors" in out
+    assert "100%" in out
 
-    assert calls[0]["dynamic_ncols"] is False
-    assert calls[0]["ncols"] == 79
 
-
-def test_progress_write_uses_tqdm_write_when_live(monkeypatch):
-    calls = []
-
-    monkeypatch.setenv("D2S_FORCE_TQDM", "1")
-    monkeypatch.setattr("tqdm.tqdm.write", lambda text, file=None: calls.append((text, file)))
+def test_progress_write_uses_rich_console(monkeypatch, capsys):
+    monkeypatch.setenv("D2S_FORCE_RICH_PROGRESS", "1")
 
     progress_write("[Main] Stopped")
 
-    assert calls[0][0] == "[Main] Stopped"
+    assert "[Main] Stopped" in capsys.readouterr().out

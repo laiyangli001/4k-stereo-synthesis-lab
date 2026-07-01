@@ -60,6 +60,7 @@ class Desktop2StereoGUI(
         self._local_ip_task = None
         self.gui_log_handler = None
         self._log_poll_task = None
+        self._progress_log_controls = {}
 
     async def setup(self):
         self.gui_log_handler = _setup_console_logging()
@@ -88,6 +89,7 @@ class Desktop2StereoGUI(
         self._log_poll_task = asyncio.create_task(self._poll_log_queue())
         self._auto_align_labels()
         self.page.on_close = self._on_page_close
+        self.page.on_resize = self._on_page_resize
 
         # Populate monitors & devices
         self.monitor_label_to_index = self.populate_monitors()
@@ -117,9 +119,8 @@ class Desktop2StereoGUI(
         self.auto_enable_optimizers_based_on_device()
         self.page.on_keyboard_event = self._on_key
         self._esc_task = asyncio.ensure_future(self._esc_poll_task())
+        self._set_log_panel_visible(self._config.get("Show Log Panel", DEFAULTS["Show Log Panel"]), update=False)
         self._fit_window_to_content(update=False)
-
-        # Show window
         self.page.window.visible = True
         self.page.update()
         await asyncio.sleep(0)
@@ -135,7 +136,6 @@ class Desktop2StereoGUI(
             logger.exception("Failed to write GUI ready flag")
 
     async def _prepare_startup_after_window_visible(self):
-        self._show_log_panel()
         self.set_status(
             UI_MESSAGES[self.locale].get(
                 "Preparing Flet package...",

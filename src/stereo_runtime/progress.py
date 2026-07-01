@@ -6,9 +6,20 @@ import threading
 import time
 from contextlib import contextmanager
 
+from rich.console import Console
+from rich.progress import (
+    BarColumn,
+    DownloadColumn,
+    Progress,
+    TextColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+    TransferSpeedColumn,
+)
+
 
 def supports_live_progress(stream=None) -> bool:
-    if os.environ.get("D2S_FORCE_TQDM", "").strip().lower() in {"1", "true", "yes", "on"}:
+    if os.environ.get("D2S_FORCE_RICH_PROGRESS", "").strip().lower() in {"1", "true", "yes", "on"}:
         return True
     stream = sys.stdout if stream is None else stream
     try:
@@ -18,26 +29,14 @@ def supports_live_progress(stream=None) -> bool:
 
 
 def _forced_live_progress() -> bool:
-    return os.environ.get("D2S_FORCE_TQDM", "").strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _forced_progress_ncols() -> int:
-    try:
-        return max(60, min(120, int(os.environ.get("D2S_TQDM_NCOLS", "79"))))
-    except ValueError:
-        return 79
+    return os.environ.get("D2S_FORCE_RICH_PROGRESS", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def progress_write(message: str, *, leading_newline: bool = False) -> None:
     text = str(message)
     if leading_newline:
         text = "\n" + text
-    if supports_live_progress():
-        from tqdm import tqdm
-
-        tqdm.write(text, file=sys.stdout)
-        return
-    print(text, flush=True)
+    Console(file=sys.stdout, force_terminal=False, color_system=None).print(text)
 
 
 class _NullProgress:
@@ -78,19 +77,91 @@ class _StageLogProgress(_NullProgress):
             self._last_postfix = postfix
 
 
-def make_tqdm_progress(*args, **kwargs):
-    """Create a tqdm progress bar with Desktop2Stereo console defaults."""
-    from tqdm import tqdm
+def create_download_progress(*, console=None, transient=False):
+    return Progress(
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        TimeElapsedColumn(),
+        DownloadColumn(),
+        TransferSpeedColumn(),
+        TimeRemainingColumn(),
+        console=console or Console(file=sys.stdout, force_terminal=False, color_system=None),
+        transient=transient,
+    )
 
-    kwargs.setdefault("file", sys.stdout)
-    kwargs.setdefault("ascii", True)
-    if _forced_live_progress():
-        kwargs.setdefault("dynamic_ncols", False)
-        kwargs.setdefault("ncols", _forced_progress_ncols())
-    else:
-        kwargs.setdefault("dynamic_ncols", True)
-    kwargs.setdefault("mininterval", 0.1)
-    return tqdm(*args, **kwargs)
+
+def create_activity_progress(*, console=None, transient=False):
+    return Progress(
+        TextColumn("[progress.description]{task.description}"),
+        TimeElapsedColumn(),
+        console=console or Console(file=sys.stdout, force_terminal=False, color_system=None),
+        transient=transient,
+    )
+
+
+class _RichProgressAdapter:
+    """Bridge external update callbacks to Rich Progress."""
+
+    def __init__(self, *args, **kwargs):
+        self.total = kwargs.get("total", args[0] if args else None)
+        self.desc = str(kwargs.get("desc") or "")
+        self.n = 0
+        self.leave = bool(kwargs.get("leave", False))
+        self._progress = create_download_progress(transient=not self.leave) if self.total is not None else create_activity_progress(transient=True)
+        self._task = self._progress.add_task(self.desc, total=self.total)
+        self._started = False
+
+    def __enter__(self):
+        self._start()
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+        return False
+
+    @property
+    def fp(self):
+        return sys.stdout
+
+    def update(self, amount=1):
+        self._start()
+        self.n += amount
+        self._progress.update(self._task, completed=self.n)
+        return None
+
+    def set_description(self, desc, refresh=True):
+        self._start()
+        self.desc = str(desc or "")
+        self._progress.update(self._task, description=self.desc)
+        return None
+
+    def set_postfix_str(self, value, refresh=True):
+        self._start()
+        postfix = str(value or "").strip()
+        if postfix:
+            self.desc = f"{self.desc}: {postfix}" if self.desc else postfix
+            self._progress.update(self._task, description=self.desc)
+        return None
+
+    def refresh(self):
+        self._start()
+        self._progress.refresh()
+        return None
+
+    def close(self):
+        if self._started:
+            self._progress.stop()
+        return None
+
+    def _start(self):
+        if not self._started:
+            self._progress.start()
+            self._started = True
+
+
+def make_rich_progress(*args, **kwargs):
+    return _RichProgressAdapter(*args, **kwargs)
 
 
 @contextmanager
@@ -102,7 +173,7 @@ def activity_progress(desc: str, *, interval_s: float = 0.2):
         return
 
     stop_event = threading.Event()
-    bar = make_tqdm_progress(
+    bar = make_rich_progress(
         total=None,
         desc=f"[Main] {desc}",
         bar_format="{desc} | {elapsed} elapsed",
@@ -129,7 +200,7 @@ def stage_progress(desc: str, total: int):
         yield _StageLogProgress(desc, total)
         return
 
-    bar = make_tqdm_progress(
+    bar = make_rich_progress(
         total=total,
         desc=f"[Main] {desc}",
         bar_format="{desc} [{bar}] {n_fmt}/{total_fmt} {postfix}",
@@ -163,7 +234,7 @@ def file_size_progress(desc: str, path, *, total_bytes: int, interval_s: float =
         return
 
     stop_event = threading.Event()
-    bar = make_tqdm_progress(
+    bar = make_rich_progress(
         total=total,
         desc=f"[Main] {desc}",
         unit="B",
@@ -223,7 +294,7 @@ def write_bytes_with_progress(path, data, desc: str, *, chunk_size: int = 8 * 10
         print(f"[Main] {desc} 100.00%  {total}/{total}", flush=True)
         return
 
-    bar = make_tqdm_progress(
+    bar = make_rich_progress(
         total=total,
         desc=f"[Main] {desc}",
         unit="B",

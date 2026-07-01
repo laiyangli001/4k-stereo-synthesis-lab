@@ -12,7 +12,7 @@ import torch.nn.functional as F
 
 from .depth_upsample import DepthUpsampleMode, upsample_depth
 from .output import ensure_bchw, ensure_b1hw, match_depth
-from .progress import make_tqdm_progress, progress_write, supports_live_progress
+from .progress import make_rich_progress, progress_write, supports_live_progress
 
 DISTILL_ANY_DEPTH_BASE_NAME = "Distill-Any-Depth-Base"
 DISTILL_ANY_DEPTH_BASE_MODEL_ID = "lc700x/Distill-Any-Depth-Base-hf"
@@ -160,7 +160,7 @@ def _infinidepth_encoder_for_model(model_id: str) -> str:
 
 
 class _ConsoleDownloadProgress:
-    """tqdm-backed progress bar tuned for the GUI-forwarded Windows console."""
+    """Rich-backed progress bar tuned for the GUI-forwarded Windows console."""
 
     def __init__(self, *args, **kwargs):
         self._plain = not supports_live_progress()
@@ -169,7 +169,7 @@ class _ConsoleDownloadProgress:
         self._total = kwargs.get("total")
         self._n = 0
         if self._plain:
-            self._tqdm = None
+            self._progress = None
             return
         kwargs.setdefault("ascii", True)
         kwargs.setdefault("mininterval", 0.1)
@@ -181,19 +181,19 @@ class _ConsoleDownloadProgress:
             "bar_format",
             "[Main] Download {desc} [{bar:10}] {percentage:3.0f}% {n_fmt}/{total_fmt} {rate_fmt} {remaining}",
         )
-        self._tqdm = make_tqdm_progress(*args, **kwargs)
+        self._progress = make_rich_progress(*args, **kwargs)
 
     @property
     def n(self):
-        return self._n if self._plain else self._tqdm.n
+        return self._n if self._plain else self._progress.n
 
     @property
     def total(self):
-        return self._total if self._plain else self._tqdm.total
+        return self._total if self._plain else self._progress.total
 
     def __enter__(self):
         if not self._plain:
-            self._tqdm.__enter__()
+            self._progress.__enter__()
         return self
 
     def __exit__(self, exc_type, exc, tb):
@@ -202,7 +202,7 @@ class _ConsoleDownloadProgress:
 
     def update(self, amount=1):
         if not self._plain:
-            return self._tqdm.update(amount)
+            return self._progress.update(amount)
         self._n += amount
         total = self.total or 0
         if total <= 0:
@@ -217,13 +217,13 @@ class _ConsoleDownloadProgress:
 
     def refresh(self):
         if not self._plain:
-            return self._tqdm.refresh()
+            return self._progress.refresh()
         return None
 
     def set_description(self, desc):
         self._desc = str(desc or "download")
         if not self._plain:
-            return self._tqdm.set_description(self._desc, refresh=False)
+            return self._progress.set_description(self._desc, refresh=False)
         return None
 
     def close(self):
@@ -237,12 +237,12 @@ class _ConsoleDownloadProgress:
             return
         incomplete = self.total is not None and self.n < self.total
         if incomplete:
-            self._tqdm.leave = False
-        self._tqdm.close()
+            self._progress.leave = False
+        self._progress.close()
         if incomplete:
             try:
-                self._tqdm.fp.write("\n")
-                self._tqdm.fp.flush()
+                self._progress.fp.write("\n")
+                self._progress.fp.flush()
             except Exception:
                 pass
 

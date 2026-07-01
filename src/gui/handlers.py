@@ -739,6 +739,9 @@ class GUIHandlerMixin:
         self.reset_btn.content.value = t["Reset"]
         self.stop_btn.content.value = t["Stop"]
         self.run_btn.content.value = t["Run"]
+        self.report_issue_btn.content.value = t.get("Report issue", "Report bug")
+        self.open_log_file_btn.content.value = t.get("Open log file", "Open log")
+        self._sync_log_visibility_link()
 
         def _set_tooltip(ctrl, text):
             if hasattr(ctrl, "set_tooltip"):
@@ -805,6 +808,8 @@ class GUIHandlerMixin:
 
     def _safe_update(self, *controls):
         for c in controls:
+            if c is None:
+                continue
             try:
                 c.update()
             except RuntimeError:

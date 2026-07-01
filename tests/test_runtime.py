@@ -114,21 +114,13 @@ def test_console_download_progress_prints_dynamic_bar(capsys):
     assert "100/100" in out
 
 
-def test_console_download_progress_live_path_uses_fixed_short_width(monkeypatch):
-    calls = []
+def test_console_download_progress_live_path_uses_rich(monkeypatch):
+    monkeypatch.setenv("D2S_FORCE_RICH_PROGRESS", "1")
 
-    class FakeTqdm:
-        n = 0
-        total = 100
+    progress = _ConsoleDownloadProgress(total=100, desc="model.safetensors")
 
-    monkeypatch.setenv("D2S_FORCE_TQDM", "1")
-    monkeypatch.setattr("tqdm.tqdm", lambda *args, **kwargs: calls.append(kwargs) or FakeTqdm())
-
-    _ConsoleDownloadProgress(total=100, desc="model.safetensors")
-
-    assert calls[0]["dynamic_ncols"] is False
-    assert calls[0]["ncols"] == 79
-    assert "{bar:10}" in calls[0]["bar_format"]
+    assert progress.total == 100
+    assert hasattr(progress, "_progress")
 
 
 
@@ -141,16 +133,12 @@ def test_download_preparing_progress_prints_waiting_status_without_fake_bar(caps
     assert "[>" not in out
 
 
-def test_progress_print_uses_tqdm_write_when_live(monkeypatch):
-    calls = []
-
-    monkeypatch.setenv("D2S_FORCE_TQDM", "1")
-    monkeypatch.setattr("tqdm.tqdm.write", lambda text, file=None: calls.append((text, file)))
+def test_progress_print_uses_rich_console_when_live(monkeypatch, capsys):
+    monkeypatch.setenv("D2S_FORCE_RICH_PROGRESS", "1")
 
     _progress_print("[Main] Runtime preparation: checking depth model test/model")
 
-    assert calls
-    assert calls[0][0] == "[Main] Runtime preparation: checking depth model test/model"
+    assert "[Main] Runtime preparation: checking depth model test/model" in capsys.readouterr().out
 
 
 def test_raise_model_resolution_error_includes_last_exception():

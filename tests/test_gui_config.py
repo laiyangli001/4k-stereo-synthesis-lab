@@ -201,6 +201,25 @@ def test_gui_requirements_install_rich_but_do_not_install_flet():
     assert "flet-desktop==" not in requirements
     assert "flet-cli==" not in requirements
 
+def test_hidden_log_panel_does_not_contribute_to_window_width():
+    builders_text = _file_text("builders.py")
+    fit_start = builders_text.index("def _fit_window_to_content")
+    fit_end = builders_text.index("def _on_page_resize", fit_start)
+    fit_block = builders_text[fit_start:fit_end]
+
+    assert "if log_panel.visible:" in fit_block
+    assert "log_panel.expand = True" in fit_block
+    assert "log_panel.width = self._estimate_log_panel_width(main_width)" in fit_block
+    assert "log_panel.expand = False" in fit_block
+    assert "log_panel.width = 0" in fit_block
+
+    width_start = builders_text.index("def _estimate_window_width")
+    width_end = builders_text.index("def _control_has_effective_content", width_start)
+    width_block = builders_text[width_start:width_end]
+    assert "self._estimate_log_panel_width" not in width_block
+    assert "self.log_panel.width" not in width_block
+
+
 def test_console_output_uses_rich_logging_with_filtered_stream_redirect():
     text = _file_text("process.py")
     assert "def _is_key_console_output" in text
@@ -231,6 +250,13 @@ def test_console_filter_suppresses_flet_debug_patch_noise():
 
     assert 'record.name in ("flet", "flet_desktop", "flet_controls", "flet_transport")' in logging_setup_text
     assert "record.levelno <= logging.DEBUG" in logging_setup_text
+    assert "class _FletInfoAsDebugFilter" in process_text
+    assert 'record.name in _FLET_LOGGER_NAMES' in process_text
+    assert 'record.getMessage().startswith(_FLET_MESSAGE_PREFIXES)' in process_text
+    assert "record.levelno = logging.DEBUG" in process_text
+    assert "console_handler.addFilter(_FletInfoAsDebugFilter())" in process_text
+    assert "file_handler.addFilter(_FletInfoAsDebugFilter())" in process_text
+    assert "gui_handler.addFilter(_FletInfoAsDebugFilter())" in process_text
     assert "console_handler.addFilter(_NoisyThirdPartyDebugFilter())" in process_text
 
 
@@ -250,7 +276,7 @@ def test_console_filter_suppresses_flet_startup_noise_lines():
     assert not any("[Main] Runtime preparation: checking depth model lc700x/InfiniDepth-Large".startswith(prefix) for prefix in noisy_prefixes)
 
 
-def test_gui_window_starts_before_vendored_flet_preparation():
+def test_gui_window_updates_after_layout_and_before_vendored_flet_preparation():
     text = _file_text("gui.py")
     main_block = text[text.index("def main():"):text.index("async def _async_main")]
     setup_block = text[text.index("async def setup(self):"):text.index("async def _prepare_startup_after_window_visible")]
@@ -261,7 +287,10 @@ def test_gui_window_starts_before_vendored_flet_preparation():
     update_idx = setup_block.index("self.page.update()", show_idx)
     ready_idx = setup_block.index("self._signal_gui_ready()", update_idx)
     task_idx = setup_block.index("asyncio.create_task(self._prepare_startup_after_window_visible())", ready_idx)
-    assert show_idx < update_idx < ready_idx < task_idx
+    populate_idx = setup_block.index("self.populate_monitors()")
+    fit_idx = setup_block.index("self._fit_window_to_content(update=False)")
+    log_visibility_idx = setup_block.index('self._set_log_panel_visible(self._config.get("Show Log Panel", DEFAULTS["Show Log Panel"]), update=False)')
+    assert populate_idx < log_visibility_idx < fit_idx < show_idx < update_idx < ready_idx < task_idx
     assert "def _signal_gui_ready(self):" in text
     assert "await asyncio.to_thread(ensure_vendored_flet_view)" in text
 
@@ -328,6 +357,9 @@ def test_gui_uses_single_rolling_log_for_gui_and_child_output():
     process_text = _file_text("process.py")
     gui_text = _file_text("gui.py")
     builders_text = _file_text("builders.py")
+    config_text = _file_text("config.py")
+    handlers_text = _file_text("handlers.py")
+    localization_text = _file_text("localization.py")
     assert 'LOG_FILE = os.path.join(LOG_DIR, "desktop2stereo.log")' in paths_text
     assert "DIAG_LOG = LOG_FILE" in paths_text
     assert "logging.FileHandler(LOG_FILE, mode=\"w\", encoding=\"utf-8\")" in process_text
@@ -335,9 +367,63 @@ def test_gui_uses_single_rolling_log_for_gui_and_child_output():
     assert "self.gui_log_handler = _setup_console_logging()" in gui_text
     assert "self._log_poll_task = asyncio.create_task(self._poll_log_queue())" in gui_text
     assert "self.log_panel = ft.Container" in builders_text
+    assert "self.log_listview = ft.Column(scroll=ft.ScrollMode.AUTO" in builders_text
+    assert "content=ft.Row([self.log_listview], scroll=ft.ScrollMode.AUTO" in builders_text
+    assert "ft.ListView" not in builders_text
+    assert "SelectionArea" not in builders_text
     assert "visible=False" in builders_text
     assert "page.add(ft.Row([self._main_panel, self.log_panel]" in builders_text
-    assert "self._show_log_panel()" in process_text
+    assert "self.log_title = ft.Text" not in builders_text
+    assert "self.log_clear_btn = ft.Button" not in builders_text
+    assert "self.log_toggle_btn = ft.Button" not in builders_text
+    assert "def _estimate_main_panel_width" in builders_text
+    assert "def _estimate_log_panel_width" in builders_text
+    assert "self._main_panel.width = main_width" in builders_text
+    assert "log_panel.width = self._estimate_log_panel_width(main_width)" in builders_text
+    assert "def _fit_window_to_content(self, update=True, resize_window=False)" in builders_text
+    assert "if resize_window:" in builders_text
+    assert "self.page.window.min_width = main_width" in builders_text
+    assert "self.page.window.min_width = width" not in builders_text
+    assert "min(width, S(520))" not in builders_text
+    assert "self.page.window.width = width" in builders_text
+    assert "self.page.window.update()" in builders_text
+    assert "except RuntimeError:" in builders_text
+    assert "self.page.window.max_width = width" in builders_text
+    assert "self.page.on_resize = self._on_page_resize" in gui_text
+    assert "max_total_width" not in builders_text
+    assert "min_log_width = S(500)" in builders_text
+    assert "available_width = window_width - main_width" in builders_text
+    assert "controls[-200:]" in builders_text
+    assert "self._fit_window_to_content(update=False)" in process_text
+    assert "min_width=S(360)" not in builders_text
+    assert "min_width=S(500)" not in builders_text
+    assert "width=S(360)" not in builders_text
+    assert "width=S(500)" in builders_text
+    assert "expand=True" in builders_text
+    assert 'UI_MESSAGES[self.locale].get("Report issue", "Report")' not in builders_text
+    assert 'UI_MESSAGES[self.locale].get("Report issue", "Report bug")' in builders_text
+    assert 'UI_MESSAGES[self.locale].get("Open log file", "Open log")' in builders_text
+    assert "on_click=self.on_open_log_file" in builders_text
+    assert "width=S(120)" in builders_text
+    assert "width=S(86)" not in builders_text
+    assert 'self.report_issue_btn.content.value = t.get("Report issue", "Report bug")' in handlers_text
+    assert 'self.open_log_file_btn.content.value = t.get("Open log file", "Open log")' in handlers_text
+    assert '"Report issue": "反馈bug"' in localization_text
+    assert '"Open log file": "查看log文件"' in localization_text
+    assert "def on_open_log_file" in process_text
+    assert '"-m", "gui.rich_log_viewer", LOG_FILE' not in process_text
+    assert 'import webview' not in process_text
+    assert "def _sync_rich_log_viewer" not in process_text
+    assert "def _start_rich_log_viewer" not in process_text
+    assert "def _stop_rich_log_viewer" not in process_text
+    assert "self._sync_rich_log_viewer(panel.visible)" not in process_text
+    assert "self._stop_rich_log_viewer()" not in process_text
+    assert "os.startfile(LOG_FILE)" in process_text
+    open_log_block = process_text.split("def on_open_log_file", 1)[1].split("    # ── reset ──", 1)[0]
+    assert '"-m", "gui.rich_log_viewer", LOG_FILE' not in open_log_block
+    assert "pywebview" not in (Path(__file__).resolve().parents[1] / "requirements.txt").read_text(encoding="utf-8")
+    assert 'self._set_log_panel_visible(self._config.get("Show Log Panel", DEFAULTS["Show Log Panel"]))' in process_text
+    assert "self._fit_window_to_content(update=update, resize_window=True)" in process_text
     assert 'stdout=asyncio.subprocess.PIPE' in process_text
     assert 'stderr=asyncio.subprocess.STDOUT' in process_text
     assert 'child_env["PYTHONIOENCODING"] = "utf-8"' in process_text
@@ -348,6 +434,36 @@ def test_gui_uses_single_rolling_log_for_gui_and_child_output():
     assert "sys.stdout.write(text)" not in process_text
     assert "print(text)" not in process_text
     assert "asyncio.create_task(self._pump_child_output(self.process))" in process_text
+    assert "from rich.progress import BarColumn, Progress, TaskProgressColumn, TextColumn" in process_text
+    assert "from .controls import S" in process_text
+    assert "def _log_text_width" in process_text
+    assert "no_wrap=True" in process_text
+    assert "max_lines=1" in process_text
+    assert "overflow=ft.TextOverflow.VISIBLE" in process_text
+    assert "width=self._log_text_width(line)" in process_text
+    assert "def _progress_log_line" in process_text
+    assert "def _render_rich_progress_line" in process_text
+    assert 'controls = getattr(self, "_progress_log_controls", {})' in process_text
+    assert "existing.value = line" in process_text
+    assert "self.log_listview.controls.append(text)" in process_text
+    assert "self._progress_log_controls.clear()" in process_text
+    assert '"Show Log Panel": True' in config_text
+    assert "self.log_visibility_link" in builders_text
+    assert "on_click=self.on_log_visibility_link" in builders_text
+    assert "def on_log_visibility_link" in process_text
+    assert "asyncio.create_task(self._resize_window_after_log_visibility_change())" in process_text
+    assert "async def _resize_window_after_log_visibility_change" in process_text
+    assert "await asyncio.sleep(0)" in process_text
+    assert "self._fit_window_to_content(update=True, resize_window=True)" in process_text
+    assert "await asyncio.sleep(0.5)" in process_text
+    assert "self.page.window.max_width = None" in process_text
+    assert 'cfg["Show Log Panel"] = panel.visible' in process_text
+    assert "save_yaml(path, cfg)" in process_text
+    assert "_log_panel_preference_seen" not in gui_text
+    assert 'update=False' in gui_text
+    assert "self._sync_log_visibility_link()" in handlers_text
+    assert '"Hide log panel link": "隐藏log窗口->"' in localization_text
+    assert '"Show log panel link": "显示log窗口->"' in localization_text
 
 
 def test_gui_stop_uses_stop_request_file_before_force_kill():
@@ -360,6 +476,15 @@ def test_gui_stop_uses_stop_request_file_before_force_kill():
     graceful_index = process_text.index("with open(STOP_REQUEST_FILE")
     kill_index = process_text.index("proc.kill()", graceful_index)
     assert graceful_index < kill_index
+
+
+def test_safe_update_skips_missing_controls_without_warning_spam():
+    handlers_text = _file_text("handlers.py")
+    safe_update = handlers_text.split("def _safe_update(self, *controls):", 1)[1]
+    safe_update = safe_update.split("    # ── stream URL ──", 1)[0]
+
+    assert "if c is None:" in safe_update
+    assert safe_update.index("if c is None:") < safe_update.index("c.update()")
 
 
 def test_stereo_quality_is_hidden_and_derived_from_stereo_mode():

@@ -1,5 +1,6 @@
 """GUI Process Mixin — subprocess lifecycle, ESC monitoring, URL actions."""
 import os
+import io
 import re
 import sys
 import time
@@ -16,10 +17,12 @@ import flet as ft
 try:
     from rich.console import Console
     from rich.logging import RichHandler
+    from rich.progress import BarColumn, Progress, TaskProgressColumn, TextColumn
     _RICH_AVAILABLE = True
 except ModuleNotFoundError:
     Console = None
     RichHandler = None
+    BarColumn = Progress = TaskProgressColumn = TextColumn = None
     _RICH_AVAILABLE = False
 from utils import OS_NAME, DEFAULT_PORT, shutdown_event, read_yaml
 from . import devices as devices_module
@@ -28,6 +31,7 @@ from .paths import BASE_DIR, DIAG_LOG, LOG_DIR, LOG_FILE, STOP_REQUEST_FILE
 from .capture_sources import get_primary_monitor_index, list_windows
 from .localization import UI_MESSAGES
 from .log_handler import GuiLogHandler
+from .controls import S
 from utils.logging_setup import _NoisyThirdPartyDebugFilter
 
 # ── module-level console helpers ──
@@ -41,6 +45,10 @@ _DEBUG_CONSOLE_PREFIXES = (
     "[debug]",
     "debug:",
 )
+_FLET_LOGGER_NAMES = ("flet", "flet_desktop", "flet_controls", "flet_transport")
+_FLET_MESSAGE_PREFIXES = ("[flet]", "[flet_desktop]", "[flet_controls]", "[flet_transport]")
+_PROGRESS_PERCENT_RE = re.compile(r"(?P<percent>\d{1,3}(?:\.\d+)?)%")
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 _ASYNCIO_SHUTDOWN_UNRAISABLE_MODULES = (
     "asyncio.base_subprocess",
     "asyncio.proactor_events",
@@ -97,6 +105,17 @@ def _is_key_console_output(data):
     return True
 
 
+class _FletInfoAsDebugFilter(logging.Filter):
+    def filter(self, record):
+        if record.levelno == logging.INFO and (
+            record.name in _FLET_LOGGER_NAMES
+            or record.getMessage().startswith(_FLET_MESSAGE_PREFIXES)
+        ):
+            record.levelno = logging.DEBUG
+            record.levelname = "DEBUG"
+        return True
+
+
 def _setup_console_logging():
     """Configure Rich console logging, file logging, and GUI log queue."""
     global _console_logging_installed, _gui_log_handler
@@ -132,11 +151,13 @@ def _setup_console_logging():
     else:
         console_handler = logging.StreamHandler(console_stream)
     console_handler.setLevel(logging.DEBUG)
+    console_handler.addFilter(_FletInfoAsDebugFilter())
     console_handler.addFilter(_NoisyThirdPartyDebugFilter())
     console_handler.setFormatter(logging.Formatter("%(message)s"))
 
     file_handler = logging.FileHandler(LOG_FILE, mode="w", encoding="utf-8")
     file_handler.setLevel(logging.DEBUG)
+    file_handler.addFilter(_FletInfoAsDebugFilter())
     file_handler.addFilter(_NoisyThirdPartyDebugFilter())
     file_handler.setFormatter(logging.Formatter(
         "[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s", "%H:%M:%S"
@@ -144,6 +165,7 @@ def _setup_console_logging():
 
     gui_handler = GuiLogHandler(maxlen=2000)
     gui_handler.setLevel(logging.DEBUG)
+    gui_handler.addFilter(_FletInfoAsDebugFilter())
     gui_handler.addFilter(_NoisyThirdPartyDebugFilter())
     gui_handler.setFormatter(logging.Formatter(
         "[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s", "%H:%M:%S"
@@ -306,7 +328,7 @@ class GUIProcessMixin:
         self._esc_stopped = False
         self._stopping = False
         _set_console_quick_edit(False)
-        self._show_log_panel()
+        self._set_log_panel_visible(self._config.get("Show Log Panel", DEFAULTS["Show Log Panel"]))
         self._set_running_ui(True)
         self._collect_config()
         ok, err = save_yaml(os.path.join(BASE_DIR, "settings.yaml"), self._config)
@@ -349,7 +371,7 @@ class GUIProcessMixin:
             child_env = os.environ.copy()
             child_env["DESKTOP2STEREO_LOCALE"] = self.locale
             child_env["PYTHONIOENCODING"] = "utf-8"
-            child_env["D2S_FORCE_TQDM"] = "1"
+            child_env["D2S_FORCE_RICH_PROGRESS"] = "1"
             if OS_NAME == "Windows":
                 self.process = await asyncio.create_subprocess_exec(
                     *child_args,
@@ -550,10 +572,52 @@ class GUIProcessMixin:
         if getattr(self, "log_title", None) is not None:
             self.log_title.value = UI_MESSAGES[self.locale].get("Log panel running title", "Running - live log")
             self.log_title.color = None
-        self._fit_window_to_content(update=False)
-        self._safe_update(panel, getattr(self, "log_toggle_btn", None), getattr(self, "log_title", None))
+        self._sync_log_visibility_link()
+        self._fit_window_to_content(update=False, resize_window=True)
+        self._safe_update(panel, getattr(self, "log_toggle_btn", None), getattr(self, "log_title", None), getattr(self, "log_visibility_link", None))
         try:
             self.page.update()
+        except RuntimeError:
+            pass
+
+    def _sync_log_visibility_link(self):
+        link = getattr(self, "log_visibility_link", None)
+        if link is None:
+            return
+        visible = bool(getattr(getattr(self, "log_panel", None), "visible", False))
+        key = "Hide log panel link" if visible else "Show log panel link"
+        link.value = UI_MESSAGES[self.locale].get(key, UI_MESSAGES["EN"][key])
+
+    def _set_log_panel_visible(self, visible, save=False, update=True):
+        panel = getattr(self, "log_panel", None)
+        if panel is None:
+            return
+        panel.visible = bool(visible)
+        self._sync_log_visibility_link()
+        self._fit_window_to_content(update=update, resize_window=True)
+        if save:
+            path = os.path.join(BASE_DIR, "settings.yaml")
+            cfg = self._config.copy()
+            if os.path.exists(path):
+                loaded = read_yaml(path) or {}
+                cfg.update(loaded)
+            cfg["Show Log Panel"] = panel.visible
+            self._config.update(cfg)
+            save_yaml(path, cfg)
+        if update:
+            self._safe_update(panel, getattr(self, "log_visibility_link", None))
+
+    def on_log_visibility_link(self, e=None):
+        self._set_log_panel_visible(not getattr(self.log_panel, "visible", False), save=True)
+        asyncio.create_task(self._resize_window_after_log_visibility_change())
+
+    async def _resize_window_after_log_visibility_change(self):
+        await asyncio.sleep(0)
+        self._fit_window_to_content(update=True, resize_window=True)
+        await asyncio.sleep(0.5)
+        self.page.window.max_width = None
+        try:
+            self.page.window.update()
         except RuntimeError:
             pass
 
@@ -593,15 +657,58 @@ class GUIProcessMixin:
         return {"ALL": 0, "DEBUG": logging.DEBUG, "INFO": logging.INFO,
                 "WARNING": logging.WARNING, "ERROR": logging.ERROR}.get(value, 0)
 
+    def _log_text_width(self, text):
+        return max(S(500), sum(S(13) if ord(ch) > 127 else S(7) for ch in str(text)) + S(32))
+
     def _make_log_text(self, item):
         levelno, name, _, _ = item
+        line = self._format_gui_log_line(item)
         return ft.Text(
-            self._format_gui_log_line(item),
+            line,
             color=self._log_color(levelno),
             size=12,
             weight=ft.FontWeight.BOLD if name == "status" else ft.FontWeight.NORMAL,
             selectable=True,
+            no_wrap=True,
+            max_lines=1,
+            overflow=ft.TextOverflow.VISIBLE,
+            width=self._log_text_width(line),
         )
+
+    def _progress_log_line(self, item):
+        levelno, name, _, formatted = item
+        if levelno >= logging.WARNING or name not in ("child", "stdout"):
+            return None
+        marker = "] "
+        message = formatted.split(marker, 2)[-1] if marker in formatted else formatted
+        text = _ANSI_RE.sub("", message).replace("\r", "").strip()
+        match = _PROGRESS_PERCENT_RE.search(text)
+        if not match or not any(token in text for token in ("|", "/", "it/s", "ETA", "Downloading", "Exporting", "Building", "Saving", "Runtime preparation")):
+            return None
+        percent = max(0.0, min(100.0, float(match.group("percent"))))
+        desc = text[:match.start()].strip(" :-|")
+        if not desc:
+            desc = "Progress"
+        key = re.sub(r"\s+", " ", desc)
+        return key, self._render_rich_progress_line(desc, percent)
+
+    def _render_rich_progress_line(self, desc, percent):
+        if not _RICH_AVAILABLE:
+            return f"{desc} {percent:5.1f}%"
+        stream = io.StringIO()
+        console = Console(file=stream, width=82, force_terminal=False, color_system=None)
+        progress = Progress(
+            TextColumn("{task.description}"),
+            BarColumn(bar_width=24),
+            TaskProgressColumn(),
+            console=console,
+            transient=True,
+        )
+        with progress:
+            progress.add_task(desc, total=100, completed=percent)
+            progress.refresh()
+        lines = [line.strip() for line in stream.getvalue().splitlines() if line.strip()]
+        return lines[-1] if lines else f"{desc} {percent:5.1f}%"
 
     def _append_log_item(self, item):
         min_level = self._selected_log_level()
@@ -609,6 +716,28 @@ class GUIProcessMixin:
             if item[1] != "status":
                 return
         elif item[0] < min_level:
+            return
+        progress = self._progress_log_line(item)
+        if progress is not None:
+            key, line = progress
+            controls = getattr(self, "_progress_log_controls", {})
+            existing = controls.get(key)
+            if existing is not None:
+                existing.value = line
+                existing.width = self._log_text_width(line)
+                return
+            text = ft.Text(
+                line,
+                color=self._log_color(item[0]),
+                size=12,
+                selectable=True,
+                no_wrap=True,
+                max_lines=1,
+                overflow=ft.TextOverflow.VISIBLE,
+                width=self._log_text_width(line),
+            )
+            controls[key] = text
+            self.log_listview.controls.append(text)
             return
         self.log_listview.controls.append(self._make_log_text(item))
         if len(self.log_listview.controls) > 1000:
@@ -632,6 +761,7 @@ class GUIProcessMixin:
             except queue.Empty:
                 pass
             if changed:
+                self._fit_window_to_content(update=False)
                 self._safe_update(listview, getattr(self, "log_title", None), getattr(self, "report_issue_btn", None))
             await asyncio.sleep(0.1)
 
@@ -651,6 +781,7 @@ class GUIProcessMixin:
 
     def on_log_level_filter(self, e=None):
         self.log_listview.controls.clear()
+        self._progress_log_controls.clear()
         handler = getattr(self, "gui_log_handler", None)
         if handler is not None:
             for item in handler.cache:
@@ -659,6 +790,7 @@ class GUIProcessMixin:
 
     def on_log_clear(self, e=None):
         self.log_listview.controls.clear()
+        self._progress_log_controls.clear()
         handler = getattr(self, "gui_log_handler", None)
         if handler is not None:
             handler.cache.clear()
@@ -700,6 +832,23 @@ class GUIProcessMixin:
         except Exception as exc:
             logger.exception("Failed to build bug report")
             self.set_status(str(exc))
+
+    def on_open_log_file(self, e=None):
+        try:
+            os.makedirs(LOG_DIR, exist_ok=True)
+            if not os.path.exists(LOG_FILE):
+                open(LOG_FILE, "a", encoding="utf-8").close()
+            if OS_NAME == "Windows":
+                os.startfile(LOG_FILE)
+            elif OS_NAME == "Darwin":
+                subprocess.Popen(["open", LOG_FILE])
+            else:
+                subprocess.Popen(["xdg-open", LOG_FILE])
+            self.set_status(UI_MESSAGES[self.locale].get("Opening log file", "Opening log file"))
+        except Exception as exc:
+            logger.exception("Failed to open log file")
+            self.set_status(str(exc))
+
     # ── reset ──
 
     def reset_defaults(self, e):
