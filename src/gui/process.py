@@ -13,8 +13,14 @@ import queue
 import subprocess
 import traceback
 import flet as ft
-from rich.console import Console
-from rich.logging import RichHandler
+try:
+    from rich.console import Console
+    from rich.logging import RichHandler
+    _RICH_AVAILABLE = True
+except ModuleNotFoundError:
+    Console = None
+    RichHandler = None
+    _RICH_AVAILABLE = False
 from utils import OS_NAME, DEFAULT_PORT, shutdown_event, read_yaml
 from . import devices as devices_module
 from .config import DEFAULTS, default_base_depth_model, save_yaml
@@ -114,14 +120,19 @@ def _setup_console_logging():
     root = logging.getLogger()
     root.setLevel(logging.DEBUG)
 
-    console_handler = RichHandler(
-        console=Console(file=sys.__stderr__),
-        rich_tracebacks=True,
-        markup=False,
-        show_path=False,
-        omit_repeated_times=False,
-    )
+    console_stream = sys.__stderr__ or sys.stderr or open(os.devnull, "w", encoding="utf-8")
+    if _RICH_AVAILABLE:
+        console_handler = RichHandler(
+            console=Console(file=console_stream),
+            rich_tracebacks=True,
+            markup=False,
+            show_path=False,
+            omit_repeated_times=False,
+        )
+    else:
+        console_handler = logging.StreamHandler(console_stream)
     console_handler.setLevel(logging.DEBUG)
+    console_handler.addFilter(_NoisyThirdPartyDebugFilter())
     console_handler.setFormatter(logging.Formatter("%(message)s"))
 
     file_handler = logging.FileHandler(LOG_FILE, mode="w", encoding="utf-8")
@@ -142,12 +153,14 @@ def _setup_console_logging():
     root.addHandler(file_handler)
     root.addHandler(gui_handler)
     _gui_log_handler = gui_handler
+    if not _RICH_AVAILABLE:
+        logger.warning("Rich is not installed; using standard console logging until Rich is available.")
 
     class _StreamToLogger:
         def __init__(self, stream_logger, level):
             self.stream_logger = stream_logger
             self.level = level
-            self.original = sys.__stdout__ if level < logging.ERROR else sys.__stderr__
+            self.original = (sys.__stdout__ if level < logging.ERROR else sys.__stderr__) or console_stream
             self._buffer = ""
 
         def write(self, data):

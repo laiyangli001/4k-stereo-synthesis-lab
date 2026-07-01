@@ -215,6 +215,9 @@ MESSAGE_CATALOGS = {
         "Exporting ONNX...": "Exporting ONNX file...",
         "Building TensorRT engine...": "Building TensorRT engine (this may take a while)...",
         "Error occurred": "Error occurred",
+        "Preparing Flet package...": "Preparing Flet desktop client...",
+        "Startup preparation complete": "Startup preparation complete.",
+        "Startup preparation failed: {}": "Startup preparation failed: {}",
     },
     "CN": {
         "Monitor": "输入屏幕",
@@ -434,6 +437,9 @@ MESSAGE_CATALOGS = {
         "Exporting ONNX...": "正在导出 ONNX 文件...",
         "Building TensorRT engine...": "正在编译 TensorRT 引擎（可能需要较长时间）...",
         "Error occurred": "出现异常",
+        "Preparing Flet package...": "正在准备 Flet 桌面客户端...",
+        "Startup preparation complete": "启动准备已完成。",
+        "Startup preparation failed: {}": "启动准备失败: {}",
     }
 }
 

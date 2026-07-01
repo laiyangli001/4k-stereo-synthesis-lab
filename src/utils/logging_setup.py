@@ -11,11 +11,9 @@ LOG_FILE = LOG_DIR / "desktop2stereo.log"
 class _NoisyThirdPartyDebugFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         message = record.getMessage()
-        if record.name == "flet_controls" and record.levelno <= logging.DEBUG:
+        if record.name in ("flet", "flet_desktop", "flet_controls", "flet_transport") and record.levelno <= logging.DEBUG:
             return False
         if record.name == "PIL.PngImagePlugin" and message.startswith("STREAM "):
-            return False
-        if record.name == "flet_transport" and record.levelno <= logging.DEBUG:
             return False
         return True
 

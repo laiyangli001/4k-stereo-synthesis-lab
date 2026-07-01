@@ -8,6 +8,7 @@ Mixins:
 """
 import os
 import asyncio
+import logging
 import flet as ft
 from utils import VERSION, OS_NAME, read_yaml
 from .builders import GUIBuilderMixin
@@ -16,9 +17,12 @@ from .config_mgr import GUIConfigMixin
 from .process import GUIProcessMixin, _setup_console_logging
 from .config import DEFAULTS
 from .controls import S
-from .paths import BASE_DIR
+from .paths import BASE_DIR, GUI_READY_FILE, LOG_DIR
 from .localization import UI_MESSAGES
 from .flet_runtime import ensure_vendored_flet_view
+
+
+logger = logging.getLogger(__name__)
 
 
 class Desktop2StereoGUI(
@@ -118,12 +122,47 @@ class Desktop2StereoGUI(
         self.page.window.visible = True
         self.page.update()
         await asyncio.sleep(0)
+        self._signal_gui_ready()
+        asyncio.create_task(self._prepare_startup_after_window_visible())
+
+    def _signal_gui_ready(self):
+        try:
+            os.makedirs(LOG_DIR, exist_ok=True)
+            with open(GUI_READY_FILE, "w", encoding="utf-8") as ready_file:
+                ready_file.write("ready\n")
+        except Exception:
+            logger.exception("Failed to write GUI ready flag")
+
+    async def _prepare_startup_after_window_visible(self):
+        self._show_log_panel()
+        self.set_status(
+            UI_MESSAGES[self.locale].get(
+                "Preparing Flet package...",
+                "Preparing Flet desktop client...",
+            ),
+            key="Preparing Flet package...",
+        )
+        try:
+            await asyncio.to_thread(ensure_vendored_flet_view)
+            self.set_status(
+                UI_MESSAGES[self.locale].get(
+                    "Startup preparation complete",
+                    "Startup preparation complete.",
+                ),
+                key="Startup preparation complete",
+            )
+        except Exception as exc:
+            logger.exception("Startup preparation failed")
+            message = UI_MESSAGES[self.locale].get(
+                "Startup preparation failed: {}",
+                "Startup preparation failed: {}",
+            )
+            self.set_status(message.format(exc))
 
 
 def main():
     """Entry point for the GUI application."""
     _setup_console_logging()
-    ensure_vendored_flet_view()
     ft.run(_async_main)
 
 

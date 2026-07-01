@@ -32,9 +32,7 @@ evo==1.36.5
 e3nn==0.6.0
 
 # gui
-flet==0.85.3
-flet-desktop==0.85.3
-flet-cli==0.85.3
+rich==15.0.0
 
 # test
 pytest==9.1.1

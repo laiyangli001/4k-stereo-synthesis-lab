@@ -190,6 +190,17 @@ def test_xr_preview_window_is_advanced_next_to_capture_fps():
     assert '"tooltip_xr_preview"' in localization_text
 
 
+def test_gui_requirements_install_rich_but_do_not_install_flet():
+    repo_root = Path(__file__).resolve().parents[1]
+    requirements = (repo_root / "requirements.txt").read_text(encoding="utf-8")
+    risky_requirements = (repo_root / "requirements-risky.txt").read_text(encoding="utf-8")
+
+    assert "rich==15.0.0" in requirements
+    assert "rich==15.0.0" not in risky_requirements
+    assert "flet==" not in requirements
+    assert "flet-desktop==" not in requirements
+    assert "flet-cli==" not in requirements
+
 def test_console_output_uses_rich_logging_with_filtered_stream_redirect():
     text = _file_text("process.py")
     assert "def _is_key_console_output" in text
@@ -201,12 +212,26 @@ def test_console_output_uses_rich_logging_with_filtered_stream_redirect():
     assert "if _console_logging_installed:" in text
     assert "from rich.console import Console" in text
     assert "from rich.logging import RichHandler" in text
-    assert "console=Console(file=sys.__stderr__)" in text
+    assert "except ModuleNotFoundError:" in text
+    assert "_RICH_AVAILABLE = False" in text
+    assert "console_stream = sys.__stderr__ or sys.stderr or open(os.devnull" in text
+    assert "console=Console(file=console_stream)" in text
+    assert "logging.StreamHandler(console_stream)" in text
+    assert "Rich is not installed; using standard console logging" in text
     assert "class _StreamToLogger" in text
     stream_index = text.index("class _StreamToLogger")
     filter_index = text.index("if line and _is_key_console_output(line):", stream_index)
     logger_index = text.index("self.stream_logger.log(self.level, line)", filter_index)
     assert stream_index < filter_index < logger_index
+
+
+def test_console_filter_suppresses_flet_debug_patch_noise():
+    logging_setup_text = (Path(__file__).resolve().parents[1] / "src" / "utils" / "logging_setup.py").read_text(encoding="utf-8")
+    process_text = _file_text("process.py")
+
+    assert 'record.name in ("flet", "flet_desktop", "flet_controls", "flet_transport")' in logging_setup_text
+    assert "record.levelno <= logging.DEBUG" in logging_setup_text
+    assert "console_handler.addFilter(_NoisyThirdPartyDebugFilter())" in process_text
 
 
 def test_console_filter_suppresses_flet_startup_noise_lines():
@@ -225,11 +250,52 @@ def test_console_filter_suppresses_flet_startup_noise_lines():
     assert not any("[Main] Runtime preparation: checking depth model lc700x/InfiniDepth-Large".startswith(prefix) for prefix in noisy_prefixes)
 
 
-def test_gui_console_logging_starts_before_flet_view_launch():
+def test_gui_window_starts_before_vendored_flet_preparation():
     text = _file_text("gui.py")
     main_block = text[text.index("def main():"):text.index("async def _async_main")]
-    assert main_block.index("_setup_console_logging()") < main_block.index("ensure_vendored_flet_view()")
+    setup_block = text[text.index("async def setup(self):"):text.index("async def _prepare_startup_after_window_visible")]
+
+    assert "ensure_vendored_flet_view()" not in main_block
     assert main_block.index("_setup_console_logging()") < main_block.index("ft.run(_async_main)")
+    show_idx = setup_block.index("self.page.window.visible = True")
+    update_idx = setup_block.index("self.page.update()", show_idx)
+    ready_idx = setup_block.index("self._signal_gui_ready()", update_idx)
+    task_idx = setup_block.index("asyncio.create_task(self._prepare_startup_after_window_visible())", ready_idx)
+    assert show_idx < update_idx < ready_idx < task_idx
+    assert "def _signal_gui_ready(self):" in text
+    assert "await asyncio.to_thread(ensure_vendored_flet_view)" in text
+
+
+def test_run_windows_waits_for_gui_ready_signal_before_closing_cmd():
+    text = (Path(__file__).resolve().parents[1] / "run_windows.bat").read_text(encoding="utf-8")
+
+    assert r'set "PYTHON_EXE=%APP_DIR%\python3\python.exe"' in text
+    assert r'set "LOG_DIR=%APP_DIR%\logs"' in text
+    assert r'set "GUI_READY_FILE=%LOG_DIR%\gui_ready.flag"' in text
+    assert r'set "LAUNCH_STDOUT=%LOG_DIR%\launcher_stdout.log"' in text
+    assert r'set "LAUNCH_STDERR=%LOG_DIR%\launcher_stderr.log"' in text
+    assert r'set "APP_LOG=%LOG_DIR%\desktop2stereo.log"' in text
+    assert 'if exist "%GUI_READY_FILE%" del /f /q "%GUI_READY_FILE%"' in text
+    assert 'if exist "%APP_LOG%" type nul > "%APP_LOG%"' in text
+    assert 'set "PYTHONPATH=%APP_DIR%"' in text
+    assert "Start-Process -FilePath '%PYTHON_EXE%'" in text
+    assert "-WindowStyle Hidden" in text
+    assert "-RedirectStandardOutput '%LAUNCH_STDOUT%'" in text
+    assert "-RedirectStandardError '%LAUNCH_STDERR%'" in text
+    assert "Test-Path -LiteralPath '%GUI_READY_FILE%'" in text
+    assert "if ($p.HasExited) { exit 1 }" in text
+    assert "AddSeconds(60)" in text
+    assert "exit 2" in text
+    assert "if errorlevel 2 goto launch_timeout" in text
+    assert "if errorlevel 1 goto launch_failed" in text
+    assert "未在 60 秒内回传就绪标志" in text
+    assert "在回传就绪标志前失败" in text
+    show_logs = text[text.index(":show_logs"):]
+    assert "pause" in show_logs
+    assert "launcher_stderr.log" in show_logs
+    assert "launcher_stdout.log" not in show_logs
+    assert "desktop2stereo.log" not in show_logs
+    assert "%PYTHON_EXE% -m gui" not in text
 
 
 def test_gui_suppresses_known_asyncio_shutdown_unraisable_noise_only():
