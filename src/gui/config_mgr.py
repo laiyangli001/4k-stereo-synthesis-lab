@@ -144,6 +144,8 @@ class GUIConfigMixin:
         self.recompile_coreml_cb.visible = self.coreml_cb.value and self.coreml_cb.visible
         self.recompile_openvino_cb.visible = self.openvino_cb.value and self.openvino_cb.visible
         ct = cfg.get("Capture Tool", DEFAULTS["Capture Tool"])
+        if ct == "DesktopDuplication":
+            ct = "DXGIDesktopDuplication"
         self.capture_tool_dd.value = ct if ct in self.capture_tool_dd.options else (self.capture_tool_dd.options[0] if self.capture_tool_dd.options else '')
         if keep_optional:
             run_mode = cfg.get("Run Mode", DEFAULTS.get("Run Mode", "Local Viewer"))

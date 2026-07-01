@@ -1076,3 +1076,60 @@ def test_openxr_headset_preset_dropdown_is_visible_only_for_openxr_and_saved():
     assert '"Headset Model:": "Headset Model:"' in localization_text
     assert '"Headset Model:": "头显型号:"' in localization_text
     assert '"tooltip_xr_headset"' in localization_text
+
+
+def test_stream_modes_do_not_show_stereo_monitor_output():
+    handlers_text = _file_text("handlers.py")
+
+    assert 'stereo_full = mode in ["Local Viewer", "3D Monitor"] and mon_count > 1' in handlers_text
+    assert '"RTMP Streamer"] and mon_count > 1' not in handlers_text
+    assert 'self.stereo_output_label.visible = stereo_full' in handlers_text
+    assert 'self.stereo_output_label.visible = not is_openxr' not in handlers_text
+    assert 'if mode == "Local Viewer":\n            self._auto_select_stereo_monitor()' in handlers_text
+    assert 'if mode in ["Local Viewer", "RTMP Streamer"]:' not in handlers_text
+
+
+def test_window_refresh_error_key_exists_and_handler_uses_fallback():
+    localization_text = _localization_source().read_text(encoding="utf-8")
+    handlers_text = _file_text("handlers.py")
+
+    assert '"err_refresh_window": "Failed to refresh window list: {}"' in localization_text
+    assert '"err_refresh_window": "刷新窗口列表失败：{}"' in localization_text
+    assert 'UI_MESSAGES[self.locale].get("err_refresh_window", "Failed to refresh window list: {}")' in handlers_text
+
+
+def test_window_selection_ignores_empty_dropdown_value():
+    handlers_text = _file_text("handlers.py")
+
+    assert 'if not label:' in handlers_text
+    assert 'self.selected_window_name = ""' in handlers_text
+    assert 'self.selected_window_handle = None' in handlers_text
+    assert 'self.selected_window_rect = None' in handlers_text
+
+
+def test_desktop_duplication_disables_window_capture_without_status_noise():
+    handlers_text = _file_text("handlers.py")
+    localization_text = _localization_source().read_text(encoding="utf-8")
+    block = handlers_text[handlers_text.index("def on_capture_tool_change"):handlers_text.index("def _sync_capture_mode_visibility")]
+
+    assert 'if tool in ("DesktopDuplication", "DXGIDesktopDuplication"):' in block
+    assert 'self.capture_mode_key = "Monitor"' in block
+    assert 'self.capture_mode_dd.disabled = True' in block
+    assert "DesktopDuplication selected: Window capture mode disabled." not in handlers_text
+    assert "DesktopDuplication selected: Window capture mode disabled." not in localization_text
+
+
+def test_dxgi_desktop_duplication_is_available_in_gui_capture_tool_options_for_testing():
+    source = (GUI_PKG / "capture_sources.py").read_text(encoding="utf-8")
+    options_block = source[source.index("def get_capture_tool_options"):]
+
+    assert 'return ["WindowsCaptureCUDA", "WindowsCapture", "DXCamera", "DXGIDesktopDuplication"]' in options_block
+    assert 'return ["WindowsCaptureROCm", "WindowsCapture", "DXCamera", "DXGIDesktopDuplication"]' in options_block
+    assert 'return ["DXCamera", "WindowsCapture", "DXGIDesktopDuplication"]' in options_block
+
+
+def test_legacy_desktop_duplication_config_maps_to_dxgi_name():
+    config_mgr_text = _file_text("config_mgr.py")
+
+    assert 'if ct == "DesktopDuplication":' in config_mgr_text
+    assert 'ct = "DXGIDesktopDuplication"' in config_mgr_text

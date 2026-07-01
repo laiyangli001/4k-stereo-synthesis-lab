@@ -373,11 +373,10 @@ class GUIHandlerMixin:
 
     def on_capture_tool_change(self, e):
         tool = e.control.value if e else self.capture_tool_dd.value
-        if tool == "DesktopDuplication":
+        if tool in ("DesktopDuplication", "DXGIDesktopDuplication"):
             self.capture_mode_key = "Monitor"
             self.capture_mode_dd.value = UI_MESSAGES[self.locale]["Monitor"]
             self.capture_mode_dd.disabled = True
-            self.set_status(UI_MESSAGES[self.locale]["DesktopDuplication selected: Window capture mode disabled."])
         else:
             self.capture_mode_dd.disabled = False
             self.set_status("", key="")
@@ -407,6 +406,12 @@ class GUIHandlerMixin:
 
     def on_window_selected(self, e):
         label = e.control.value if e else self.window_dd.value
+        if not label:
+            self.selected_window_name = ""
+            self.selected_window_handle = None
+            self.selected_window_rect = None
+            self._fit_window_to_content()
+            return
         m = re.search(r'\[h:(\d+)\]$', label)
         target_handle = int(m.group(1)) if m else None
         display_title = re.sub(r'\s*\[h:\d+\]$', '', label).strip()
@@ -532,8 +537,8 @@ class GUIHandlerMixin:
                 "Half-SBS", "Full-SBS", "Half-TAB", "Full-TAB",
                 "Depth Map", "Anaglyph", "Interleaved", "Mono", "Leia"]
         mon_count = self._get_monitor_count()
-        stereo_full = mode in ["Local Viewer", "3D Monitor", "RTMP Streamer"] and mon_count > 1
-        self.stereo_output_label.visible = not is_openxr
+        stereo_full = mode in ["Local Viewer", "3D Monitor"] and mon_count > 1
+        self.stereo_output_label.visible = stereo_full
         self.stereo_monitor_dd.visible = stereo_full
         if hasattr(self, '_stereo_spacer'):
             self._stereo_spacer.visible = stereo_full
@@ -545,7 +550,7 @@ class GUIHandlerMixin:
         self.lossless_cb.visible = (OS_NAME == "Windows" and mode == "RTMP Streamer")
         self.update_stereo_monitor_menu()
         self._fit_window_to_content()
-        if mode in ["Local Viewer", "RTMP Streamer"]:
+        if mode == "Local Viewer":
             self._auto_select_stereo_monitor()
         if mode == "RTMP Streamer":
             self.populate_audio_devices()
@@ -996,7 +1001,7 @@ class GUIHandlerMixin:
                 self.on_window_selected(None)
             self.window_dd.update()
         except Exception as e:
-            self.set_status(UI_MESSAGES[self.locale]["err_refresh_window"].format(e))
+            self.set_status(UI_MESSAGES[self.locale].get("err_refresh_window", "Failed to refresh window list: {}").format(e))
 
     # ── stereo preset / advanced stereo ──
 

@@ -135,12 +135,26 @@ def test_download_progress_reports_download_size(capsys):
 
 def test_hf_endpoint_candidates_default_to_mirror_then_official(monkeypatch):
     monkeypatch.delenv("HF_ENDPOINT", raising=False)
+    monkeypatch.setattr(
+        "stereo_runtime.depth_provider.huggingface_endpoint_candidates",
+        lambda: ("https://hf-mirror.com", "https://huggingface.co"),
+    )
 
     assert _hf_endpoint_candidates() == ("https://hf-mirror.com", "https://huggingface.co")
 
     monkeypatch.setenv("HF_ENDPOINT", "https://custom.example")
 
     assert _hf_endpoint_candidates() == ("https://custom.example",)
+
+
+def test_hf_endpoint_candidates_keep_default_fallback_when_env_is_auto_endpoint(monkeypatch):
+    monkeypatch.setenv("HF_ENDPOINT", "https://huggingface.co")
+    monkeypatch.setattr(
+        "stereo_runtime.depth_provider.huggingface_endpoint_candidates",
+        lambda: ("https://huggingface.co", "https://hf-mirror.com"),
+    )
+
+    assert _hf_endpoint_candidates() == ("https://huggingface.co", "https://hf-mirror.com")
 
 
 def test_hf_resolve_url_formats_download_links():

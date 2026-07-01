@@ -25,7 +25,15 @@ def test_windows_dxcamera_selects_dxcamera_backend(monkeypatch):
     assert cls is FakeGrabber
 
 
-def test_windows_desktop_duplication_selects_desktop_duplication_backend(monkeypatch):
+def test_windows_dxgi_desktop_duplication_selects_desktop_duplication_backend(monkeypatch):
+    _install_fake_backend(monkeypatch, "capture.backends.windows_desktop_duplication")
+
+    cls = get_desktop_grabber_class(CaptureConfig(os_name="Windows", capture_tool="DXGIDesktopDuplication"))
+
+    assert cls is FakeGrabber
+
+
+def test_windows_desktop_duplication_legacy_name_still_selects_backend(monkeypatch):
     _install_fake_backend(monkeypatch, "capture.backends.windows_desktop_duplication")
 
     cls = get_desktop_grabber_class(CaptureConfig(os_name="Windows", capture_tool="DesktopDuplication"))
@@ -67,6 +75,7 @@ def test_linux_selects_mss_backend(monkeypatch):
 def test_polling_tools_create_polling_runner(monkeypatch):
     _install_fake_backend(monkeypatch, "capture.backends.windows_dxcamera")
 
-    runner = create_capture_runner(CaptureConfig(os_name="Windows", capture_tool="DXCamera"))
+    for capture_tool in ["DXCamera", "DXGIDesktopDuplication", "DesktopDuplication"]:
+        runner = create_capture_runner(CaptureConfig(os_name="Windows", capture_tool=capture_tool))
 
-    assert isinstance(runner, PollingCaptureRunner)
+        assert isinstance(runner, PollingCaptureRunner)

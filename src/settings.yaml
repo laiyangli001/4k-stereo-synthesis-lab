@@ -312,10 +312,10 @@ Model List:
   DepthPro-Large:
     resolutions:
     - 1536
-Depth Model: InfiniDepth-Large
+Depth Model: Distill-Any-Depth-Base
 Depth Strength: 0.25
 Depth Quick: Standard
-Depth Resolution: 512
+Depth Resolution: 518
 Anti-aliasing: 1
 Depth Antialias Strength: 1.0
 Foreground Scale: 0.0
@@ -354,7 +354,7 @@ VSync: false
 Target FPS: 0
 Processing Resolution: Auto
 Render Size Policy: scaled
-Render Scale: 3K / 85%
+Render Scale: 4K / 100%
 Render Fixed Width: 1920
 Render Fixed Height: 1080
 Render Max Pixels: 8294400
@@ -376,5 +376,6 @@ Capture Tool: WindowsCaptureCUDA
 Fill 16:9: true
 Fix Viewer Aspect: false
 Stereo Output: 2
+Show Log Panel: true
 OpenVINO: null
 Synthetic View: quality_4k

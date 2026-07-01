@@ -13,6 +13,7 @@ import torch.nn.functional as F
 from .depth_upsample import DepthUpsampleMode, upsample_depth
 from .output import ensure_bchw, ensure_b1hw, match_depth
 from .progress import DownloadProgress, progress_write
+from utils.network import huggingface_endpoint_candidates
 
 DISTILL_ANY_DEPTH_BASE_NAME = "Distill-Any-Depth-Base"
 DISTILL_ANY_DEPTH_BASE_MODEL_ID = "lc700x/Distill-Any-Depth-Base-hf"
@@ -215,7 +216,11 @@ def _hf_endpoint(endpoint: str):
 
 def _hf_endpoint_candidates() -> tuple[str, ...]:
     endpoint = os.environ.get("HF_ENDPOINT")
-    return (endpoint,) if endpoint else HF_ENDPOINT_DEFAULTS
+    if endpoint:
+        if endpoint in HF_ENDPOINT_DEFAULTS:
+            return (endpoint,) + tuple(candidate for candidate in HF_ENDPOINT_DEFAULTS if candidate != endpoint)
+        return (endpoint,)
+    return huggingface_endpoint_candidates()
 
 
 def _hf_resolve_url(endpoint: str, model_id: str, filename: str = "") -> str:

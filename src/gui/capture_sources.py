@@ -226,7 +226,7 @@ def get_capture_tool_options(device_label):
     device_label_upper = device_label.upper()
     is_nvidia = "CUDA" in device_label_upper and not devices_module.IS_ROCM
     if is_nvidia:
-        return ["WindowsCaptureCUDA", "WindowsCapture", "DXCamera", "DesktopDuplication"]
+        return ["WindowsCaptureCUDA", "WindowsCapture", "DXCamera", "DXGIDesktopDuplication"]
     if "CUDA" in device_label_upper and devices_module.IS_ROCM:
-        return ["WindowsCaptureROCm", "WindowsCapture", "DXCamera", "DesktopDuplication"]
-    return ["DXCamera", "WindowsCapture", "DesktopDuplication"]
+        return ["WindowsCaptureROCm", "WindowsCapture", "DXCamera", "DXGIDesktopDuplication"]
+    return ["DXCamera", "WindowsCapture", "DXGIDesktopDuplication"]
