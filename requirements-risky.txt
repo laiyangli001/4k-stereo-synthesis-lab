@@ -10,3 +10,6 @@ e3nn==0.6.0
 # batch 4: major-version HF stack
 transformers==5.12.1
 huggingface_hub==1.20.1
+
+# batch 5: GUI logging / terminal rendering stack
+rich==15.0.0
