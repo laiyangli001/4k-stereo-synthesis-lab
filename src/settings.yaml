@@ -319,6 +319,7 @@ Depth Resolution: 518
 Anti-aliasing: 1
 Depth Antialias Strength: 1.0
 Depth Pop: 0.0
+Foreground Scale: 0.5
 Foreground Pop: 1.15
 Midground Pop: 1.05
 Background Pop: 1.05
