@@ -54,6 +54,13 @@ class StereoRuntimeConfig:
     convergence: float = 0.0
     max_disparity_px: float | None = None
     parallax_preset: str = "standard"
+    foreground_shift_scale: float = 1.0
+    midground_shift_scale: float = 1.0
+    background_shift_scale: float = 1.0
+    dynamic_convergence_enabled: bool = False
+    dynamic_convergence_strength: float = 0.0
+    dynamic_convergence_target: float = 0.5
+    dynamic_convergence_alpha: float = 0.85
     layers: int = 2
     occlusion: bool = True
     symmetric: bool = True
@@ -62,7 +69,7 @@ class StereoRuntimeConfig:
     temporal_strength: float = 0.75
     auto_reset_temporal: bool = False
     scene_reset_threshold: float = 0.22
-    foreground_scale: float = 0.0
+    depth_pop: float = 0.0
     depth_antialias_strength: float = 0.0
     edge_threshold: float = 0.04
     edge_dilation: int = 2
@@ -223,11 +230,18 @@ def runtime_config_from_d2s_settings(
         convergence=float(settings.get("Convergence", 0.0)),
         max_disparity_px=_optional_float_setting(settings, "Max Disparity Px", "Max Disparity PX"),
         parallax_preset=str(settings.get("Parallax Budget Preset", settings.get("Parallax Preset", "standard"))),
+        foreground_shift_scale=float(settings.get("Foreground Pop", 1.0)),
+        midground_shift_scale=float(settings.get("Midground Pop", 1.0)),
+        background_shift_scale=float(settings.get("Background Pop", 1.0)),
+        dynamic_convergence_enabled=_to_bool(settings.get("Dynamic Convergence", settings.get("Dynamic Convergence Enabled", False))),
+        dynamic_convergence_strength=float(settings.get("Dynamic Convergence Strength", 0.0)),
+        dynamic_convergence_target=float(settings.get("Dynamic Convergence Target", 0.5)),
+        dynamic_convergence_alpha=float(settings.get("Dynamic Convergence Alpha", 0.85)),
         temporal=_to_bool(settings.get("Temporal", True)),
         temporal_strength=float(settings.get("Temporal Strength", 0.75)),
         auto_reset_temporal=_to_bool(settings.get("Auto Scene Reset", settings.get("Auto Reset Temporal", True))),
         scene_reset_threshold=float(settings.get("Scene Reset Threshold", 0.22)),
-        foreground_scale=float(settings.get("Foreground Scale", 0.0)),
+        depth_pop=float(settings.get("Depth Pop", 0.0)),
         depth_antialias_strength=float(settings.get("Depth Antialias Strength", settings.get("Anti-aliasing", 0.0))),
         edge_threshold=float(settings.get("Edge Threshold", 0.04)),
         edge_dilation=int(settings.get("Edge Dilation", 2)),
@@ -241,6 +255,7 @@ def runtime_config_from_d2s_settings(
         debug_output=_to_bool(settings.get("Debug Stereo Output", False)),
         profile_sync=_to_bool(settings.get("Depth Profile Sync", settings.get("Profile Sync", False))),
     )
+
 
 
 def _optional_float_setting(settings: dict[str, Any], *keys: str) -> float | None:
@@ -494,6 +509,9 @@ def openxr_render_config_from_snapshot(
         convergence=convergence,
         max_disparity_px=max_disparity_px,
         parallax_preset=parallax_preset,
+        foreground_shift_scale=1.0 if snapshot.foreground_shift_scale is None else float(snapshot.foreground_shift_scale),
+        midground_shift_scale=1.0 if snapshot.midground_shift_scale is None else float(snapshot.midground_shift_scale),
+        background_shift_scale=1.0 if snapshot.background_shift_scale is None else float(snapshot.background_shift_scale),
         screen_roll=float(screen_roll),
         padding_mode=padding_mode,
     )
@@ -511,14 +529,14 @@ def stereo_config_from_runtime(config: StereoRuntimeConfig) -> "StereoConfig":
     temporal_strength = config.temporal_strength
     auto_reset_temporal = config.auto_reset_temporal
     scene_reset_threshold = config.scene_reset_threshold
-    foreground_scale = config.foreground_scale
+    depth_pop = config.depth_pop
     depth_antialias_strength = config.depth_antialias_strength
     if config.stereo_quality == "fast":
         temporal = False
         temporal_strength = 0.0
         auto_reset_temporal = False
         scene_reset_threshold = 0.0
-        foreground_scale = 0.0
+        depth_pop = 0.0
         depth_antialias_strength = 0.0
 
     return stereo_config_for_preset(
@@ -535,10 +553,17 @@ def stereo_config_from_runtime(config: StereoRuntimeConfig) -> "StereoConfig":
             "convergence": config.convergence,
             "max_disparity_px": config.max_disparity_px,
             "parallax_preset": config.parallax_preset,
+            "foreground_shift_scale": config.foreground_shift_scale,
+            "midground_shift_scale": config.midground_shift_scale,
+            "background_shift_scale": config.background_shift_scale,
+            "dynamic_convergence_enabled": config.dynamic_convergence_enabled,
+            "dynamic_convergence_strength": config.dynamic_convergence_strength,
+            "dynamic_convergence_target": config.dynamic_convergence_target,
+            "dynamic_convergence_alpha": config.dynamic_convergence_alpha,
             "temporal_strength": temporal_strength,
             "auto_reset_temporal": auto_reset_temporal,
             "scene_reset_threshold": scene_reset_threshold,
-            "foreground_scale": foreground_scale,
+            "depth_pop": depth_pop,
             "depth_antialias_strength": depth_antialias_strength,
             "edge_threshold": config.edge_threshold,
             "edge_dilation": config.edge_dilation,

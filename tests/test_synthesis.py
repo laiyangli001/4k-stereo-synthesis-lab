@@ -569,7 +569,7 @@ def test_depth_postprocess_defaults_preserve_output_depth():
     assert torch.equal(result.debug_info["output_depth"], depth)
 
 
-def test_foreground_scale_and_depth_antialias_affect_output_depth():
+def test_depth_pop_and_depth_antialias_affect_output_depth():
     rgb, depth = make_inputs(width=64, height=32)
     scaled = synthesize_stereo(
         rgb,
@@ -580,7 +580,7 @@ def test_foreground_scale_and_depth_antialias_affect_output_depth():
             output_format="depth_map",
             debug_output=True,
             temporal=False,
-            foreground_scale=0.5,
+            depth_pop=0.5,
         ),
     )
     assert not torch.equal(scaled.debug_info["output_depth"], depth)
@@ -1051,17 +1051,17 @@ def test_warp_horizontal_matches_cached_grid_formula():
     actual = warp_horizontal(rgb, shift_px, eye_sign=eye_sign)
     assert torch.allclose(actual, expected, atol=1e-6, rtol=1e-6)
 
-def test_negative_foreground_scale_uses_realtime_compression_without_pow():
-    from stereo_runtime.depth_postprocess import apply_foreground_scale
+def test_negative_depth_pop_uses_realtime_compression_without_pow():
+    from stereo_runtime.depth_postprocess import apply_depth_pop
 
     depth = torch.tensor([[[[0.0, 0.25, 0.5, 0.75, 1.0]]]], dtype=torch.float32)
-    actual = apply_foreground_scale(depth, -0.5)
+    actual = apply_depth_pop(depth, -0.5)
     expected = torch.tensor([[[[0.25, 0.375, 0.5, 0.625, 0.75]]]], dtype=torch.float32)
     assert torch.allclose(actual, expected)
 
     source = ROOT / "src" / "stereo_runtime" / "depth_postprocess.py"
     code = source.read_text(encoding="utf-8")
-    negative_branch = code.index("if scale < 0.0:")
+    negative_branch = code.index("if depth_pop < 0.0:")
     pow_branch = code.index(".pow(exponent)")
     assert negative_branch < pow_branch
     assert "compressed = centered * (1.0 - strength)" in code[negative_branch:pow_branch]

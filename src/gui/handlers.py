@@ -613,7 +613,7 @@ class GUIHandlerMixin:
                       "紫色": "purple", "橙色": "orange", "青色": "teal", "粉色": "pink", "灰色": "grey"}
             key = cn_map.get(cur, cur.lower() if cur else "system")
             self.theme_dd.value = t.get(key, key) if self.locale == "CN" else key.capitalize()
-            self._fit_window_to_content()
+            self._fit_window_to_content(resize_window=True)
             self.page.update()
 
     # ── i18n text update ──
@@ -624,12 +624,16 @@ class GUIHandlerMixin:
         self.fp16_cb.label = t["FP16"]
         self.depth_resolution_label.value = t["Depth Resolution:"]
         self.convergence_label.value = t["Convergence:"]
+        self.dynamic_convergence_label.value = t["Dynamic Convergence:"]
         self.depth_strength_label.value = t["Depth Strength:"]
         self.depth_quick_label.value = t["Depth Quick:"]
         depth_quick_key = self._display_to_depth_quick(self.depth_quick_dd.value)
         self.depth_quick_dd.options = [t["Soft"], t["Standard"], t["Enhanced"]]
         self.depth_quick_dd.value = self._depth_quick_to_display(depth_quick_key)
-        self.foreground_scale_label.value = t["Foreground Scale:"]
+        self.depth_pop_label.value = t["Depth Pop:"]
+        self.foreground_pop_label.value = t["Foreground Pop:"]
+        self.midground_pop_label.value = t["Midground Pop:"]
+        self.background_pop_label.value = t["Background Pop:"]
         self.antialiasing_label.value = t["Anti-aliasing:"]
         self.stereo_preset_label.value = t["Stereo Mode:"]
         preset_key = self._display_to_preset(self.stereo_preset_dd.value)
@@ -645,6 +649,10 @@ class GUIHandlerMixin:
         parallax_budget_key = self._display_to_parallax_budget(self.parallax_budget_dd.value)
         self.parallax_budget_dd.options = self._parallax_budget_options()
         self.parallax_budget_dd.value = self._parallax_budget_to_display(parallax_budget_key)
+        self.depth_separation_label.value = t["Depth Separation:"]
+        depth_separation_key = self._display_to_depth_separation(self.depth_separation_dd.value)
+        self.depth_separation_dd.options = self._depth_separation_options()
+        self.depth_separation_dd.value = self._depth_separation_to_display(depth_separation_key)
         self.temporal_strength_label.value = t["Temporal Strength:"]
         self.scene_reset_label.value = t["Scene Threshold:"]
         self.edge_dilation_label.value = t["Edge Dilation:"]
@@ -763,10 +771,12 @@ class GUIHandlerMixin:
             (self.model_size_dd, "tooltip_model_size"),
             (self.depth_res_dd, "tooltip_depth_res"),
             (self.convergence_dd, "tooltip_convergence"),
+            (self.dynamic_convergence_strength_dd, "tooltip_dynamic_convergence_strength"),
             (self.depth_strength_dd, "tooltip_depth_strength"),
             (self.depth_quick_dd, "tooltip_depth_quick"),
             (self.stereo_preset_dd, "tooltip_stereo_preset"),
             (self.parallax_budget_dd, "tooltip_parallax_budget"),
+            (self.depth_separation_dd, "tooltip_depth_separation"),
             (self.temporal_strength_dd, "tooltip_temporal_strength"),
             (self.scene_reset_dd, "tooltip_scene_reset"),
             (self.edge_dilation_dd, "tooltip_edge_dilation"),
@@ -776,7 +786,10 @@ class GUIHandlerMixin:
             (self.anaglyph_dd, "tooltip_anaglyph"),
             (self.cross_eyed_cb, "tooltip_cross_eyed"),
             (self.advanced_stereo_cb, "tooltip_advanced_stereo"),
-            (self.foreground_scale_dd, "tooltip_foreground_scale"),
+            (self.depth_pop_dd, "tooltip_depth_pop"),
+            (self.foreground_pop_dd, "tooltip_foreground_pop"),
+            (self.midground_pop_dd, "tooltip_midground_pop"),
+            (self.background_pop_dd, "tooltip_background_pop"),
             (self.antialiasing_dd, "tooltip_antialiasing"),
             (self.device_dd, "tooltip_device"),
             (self.advanced_device_cb, "tooltip_advanced_device_options"),
@@ -1021,9 +1034,14 @@ class GUIHandlerMixin:
         self.depth_strength_dd.value = f"{values['depth_strength']:.2f}"
         self.depth_quick_dd.value = self._depth_quick_to_display(values["depth_quick"])
         self.convergence_dd.value = f"{values['convergence']:.2f}"
+        self.dynamic_convergence_strength_dd.value = f"{values.get('dynamic_convergence_strength', 0.0):.2f}"
         self.temporal_strength_dd.value = f"{values['temporal_strength']:.2f}"
         self.scene_reset_dd.value = f"{values['scene_reset_threshold']:.2f}"
-        self.foreground_scale_dd.value = f"{values['foreground_scale']:.1f}"
+        self.depth_pop_dd.value = f"{values['depth_pop']:.1f}"
+        self.depth_separation_dd.value = self._depth_separation_to_display(values["depth_separation"])
+        self.foreground_pop_dd.value = f"{values['foreground_pop']:.2f}"
+        self.midground_pop_dd.value = f"{values['midground_pop']:.2f}"
+        self.background_pop_dd.value = f"{values['background_pop']:.2f}"
         self.antialiasing_dd.value = str(values["antialiasing"])
         self.edge_dilation_dd.value = str(values["edge_dilation"])
         self.mask_feather_dd.value = str(values["mask_feather_radius"])
@@ -1032,12 +1050,22 @@ class GUIHandlerMixin:
         self.cross_eyed_cb.value = bool(values.get("cross_eyed", False))
         for ctrl in (
             self.stereo_quality_dd, self.parallax_budget_dd, self.depth_strength_dd, self.depth_quick_dd,
-            self.convergence_dd, self.temporal_strength_dd,
-            self.scene_reset_dd, self.foreground_scale_dd, self.antialiasing_dd, self.edge_dilation_dd,
+            self.convergence_dd, self.dynamic_convergence_strength_dd, self.temporal_strength_dd,
+            self.scene_reset_dd, self.depth_pop_dd, self.depth_separation_dd, self.foreground_pop_dd,
+            self.midground_pop_dd, self.background_pop_dd, self.antialiasing_dd, self.edge_dilation_dd,
             self.mask_feather_dd, self.edge_threshold_dd, self.hole_fill_mode_dd, self.cross_eyed_cb,
         ):
             self._safe_update(ctrl)
         return True
+
+    def on_depth_separation_change(self, e=None):
+        key = self._display_to_depth_separation(self.depth_separation_dd.value)
+        foreground, midground, background = self._depth_separation_values(key)
+        self.foreground_pop_dd.value = f"{foreground:.2f}"
+        self.midground_pop_dd.value = f"{midground:.2f}"
+        self.background_pop_dd.value = f"{background:.2f}"
+        self._safe_update(self.foreground_pop_dd, self.midground_pop_dd, self.background_pop_dd)
+        self._schedule_stereo_hot_save()
 
     def on_advanced_stereo_change(self, e):
         self._sync_advanced_stereo_visibility()

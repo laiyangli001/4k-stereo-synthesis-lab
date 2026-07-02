@@ -4,8 +4,8 @@ This folder contains implementation notes, parameter guides, reports, and host A
 
 These files are retained for historical context only. They are not the current normative runtime specification. For current behavior, prefer:
 
-- [../../28-Realtime-2d-to-3d-specification.md](../../28-Realtime-2d-to-3d-specification.md)
-- [../../26-desktop2stereo-engineering-design-specification.md](../../26-desktop2stereo-engineering-design-specification.md)
+- [../../01-Realtime-2d-to-3d-specification.md](../../01-Realtime-2d-to-3d-specification.md)
+- [../../01-desktop2stereo-engineering-design-specification.md](../../01-desktop2stereo-engineering-design-specification.md)
 - [../../13-realtime-stereo-parameter-guide.md](../../13-realtime-stereo-parameter-guide.md)
 - [../../00-api-handoff-progress.md](../../00-api-handoff-progress.md)
 

@@ -2,18 +2,18 @@
 
 日期：2026-06-25
 
-本文在 `docs/28-Realtime-2d-to-3d-specification.md` 的正式最终运行时流程规范基础上，对照当前工程代码，定义 Desktop2Stereo 的完整工程设计规范。本文关注模块职责、现有实现路径、硬件加速边界、数据契约、热更新、调试与后续演进。历史 `docs/25-2d-to-3d-runtime-specification.md` 已作废，仅作为背景记录。
+本文在 `docs/01-Realtime-2d-to-3d-specification.md` 的正式最终运行时流程规范基础上，对照当前工程代码，定义 Desktop2Stereo 的完整工程设计规范。本文关注模块职责、现有实现路径、硬件加速边界、数据契约、热更新、调试与后续演进。历史 `docs/25-2d-to-3d-runtime-specification.md` 已作废，仅作为背景记录。
 
-## 文档定位与 docs/28 对齐方式
+## 文档定位与 docs/01 对齐方式
 
-`docs/28-Realtime-2d-to-3d-specification.md` 是正式最终运行时流程规范，负责定义目标语义和十一阶段处理流程。本文不重复定义另一套运行时规范，而是按 docs/28 的流程顺序记录当前工程实现、迁移边界、兼容清理项和验证责任。
+`docs/01-Realtime-2d-to-3d-specification.md` 是正式最终运行时流程规范，负责定义目标语义和十一阶段处理流程。本文不重复定义另一套运行时规范，而是按 docs/01 的流程顺序记录当前工程实现、迁移边界、兼容清理项和验证责任。
 
 写作规则：
 
 ```text
-1. docs/28 决定应该做什么，以及每个阶段的输入/输出语义。
+1. docs/01 决定应该做什么，以及每个阶段的输入/输出语义。
 2. docs/26 记录当前工程由哪些模块实现这些阶段，以及哪些兼容路径还没有清理。
-3. 若 docs/26 和 docs/28 的运行时语义冲突，以 docs/28 为准，并回写 docs/26。
+3. 若 docs/26 和 docs/01 的运行时语义冲突，以 docs/01 为准，并回写 docs/26。
 4. docs/00-api-handoff-progress.md 只记录当前推进状态、任务清单和验证结果，不承载详细工程规范。
 ```
 
@@ -83,17 +83,17 @@ runtime_q 只保留最新 runtime result，避免渲染端积压。
 CUDA runtime 后段慢于 capture cadence 时，必须按 GPU 完成节奏推进 latest frame，不能无限异步排队。
 ```
 
-## docs/28 流程到工程实现映射
+## docs/01 流程到工程实现映射
 
-| docs/28 阶段 | 当前工程实现 | 当前状态 / 迁移边界 |
+| docs/01 阶段 | 当前工程实现 | 当前状态 / 迁移边界 |
 |---|---|---|
 | 步骤 1：Capture Input | `src/capture/session.py`, `src/capture/runners.py`, `src/capture/types.py`, `src/capture/backends/*` | 已有 `CapturedFrame` metadata、copy mode、source/capture size 记录；真实 CUDA/ROCm zero-copy 仍需硬件验证 |
 | 步骤 2：Resolve Render Size | `src/stereo_runtime/render_size.py`, `src/stereo_runtime/pipeline.py`, GUI Render Scale 配置 | 已按 4K/3K/2K/1K 固定 scale 档位解析；4K级输入按比例缩放并保持输入宽高比；历史 numeric / short alias Render Scale 输入已清理并有测试防回归 |
 | 步骤 3：Resize RGB To Render Size | `src/capture/preprocess.py`, `src/stereo_runtime/pipeline.py` | 已在 pipeline 边界把 capture frame 解析到 render_size；跨设备 fallback 仍需继续扩展验证矩阵 |
 | 步骤 4：Depth Estimation | `src/stereo_runtime/depth_provider.py`, `src/stereo_runtime/depth_onnx_provider.py`, `src/stereo_runtime/providers/*`, `model_registry.py` | 已支持多 provider / backend；provider 内部尺寸可以不同，但输出必须回到 render_size；实时 provider 主路径不得 CPU numpy 往返，TensorRT/MIGraphX 需区分 GPU event timing 和 CPU enqueue timing |
-| 步骤 5：Depth Postprocess | `src/stereo_runtime/runtime.py`, `src/stereo_runtime/synthesis.py` | 当前使用 normalized / relative depth 处理和轻量 postprocess；不能改写为 metric Z 路径 |
-| 步骤 6：Resolve Parallax Budget | `src/stereo_runtime/parallax.py`, `adapter.py`, `settings_snapshot.py` | 已有预算表、短边插值和超宽保护；legacy multiplier 只应留在显式兼容入口 |
-| 步骤 7：Disparity Field | `src/stereo_runtime/synthesis.py`, `baseline_shift.py`, `openxr_render.py` | 主语义为 `depth_response * max_disparity_px * depth_strength`；near/far、response 和 depth_strength 必须在 metadata / shader uniforms 中可追踪 |
+| 步骤 5：Depth Postprocess | `src/stereo_runtime/runtime.py`, `src/stereo_runtime/synthesis.py`, `src/stereo_runtime/depth_postprocess.py` | 当前使用 normalized / relative depth 处理和轻量 postprocess；`Depth Pop` 是公开的居中深度曲线入口；不能改写为 metric Z 路径 |
+| 步骤 6：Resolve Parallax Budget | `src/stereo_runtime/parallax.py`, `adapter.py`, `settings_snapshot.py` | 已有预算表、短边插值和超宽保护；legacy multiplier 只应留在显式兼容入口；`Depth Separation Preset` 与 FG/MG/BG Pop 是预算之后的分层视差倍率控制，不替代预算 |
+| 步骤 7：Disparity Field | `src/stereo_runtime/synthesis.py`, `baseline_shift.py`, `openxr_render.py` | 主语义为 `depth_response * max_disparity_px * depth_strength`，再由 depth-pop / FG-MG-BG layer pop 调整不同深度区域的位移倍率；near/far、response、depth_strength、convergence、dynamic_convergence_strength 和 layer pop 必须在 metadata / shader uniforms 中可追踪 |
 | 步骤 8：Stereo Warp | `src/stereo_runtime/synthesis.py`, `baseline_shift.py`, `layers.py`, OpenXR shader paths | full synthesis 已有 baseline/layered DIBR；OpenXR D3D11 direct shader 仍需追平 OpenGL direct 的核心 DIBR 质量语义 |
 | 步骤 9：Mask and Hole Fill | `src/stereo_runtime/synthesis.py`, `layers.py` | 已有 edge-aware / directional fill 路径；AI inpainting 只作为未来离线/质量候选 |
 | 步骤 10：Temporal Stabilization | `src/stereo_runtime/runtime.py`, `pipeline.py`, `settings_snapshot.py` | 已有 scene/render_size/source/settings reset 机制；temporal 只做稳定，不改变 parallax budget |
@@ -132,7 +132,7 @@ GUI 设计规则：
 on_stereo_hot_param_change()
 -> _schedule_stereo_hot_save()
 -> _save_stereo_hot_params()
--> 更新 settings.yaml 中 Stereo Preset / Stereo Quality / Convergence / Depth Strength / Parallax Budget / Temporal / Hole Fill / Edge 等规范字段
+-> 更新 settings.yaml 中 Stereo Preset / Stereo Quality / Convergence / Dynamic Convergence Strength / Depth Strength / Parallax Budget / Depth Pop / Depth Separation / FG-MG-BG Pop / Temporal / Hole Fill / Edge 等规范字段
 ```
 
 后续规范要求：
@@ -164,8 +164,8 @@ src/settings.yaml
 | Runtime target | `Run Mode` | Local Viewer / 3D Monitor / Stream / OpenXR Link 等 GUI 运行目标 |
 | Depth model | `Depth Model`, `Depth Resolution`, `Model List` | 模型选择和推理尺寸 |
 | Device/backend | `Computing Device`, `TensorRT`, `MIGraphX`, `CoreML`, `OpenVINO`, `torch.compile`, `FP16` | 平台加速选择 |
-| Stereo | `Stereo Preset`, `Stereo Quality`, `Synthetic View`, `Depth Strength`, `Convergence`, `Parallax Budget Preset`, `Max Disparity Px` | 当前规范立体参数；Depth Strength 是用户连续强度 gain，Parallax Budget 是档位预算，Convergence 是零视差平面 |
-| Synthesis postprocess | `Temporal Strength`, `Scene Reset Threshold`, `Edge Dilation`, `Mask Feather Radius`, `Hole Fill Mode`, `Edge Threshold`, `Foreground Scale`, `Anti-aliasing` | 稳定、mask、补洞、depth postprocess |
+| Stereo | `Stereo Preset`, `Stereo Quality`, `Synthetic View`, `Depth Strength`, `Convergence`, `Dynamic Convergence Strength`, `Parallax Budget Preset`, `Max Disparity Px`, `Depth Separation Preset`, `Foreground Pop`, `Midground Pop`, `Background Pop` | 当前规范立体参数；Depth Strength 是用户连续强度 gain，Parallax Budget 是档位预算，Convergence 是静态零视差平面，Dynamic Convergence Strength 为 0.00 时关闭动态会聚、大于 0.00 时启用动态会聚 |
+| Synthesis postprocess | `Depth Pop`, `Temporal Strength`, `Scene Reset Threshold`, `Edge Dilation`, `Mask Feather Radius`, `Hole Fill Mode`, `Edge Threshold`, `Anti-aliasing` | 深度曲线、稳定、mask、补洞、depth postprocess |
 | Output | `Display Mode`, `Anaglyph Method`, `Cross Eyed`, `Fill 16:9`, `Fix Viewer Aspect`, `VSync` | 本地/推流封装与显示 |
 | OpenXR | `XR Preview Window`, `XR Headset Model`, `Controller Model`, `Environment Model` | OpenXR viewer 行为；头显型号解析推荐观看距离并按 60° 水平视角自动计算屏幕尺寸 |
 | Streaming | `Stream Protocol`, `Streamer Port`, `Stream Quality`, `Stream Key`, `Stereo Mix`, `CRF`, `Audio Delay` | 网络推流配置 |
@@ -793,7 +793,7 @@ OpenXR `xr_wait` / `xr_poll` / `xr_submit` / present 时间属于设备运行时
 
 ### OpenXR 虚拟屏幕、头显预设与 OSD 规范
 
-头显屏幕预设属于 OpenXR presentation 层，不改变 runtime 立体合成语义。GUI 只保存 `XR Headset Model`，运行时通过 `src/utils/xr_headset_presets.py` 解析设备推荐观看距离，并按统一水平视角计算屏幕尺寸。
+头显屏幕预设属于 OpenXR presentation 层，不改变 runtime 立体合成语义。GUI 只保存 `XR Headset Model`，运行时通过 `src/utils/xr_headset_presets.py` 解析设备推荐观看距离，并按统一水平视角计算屏幕尺寸。头显焦距/屏幕尺寸不得替代 `Convergence`、`Dynamic Convergence Strength`、`Parallax Budget`、`Depth Separation` 或 FG/MG/BG Pop；这些仍按立体参数表独立调节。
 
 当前规则：
 
@@ -952,7 +952,7 @@ GUI / API
 -> runtime result debug_info 记录 active_settings_version
 ```
 
-参数分级遵循 `docs/28-Realtime-2d-to-3d-specification.md` 中的 Hot Reload / Pipeline Rebuild / Session Restart 表。
+参数分级遵循 `docs/01-Realtime-2d-to-3d-specification.md` 中的 Hot Reload / Pipeline Rebuild / Session Restart 表。
 
 RuntimeSettingsSnapshot 分级执行规则：
 
@@ -1054,6 +1054,12 @@ hole_fill_backend
 occlusion_mask_backend
 depth_response
 convergence
+dynamic_convergence_strength
+depth_pop
+depth_separation_preset
+foreground_pop
+midground_pop
+background_pop
 hole_fill_mode
 edge_threshold
 edge_dilation
@@ -1093,15 +1099,16 @@ scripts/tools/openxr_visual_regression.py
 
 ## 兼容清理与迁移边界
 
-兼容清理以 docs/28 的最终运行时合同为目标；新代码默认不再增加别名、debug-only 字段或旧参数链路。历史兼容只允许留在明确命名的 import/parsing adapter 或 legacy fallback 中。
+兼容清理以 docs/01 的最终运行时合同为目标；新代码默认不再增加别名、debug-only 字段或旧参数链路。历史兼容只允许留在明确命名的 import/parsing adapter 或 legacy fallback 中。
 
 优先清理项：
 
 | 清理项 | 目标状态 | 备注 |
 |---|---|---|
-| RuntimeSettingsSnapshot 字段别名 | 边界字段只保留 `parallax_budget_preset`、`temporal_enabled` 等 docs/28 名称 | `parallax_preset`、`temporal` 等旧名只允许在 legacy parser 中转换 |
+| RuntimeSettingsSnapshot 字段别名 | 边界字段只保留 `parallax_budget_preset`、`temporal_enabled` 等 docs/01 名称 | `parallax_preset`、`temporal` 等旧名只允许在 legacy parser 中转换 |
 | debug-only 兼容键 | host/viewer 消费结构化 result 字段 | `runtime_output_*`、flat OpenXR `openxr_*` shader-uniform debug keys 只作为短期 fallback |
-| legacy parallax multiplier | normalized-depth 主路径只使用 `max_disparity_px` / `parallax_budget_preset` | `ipd_mm`、`stereo_scale`、`max_shift_ratio`、`depth_strength` 不再作为核心强度链 |
+| legacy parallax multiplier | normalized-depth 主路径只使用 `max_disparity_px` / `parallax_budget_preset`，`depth_strength` 只作为规范 gain 保留 | `ipd_mm`、`stereo_scale`、`max_shift_ratio` 不再作为核心强度链；旧 `Foreground Scale` 不再作为公开 GUI/config 字段，统一收敛为 `Depth Pop` |
+| Dynamic Convergence checkbox | GUI 不再提供独立启用勾选框，布尔启停由 `Dynamic Convergence Strength` 推导 | `0.00` 表示关闭并使用静态 `Convergence`；大于 `0.00` 表示启用动态会聚强度 |
 | render-size/render-scale 旧路径 | 用户侧只保留固定 scale 档位语义，并保持输入宽高比 | 删除历史 numeric scale thresholds、`native/fixed/dynamic` 用户策略语言、固定输出分辨率映射和非 4K 连续缩放行为 |
 | D3D11 native direct shader | 与 OpenGL RGB+depth direct 的核心 DIBR 语义一致 | 独立 cleanup track，完成前不得删除 OpenGL-only fallback 假设 |
 
@@ -1109,22 +1116,78 @@ scripts/tools/openxr_visual_regression.py
 
 ## 当前实现与规范符合状态
 
-本文以 `docs/28-Realtime-2d-to-3d-specification.md` 为正式最终运行时语义来源。若本文和 `docs/28` 在 parallax budget、render_size、OpenXR 输出语义上出现差异，以 `docs/28` 为准，并回写本文保持一致。历史 `docs/25-2d-to-3d-runtime-specification.md` 已作废，不再作为当前规范裁决来源。
+本文以 `docs/01-Realtime-2d-to-3d-specification.md` 为正式最终运行时语义来源。若本文和 `docs/01` 在 parallax budget、render_size、OpenXR 输出语义上出现差异，以 `docs/01` 为准，并回写本文保持一致。历史 `docs/25-2d-to-3d-runtime-specification.md` 已作废，不再作为当前规范裁决来源。
 
 | 领域 | 当前状态 | 剩余要求 |
 |---|---|---|
-| Parallax formula | 已有 `resolve_parallax_budget(render_width, render_height, preset)`，normalized-depth 主路径使用 `max_disparity_px` / `parallax_budget_preset` 解析档位预算，并使用 `depth_strength` 连续缩放实际视差位移；旧 `IPD/stereo_scale/max_shift_ratio` 配置、热更新和 adapter 兼容入口已清理 | 继续通过测试防止旧强度链回流；Depth Strength 保留为用户可调强度 gain，不作为旧物理 IPD 链的一部分 |
+| Parallax formula | 已有 `resolve_parallax_budget(render_width, render_height, preset)`，normalized-depth 主路径使用 `max_disparity_px` / `parallax_budget_preset` 解析档位预算，并使用 `depth_strength` 连续缩放实际视差位移；`Depth Pop` 调整居中深度曲线，`Depth Separation Preset` 与 Foreground/Midground/Background Pop 在预算之后做分层位移倍率；`Dynamic Convergence Strength=0.00` 使用静态 `Convergence`，大于 0.00 时启用动态会聚 | 继续通过测试防止旧强度链回流；Depth Strength 保留为用户可调强度 gain，不作为旧物理 IPD 链的一部分；分层 Pop 不得替代 parallax budget |
 | RuntimeSettingsSnapshot | 已有 `RuntimeSettingsSnapshot`、`settings_update_q`、帧边界应用、热更新分级、结构化 result 字段 | GUI live hot-save 仍需进一步收敛为直接发送 snapshot；settings.yaml + StereoHotReloader 只保留为兼容路径 |
 | Capture metadata | 已有 `CapturedFrame` / `FrameCopyMode`，event/polling runner 会携带 source、device、dtype、copy_mode、capture_size 等 metadata，并进入 runtime debug | 真实硬件 CUDA/ROCm zero-copy 仍需设备验证后才能把路径标成 true zero-copy |
 | Capture preprocess device contract | 已显式处理 numpy / CPU tensor / CUDA tensor / ROCm tensor 形态，并记录 origin/output device 与 transfer metadata | 跨设备 fallback 和硬件路径仍需按目标机器补充验证矩阵 |
-| OpenXR direct uniforms | 已输出规范 `shader_uniforms`，字段以 `max_disparity_px`、`depth_strength`、`depth_response`、`convergence`、`render_size`、`screen_roll` 为主；OpenGL 与 D3D11 RGB+D direct 调用层均按 `max_disparity_px / render_width` 派生每眼 shader offset，并使用同一 `depth_strength` 放大实际视差位移，不再消费 IPD / Stereo Scale / Max Shift Ratio 旧强度链 | D3D11 native direct shader 仍需追平 OpenGL direct shader 的完整 DIBR 质量语义；这是独立 follow-up |
-| OpenXR headset screen presets / OSD | 已新增 `XR Headset Model` 设置和 `src/utils/xr_headset_presets.py`，按推荐距离 + 60° 水平视角自动计算屏幕尺寸；`_screen_view_distance()` 统一用户可见距离；preset OSD 显示 5 秒且不被 live distance 刷新；Y 恢复同一 preset 会重新显示 OSD；右手柄保留 sphere-orbit 并自动朝向头部 | 后续如增加水平视角 GUI slider，只应调整统一 FOV 参数或显式设置，不应回到每个预设手工维护宽高 |
+| OpenXR direct uniforms | 已输出规范 `shader_uniforms`，字段以 `max_disparity_px`、`depth_strength`、`depth_response`、`convergence`、`dynamic_convergence_strength`、layer pop、`render_size`、`screen_roll` 为主；OpenGL 与 D3D11 RGB+D direct 调用层均按 `max_disparity_px / render_width` 派生每眼 shader offset，并使用同一 `depth_strength` 放大实际视差位移，不再消费 IPD / Stereo Scale / Max Shift Ratio 旧强度链 | D3D11 native direct shader 仍需追平 OpenGL direct shader 的完整 DIBR 质量语义；OpenXR 头显屏幕几何不得反向修改 convergence/parallax 参数 |
+| OpenXR headset screen presets / OSD | 已新增 `XR Headset Model` 设置和 `src/utils/xr_headset_presets.py`，按推荐距离 + 60° 水平视角自动计算屏幕尺寸；`_screen_view_distance()` 统一用户可见距离；preset OSD 显示 5 秒且不被 live distance 刷新；Y 恢复同一 preset 会重新显示 OSD；右手柄保留 sphere-orbit 并自动朝向头部；头显屏幕预设只影响 presentation geometry | 后续如增加水平视角 GUI slider，只应调整统一 FOV 参数或显式设置，不应回到每个预设手工维护宽高；屏幕几何仍不得替代 `Convergence`、`Dynamic Convergence Strength`、`Parallax Budget`、`Depth Separation` 或 FG/MG/BG Pop |
 | GPU texture upload | 已抽出共享 `CudaGlTextureUploader`，OpenXR runtime eye 与本地 viewer runtime RGBA texture 复用同一 CUDA/GL upload 语义；image texture 优先、PBO fallback、CPU fallback 红色告警 | 继续真机验证 CUDA/GL image texture 失败根因和各显示模式 fallback 日志；RGB+depth direct texture path 可按同一 uploader 继续收敛 |
 | Depth provider GPU timing / zero-copy | TensorRT native 已记录真实 CUDA event timing；MIGraphX 构建已导入 ROCm7 FP8-first/FP16 fallback/force-FP32 skip 规则；TensorRT ORT CPU staging 已作为下一优化目标记录 | TensorRT ORT / ONNX Runtime realtime provider 仍需移除 CPU numpy input/output 往返，保持 iobinding output 在 GPU 并直接返回 CUDA tensor |
 | Render Size / 4K scale tier | 已收敛为固定 scale 档位 Render Scale：非 4K 保持 capture_size；4K 级输入按 4K/3K/2K/1K 稳定 scale 档位解析，并保持横屏、竖屏、16:10、DCI 4K、常见 4K 超宽比例；判断排除面积不足的窄高/1440p 超宽；旧 numeric / short alias Render Scale 输入已清理为默认回退 | 继续通过测试防止重新引入 `0.75`、`75%`、`2K` 等用户侧别名；无新的运行时语义待办 |
 | Runtime scheduling / backpressure | 已确认 capture 前段可到高刷 cadence，完整 CUDA runtime 后段若无 GPU 完成边界会因异步队列积压反压 WGC / CUDA interop；规范要求 latest-frame、raw overwrite/drop 和 `D2S_RUNTIME_SYNC_AFTER_FRAME=auto` 的 CUDA runtime 同步策略 | 继续用真实高刷显示器验证 CUDA/ROCm/非 CUDA 后端矩阵；不得把该问题误归因到 OpenXR presentation target |
-| Debug / result contract | `StereoRuntimeResult` / `OpenXRRuntimeResult` 已暴露 output/timing/provider 结构化字段；每帧 debug_info 已补齐 application_runtime_target、stereo_synthesis_mode、transport、output_transport、capture/render/depth size 和 active settings metadata | debug-only 兼容键仍按兼容清理表逐步移除；host/viewer 新消费路径应继续优先读结构化字段 |
+| Debug / result contract | `StereoRuntimeResult` / `OpenXRRuntimeResult` 已暴露 output/timing/provider 结构化字段；每帧 debug_info 已补齐 application_runtime_target、stereo_synthesis_mode、transport、output_transport、capture/render/depth size、active settings metadata、dynamic convergence、Depth Pop 和 FG/MG/BG Pop 诊断字段 | debug-only 兼容键仍按兼容清理表逐步移除；host/viewer 新消费路径应继续优先读结构化字段 |
 | Network stream | MJPEG/legacy stream 已消费 packed frame，并引入 `EncoderProfile` 描述 transport 侧 resize、pixel format、quality/FPS 等 | RTMP/更低延迟编码仍是后续工程；不能重新定义立体参数语义 |
+
+## 未来实现目标
+
+以下目标来自 `docs/31-directml-fallback-and-d3d11-d3d12-bridge-survey.md`、`docs/32-macos-zero-copy-capture-inference-survey.md` 和 `docs/33-quality-buffered-output-feasibility-report.md`。它们是后续工程目标，不改变当前默认实时路径。
+
+### Windows DirectML 兜底与 D3D11-D3D12 桥接
+
+短期目标是新增 `DirectMLDepthProvider`，让没有 CUDA / ROCm / XPU 的 Windows GPU 可以通过 ONNX Runtime `DmlExecutionProvider` 运行固定尺寸 ONNX 深度模型。该阶段允许 CPU/Numpy 输入进入 DirectML GPU 推理，但必须明确标注不是捕获零拷贝。
+
+长期目标是原生 D3D11/D3D12/DirectML 零 CPU 回读链路：
+
+```text
+DXGI / Windows Graphics Capture D3D11 texture
+-> NT shared handle / D3D12 OpenSharedHandle
+-> D3D12 compute preprocess: resize / normalize / layout transform
+-> ID3D12Resource tensor buffer
+-> ONNX Runtime DirectML Device Tensor / IoBinding
+```
+
+约束：`onnxruntime-gpu`、`onnxruntime-directml` 和 `onnxruntime` 不应在同一发行包里混装并假设 provider 同时可用；应按 NVIDIA / DirectML / CPU 分发行策略管理。只有完整链路包含 D3D11 texture、D3D12 tensor bridge 和 DirectML inference 时，才允许命名为 Windows DirectML pipeline。
+
+### macOS ScreenCaptureKit 到 Metal/CoreML 零 CPU 回读
+
+当前 macOS 路线是 ScreenCaptureKit/CoreGraphics 到 CPU buffer，再上传到 PyTorch MPS；这是 MPS GPU 推理，不是捕获到推理零拷贝。未来目标是原生 bridge：
+
+```text
+ScreenCaptureKit
+-> CVPixelBuffer / IOSurface
+-> CVMetalTextureCacheCreateTextureFromImage
+-> MTLTexture
+-> Metal preprocess
+-> CoreML or MPSGraph inference
+-> Python bridge depth output
+```
+
+首版验证应选择 Distill Depth / Distill-Any-Depth Base 转 CoreML，先跑通 capture -> Metal preprocess -> CoreML depth 输出闭环；InfiniDepth CoreML 转换风险高，不进入首版范围。完整实现建议封装 `MacOSMetalDepthBridge.start() / next_depth() / stop()`，由 native bridge 管理 Metal/CoreML 对象生命周期、同步和资源池。
+
+约束：不得把当前 PyTorch MPS 路线称为零拷贝；不得为了未来零 CPU 回读重写现有可运行 macOS capture provider；完整验证必须在真实 Apple Silicon Mac 上完成。
+
+### 高画质缓冲输出
+
+高画质缓冲输出是可选模式，不覆盖现有 latest-frame 实时模式。它允许输出端按配置延迟 100-500 ms，用 frame window 和 lookahead 提升补洞、边缘稳定和 temporal 质量，适合视频、电影、本地播放器和非交互式桌面内容，不适合游戏、鼠标精确操作或低延迟 VR 交互。
+
+目标架构：
+
+```text
+Realtime mode:
+Capture -> runtime latest-frame -> OpenXR / local output
+
+Quality buffered mode:
+Capture -> timestamped frame window -> high quality synthesis -> delayed presentation -> OpenXR / local output / 3D monitor
+```
+
+缓存规则：实时高画质缓冲严禁把画面帧落盘；优先 GPU resident buffer，其次 system memory ring buffer。GPU 和内存都无法稳定满足目标延迟/帧窗口时，应判定高画质缓冲不可用并提示用户降低延迟、分辨率或补洞质量，不能自动退化为硬盘缓存。
+
+补洞目标应重新评估为 edge-aware fill、layered DIBR、temporal history fill、future-frame lookahead fill、multi-scale push-pull fallback 和 confidence blend。音频同步必须使用独立音频子系统，优先调研 Windows WASAPI loopback；不得复用 RTMP 现有采集作为 OpenXR/本地/3D 显示器的通用音频时钟层。
 
 ## 后续实施优先级
 
@@ -1135,7 +1198,11 @@ scripts/tools/openxr_visual_regression.py
 5. 做 CUDA/ROCm capture zero-copy 硬件验证，只有实测无 CPU 中转后才允许把 metadata 标为 `zero_copy=True`。
 6. 做 runtime scheduling/backpressure 回归验证：CUDA 默认同步、latest-frame overwrite/drop、非 CUDA 后端无误触发。
 7. 清理兼容冗余：旧 snapshot/API 字段、debug-only 兼容字段；legacy parallax 乘数字段和 render-scale 数值/短写别名已清理，后续只需防回归。
-8. 继续完善 network_stream 的 encoder transport contract，尤其是 RTMP/低延迟编码路径，但保持其只消费 packed synthesis 输出。
+8. 接入 DirectMLDepthProvider 作为 Windows 非 CUDA/ROCm/XPU GPU 的短期 ONNX Runtime 兜底，并明确该阶段不是捕获零拷贝。
+9. 验证 Windows D3D11 texture -> D3D12 resource -> DirectML IoBinding 的原生零 CPU 回读链路。
+10. 在真实 Apple Silicon Mac 上验证 ScreenCaptureKit -> Metal preprocess -> CoreML Distill Depth 的 macOS 零 CPU 回读原型。
+11. 增加可选高画质缓冲输出骨架，默认关闭，先支持固定延迟、本地/OpenXR 共用 presentation scheduler，禁止实时帧落盘。
+12. 继续完善 network_stream 的 encoder transport contract，尤其是 RTMP/低延迟编码路径，但保持其只消费 packed synthesis 输出。
 
 ## 结论
 

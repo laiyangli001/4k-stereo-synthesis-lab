@@ -509,6 +509,13 @@ _TEMPORAL_RESET_HOT_RELOAD_FIELDS = frozenset(
         "max_disparity_px",
         "parallax_preset",
         "parallax_budget_preset",
+        "foreground_shift_scale",
+        "midground_shift_scale",
+        "background_shift_scale",
+        "dynamic_convergence_enabled",
+        "dynamic_convergence_strength",
+        "dynamic_convergence_target",
+        "dynamic_convergence_alpha",
     }
 )
 
@@ -546,6 +553,13 @@ def _add_active_settings_debug_info(debug: dict[str, Any], snapshot: RuntimeSett
         "parallax_preset",
         "parallax_budget_preset",
         "convergence",
+        "foreground_shift_scale",
+        "midground_shift_scale",
+        "background_shift_scale",
+        "dynamic_convergence_enabled",
+        "dynamic_convergence_strength",
+        "dynamic_convergence_target",
+        "dynamic_convergence_alpha",
         "hole_fill_mode",
     ):
         value = getattr(snapshot, field_name)
@@ -559,6 +573,11 @@ def _add_runtime_config_debug_info(debug: dict[str, Any], config: StereoConfig) 
     debug.setdefault("stereo_synthesis_mode", "packed_synthesis")
     debug.setdefault("max_disparity_px", None if config.max_disparity_px is None else float(config.max_disparity_px))
     debug.setdefault("parallax_preset", str(config.parallax_preset))
+    debug.setdefault("convergence", float(config.convergence))
+    debug.setdefault("foreground_shift_scale", float(getattr(config, "foreground_shift_scale", 1.0)))
+    debug.setdefault("midground_shift_scale", float(getattr(config, "midground_shift_scale", 1.0)))
+    debug.setdefault("background_shift_scale", float(getattr(config, "background_shift_scale", 1.0)))
+    debug.setdefault("dynamic_convergence_enabled", bool(getattr(config, "dynamic_convergence_enabled", False)))
 
 
 def _add_depth_contract_debug_info(
@@ -570,6 +589,49 @@ def _add_depth_contract_debug_info(
     provider_size = _provider_size_label(provider_info)
     if provider_size is not None:
         debug["depth_provider_size"] = provider_size
+
+
+def _layered_parallax_enabled(config: Any) -> bool:
+    return any(
+        abs(float(getattr(config, field_name, 1.0)) - 1.0) > 1e-6
+        for field_name in ("foreground_shift_scale", "midground_shift_scale", "background_shift_scale")
+    )
+
+
+def _dynamic_convergence_config_for_depth(runtime: Any, depth: torch.Tensor, stereo_config: Any) -> tuple[Any, dict[str, Any]]:
+    enabled = bool(getattr(stereo_config, "dynamic_convergence_enabled", False))
+    strength = max(0.0, min(1.0, float(getattr(stereo_config, "dynamic_convergence_strength", 0.0))))
+    manual = float(getattr(stereo_config, "convergence", 0.0))
+    if not enabled or strength <= 0.0:
+        runtime._dynamic_convergence_value = None
+        return stereo_config, {"dynamic_convergence_effective": manual}
+    target = max(0.0, min(1.0, float(getattr(stereo_config, "dynamic_convergence_target", 0.5))))
+    alpha = max(0.0, min(0.98, float(getattr(stereo_config, "dynamic_convergence_alpha", 0.85))))
+    measured = _sample_depth_quantile(depth, target)
+    desired = manual + (measured - manual) * strength
+    previous = getattr(runtime, "_dynamic_convergence_value", None)
+    effective = desired if previous is None else float(previous) * alpha + desired * (1.0 - alpha)
+    runtime._dynamic_convergence_value = float(effective)
+    return replace(stereo_config, convergence=float(effective)), {
+        "dynamic_convergence_effective": float(effective),
+        "dynamic_convergence_measured": float(measured),
+        "dynamic_convergence_manual": float(manual),
+        "dynamic_convergence_strength": float(strength),
+        "dynamic_convergence_target": float(target),
+        "dynamic_convergence_alpha": float(alpha),
+    }
+
+
+def _sample_depth_quantile(depth: torch.Tensor, quantile: float, *, max_samples: int = 8192) -> float:
+    tensor = depth.detach().float().clamp(0.0, 1.0).flatten()
+    if tensor.numel() == 0:
+        return 0.0
+    if tensor.numel() > max_samples:
+        stride = max(1, int(tensor.numel() // max_samples))
+        tensor = tensor[::stride]
+    count = int(tensor.numel())
+    index = min(count - 1, max(0, int(round(float(quantile) * float(count - 1)))))
+    return float(torch.sort(tensor).values[index].item())
 
 
 def _provider_size_label(provider_info: dict[str, Any]) -> str | None:
@@ -630,6 +692,7 @@ class StereoRuntime:
         self._pending_temporal_reset_reasons: tuple[str, ...] = ()
         self._last_runtime_perf_log_ts = 0.0
         self._runtime_frame_refresh_log_count = 0
+        self._dynamic_convergence_value: float | None = None
         self.stats = RollingRuntimeStats(maxlen=stats_window)
         self.collect_memory_stats = bool(collect_memory_stats)
 
@@ -736,23 +799,23 @@ class StereoRuntime:
         rgb = torch.zeros((1, 3, int(height), int(width)), device=device, dtype=torch.float32)
         depth = torch.linspace(0.0, 1.0, int(width), device=device, dtype=torch.float32).view(1, 1, 1, int(width)).expand(1, 1, int(height), int(width)).contiguous()
         base = self.stereo_config
-        foreground_scales = {round(float(base.foreground_scale), 3), 0.0, -0.7, 0.5}
+        depth_pop_values = {round(float(base.depth_pop), 3), 0.0, -0.7, 0.5}
         antialias_values = {round(float(base.depth_antialias_strength), 3), 0.0, 2.0}
         configs = []
-        for scale in sorted(foreground_scales):
+        for depth_pop in sorted(depth_pop_values):
             for antialias in sorted(antialias_values):
                 configs.append(
                     replace(
                         base,
                         temporal=False,
-                        foreground_scale=float(scale),
+                        depth_pop=float(depth_pop),
                         depth_antialias_strength=float(antialias),
                     )
                 )
         start = time.perf_counter()
         seen = set()
         for config in configs:
-            key = (config.backend, config.output_format, config.layers, config.hole_fill, config.edge_dilation, round(float(config.foreground_scale), 3), round(float(config.depth_antialias_strength), 3))
+            key = (config.backend, config.output_format, config.layers, config.hole_fill, config.edge_dilation, round(float(config.depth_pop), 3), round(float(config.depth_antialias_strength), 3))
             if key in seen:
                 continue
             seen.add(key)
@@ -801,7 +864,7 @@ class StereoRuntime:
         depth = profile.depth
         cuda_events.update(getattr(profile, "cuda_timing_events", None) or {})
         _record_cuda_event(cuda_events, "depth", rgb_frame)
-        stereo_config = self.stereo_config
+        stereo_config, convergence_debug = _dynamic_convergence_config_for_depth(self, depth, self.stereo_config)
 
         synth_start = time.perf_counter()
         fused_sbs, fused_skip = (None, "skip_sbs_output") if skip_sbs_output else self._try_fast_plus_fused_sbs(rgb_frame, depth, stereo_config)
@@ -862,7 +925,8 @@ class StereoRuntime:
         debug["hot_reload_changed_fields"] = list(self.last_settings_changed_fields)
         _consume_pending_temporal_reset_reasons(self, debug)
         _add_active_settings_debug_info(debug, self.active_settings_snapshot)
-        _add_runtime_config_debug_info(debug, self.stereo_config)
+        _add_runtime_config_debug_info(debug, stereo_config)
+        debug.update(convergence_debug)
         provider_info = self.provider_report()
         _add_depth_contract_debug_info(debug, depth, provider_info)
         _add_preprocess_debug_info(debug, rgb_frame)
@@ -921,7 +985,7 @@ class StereoRuntime:
                     f" synthesis_ms={synthesis_ms:.1f}"
                     f" pack_ms={pack_ms:.1f}"
                     f" backend={debug.get('backend', stereo_config.backend)}"
-                    f" foreground_scale={stereo_config.foreground_scale:.3f}"
+                    f" depth_pop={stereo_config.depth_pop:.3f}"
                     f" antialias={stereo_config.depth_antialias_strength:.3f}"
                     f" output_dtype={debug.get('runtime_output_dtype', sbs.dtype)}"
                     f" pack_backend={debug.get('runtime_output_pack_backend', 'n/a')}"
@@ -978,6 +1042,25 @@ class StereoRuntime:
         profile = self._predict_depth_profile(rgb_frame)
         depth_total_ms = (time.perf_counter() - depth_start) * 1000.0
         depth = profile.depth
+        stereo_config, convergence_debug = _dynamic_convergence_config_for_depth(self, depth, self.stereo_config)
+        if openxr_config is not None:
+            openxr_config_for_frame = replace(
+                openxr_config,
+                convergence=float(stereo_config.convergence),
+                foreground_shift_scale=float(getattr(stereo_config, "foreground_shift_scale", 1.0)),
+                midground_shift_scale=float(getattr(stereo_config, "midground_shift_scale", 1.0)),
+                background_shift_scale=float(getattr(stereo_config, "background_shift_scale", 1.0)),
+            )
+        else:
+            openxr_config_for_frame = OpenXRRenderConfig(
+                depth_strength=float(stereo_config.depth_strength),
+                convergence=float(stereo_config.convergence),
+                max_disparity_px=stereo_config.max_disparity_px,
+                parallax_preset=str(stereo_config.parallax_preset),
+                foreground_shift_scale=float(getattr(stereo_config, "foreground_shift_scale", 1.0)),
+                midground_shift_scale=float(getattr(stereo_config, "midground_shift_scale", 1.0)),
+                background_shift_scale=float(getattr(stereo_config, "background_shift_scale", 1.0)),
+            )
         _record_cuda_event(cuda_events, "depth", rgb_frame)
 
         prewarp_eyes = _openxr_prewarp_eyes_enabled()
@@ -988,7 +1071,7 @@ class StereoRuntime:
         raw_depth = depth
         if prewarp_eyes:
             render_start = time.perf_counter()
-            openxr = render_openxr_stereo(rgb_frame, depth, openxr_config)
+            openxr = render_openxr_stereo(rgb_frame, depth, openxr_config_for_frame)
             openxr_render_ms = (time.perf_counter() - render_start) * 1000.0
             _record_cuda_event(cuda_events, "openxr_render", rgb_frame)
 
@@ -1044,7 +1127,8 @@ class StereoRuntime:
         debug["hot_reload_changed_fields"] = list(self.last_settings_changed_fields)
         _consume_pending_temporal_reset_reasons(self, debug)
         _add_active_settings_debug_info(debug, self.active_settings_snapshot)
-        _add_runtime_config_debug_info(debug, self.stereo_config)
+        _add_runtime_config_debug_info(debug, stereo_config)
+        debug.update(convergence_debug)
         provider_info = self.provider_report()
         _add_depth_contract_debug_info(debug, depth, provider_info)
         output_eye_size, output_display_size = _add_runtime_output_size_debug_info(debug, left_eye, left_eye)
@@ -1100,7 +1184,7 @@ class StereoRuntime:
             depth = depth.pow(gamma)
         depth = postprocess_depth(
             depth,
-            foreground_scale=float(getattr(self.stereo_config, "foreground_scale", 0.0)),
+            depth_pop=float(getattr(self.stereo_config, "depth_pop", 0.0)),
             antialias_strength=float(getattr(self.stereo_config, "depth_antialias_strength", 0.0)),
         )
         return self._stabilize_openxr_rgb_depth(depth)
@@ -1178,6 +1262,8 @@ class StereoRuntime:
             return None, "cross_eyed"
         if bool(getattr(stereo_config, "debug_output", False)):
             return None, "debug_output"
+        if _layered_parallax_enabled(stereo_config):
+            return None, "layered_parallax"
         try:
             from .fast_plus_fused_triton import can_use_fast_plus_fused_half_sbs_uint8, make_fast_plus_fused_half_sbs_uint8
             from .output import match_depth
@@ -1304,6 +1390,9 @@ def _openxr_shader_uniforms(
         "depth_response": str(depth_response or "unknown"),
         "depth_strength": float(config.depth_strength),
         "convergence": float(config.convergence),
+        "foreground_shift_scale": float(getattr(config, "foreground_shift_scale", 1.0)),
+        "midground_shift_scale": float(getattr(config, "midground_shift_scale", 1.0)),
+        "background_shift_scale": float(getattr(config, "background_shift_scale", 1.0)),
         "render_size": None if render_size is None else (int(render_size[0]), int(render_size[1])),
         "screen_roll": float(config.screen_roll),
     }
@@ -1332,6 +1421,9 @@ def _add_openxr_config_debug_info(debug: dict[str, Any], config: OpenXRRenderCon
     if max_disparity_px is not None:
         debug["openxr_max_disparity_px"] = float(max_disparity_px)
     debug["openxr_parallax_preset"] = str(config.parallax_preset)
+    debug["openxr_foreground_shift_scale"] = float(getattr(config, "foreground_shift_scale", 1.0))
+    debug["openxr_midground_shift_scale"] = float(getattr(config, "midground_shift_scale", 1.0))
+    debug["openxr_background_shift_scale"] = float(getattr(config, "background_shift_scale", 1.0))
     uniforms = _openxr_shader_uniforms(
         config,
         render_size=render_size,

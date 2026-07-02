@@ -7,8 +7,7 @@
 | 文档 | 用途 |
 |---|---|
 | [00-api-handoff-progress.md](00-api-handoff-progress.md) | 当前唯一交接入口，记录项目状态、边界、验证命令和下一步 |
-| [00-goals.md](00-goals.md) | 当前目标、非目标、质量边界 |
-| [28-Realtime-2d-to-3d-specification.md](28-Realtime-2d-to-3d-specification.md) | Desktop2Stereo 当前正式最终运行时流程规范；docs/25 已作废，以本文为准 |
+| [01-Realtime-2d-to-3d-specification.md](01-Realtime-2d-to-3d-specification.md) | Desktop2Stereo 当前正式最终运行时流程规范；docs/25 已作废，以本文为准 |
 
 ## 专项说明
 
@@ -20,7 +19,7 @@
 | [17-multiplatform-provider-layout.md](17-multiplatform-provider-layout.md) | 多平台 depth provider 目录分层和 artifact 规划 |
 | [18-host-bootstrap-device-flow.md](18-host-bootstrap-device-flow.md) | Host/GUI/capture bootstrap 设备检测与 runtime 参数传递流程 |
 | [20-openxr-gpu-glow-guide.md](20-openxr-gpu-glow-guide.md) | OpenXR GPU glow 的原理、调用链、配置和复杂效果扩展方法 |
-| [26-desktop2stereo-engineering-design-specification.md](26-desktop2stereo-engineering-design-specification.md) | 基于 docs/28 的工程实现、迁移、兼容清理和符合状态说明 |
+| [01-desktop2stereo-engineering-design-specification.md](01-desktop2stereo-engineering-design-specification.md) | 基于 docs/01 的工程实现、迁移、兼容清理和符合状态说明 |
 | [25-2d-to-3d-runtime-specification.md](25-2d-to-3d-runtime-specification.md) | 已作废的历史运行时规范；仅用于追溯背景，不作为当前裁决来源 |
 
 ## Benchmark 与优化记录
@@ -52,5 +51,5 @@
 中文 Markdown 使用 UTF-8。PowerShell 中读取中文文档时请显式指定：
 
 ```powershell
-Get-Content docs\00-goals.md -Encoding UTF8
+Get-Content docs\00-api-handoff-progress.md -Encoding UTF8
 ```

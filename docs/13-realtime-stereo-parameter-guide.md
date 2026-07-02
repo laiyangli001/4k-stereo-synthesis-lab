@@ -2,7 +2,7 @@
 
 本文是 Desktop2Stereo 当前有效的立体参数测试指南。它用于通过固定样本、视觉回归和人工评分，找出 `traditional_fastest`、`cinema`、`game_low_latency`、`still_image_hq` 四类立体模式的推荐参数。
 
-运行时语义以 `docs/28-Realtime-2d-to-3d-specification.md` 为准；工程映射以 `docs/26-desktop2stereo-engineering-design-specification.md` 为准。本文只描述测试方法、视觉判定和参数 sweep，不再保留旧 IPD / Stereo Scale / Max Shift Ratio 调参链。
+运行时语义以 `docs/01-Realtime-2d-to-3d-specification.md` 为准；工程映射以 `docs/01-desktop2stereo-engineering-design-specification.md` 为准。本文只描述测试方法、视觉判定和参数 sweep，不再保留旧 IPD / Stereo Scale / Max Shift Ratio 调参链。
 
 ## 当前参数模型
 
@@ -21,8 +21,10 @@ right_shift_px = -disparity_px / 2
 |---|---|---|
 | `Stereo Preset` | 一组内容模式预设，决定后端、预算、深度强度、temporal、hole fill 等默认组合 | Traditional / Cinema / Game / Image |
 | `Parallax Budget Preset` | 根据 `render_size` 解析 `max_disparity_px` 的档位预算 | comfort / standard / strong / extreme |
-| `Depth Strength` | 用户连续调节实际立体强度的 gain | Soft=2.0 / Standard=2.5 / Enhanced=3.0，也可直接输入数值 |
+| `Depth Strength` | 用户连续调节实际立体强度的 gain | Soft=0.20 / Standard=0.25 / Enhanced=0.30，也可直接输入数值 |
 | `Convergence` | 零视差/汇聚平面 | 默认 0.0 |
+| `Dynamic Convergence Strength` | 动态会聚强度；0.00 表示关闭，使用静态 `Convergence` | 默认 0.00 |
+| `Depth Separation Preset` | 前景/中景/背景视差倍率的组合预设 | default / standard / strong / weak |
 | `Render Scale` | 4K 级输入的稳定缩放档位，影响 `render_size`，进而影响预算解析 | 4K / 100%, 3K / 85%, 2K / 75%, 1K / 50% |
 
 不得再把以下旧字段作为当前测试变量：
@@ -79,9 +81,11 @@ per_eye_shift_px = actual_disparity_px / 2
 | Synthetic View | `Stereo Quality` / `Synthetic View` | fast, fast_plus, quality_4k, hq_4k | 由 Stereo Mode 派生 | 立体合成后端质量/速度档位，GUI 已隐藏为内部派生值 | 普通用户不直接调；若模式效果不对，优先修 preset 映射 |
 | Parallax Budget | `Parallax Budget Preset` | Comfort, Standard, Strong, Extreme | `standard` | 按 `render_size` 解析 `max_disparity_px`，限定最大软件视差预算 | 游戏/OpenXR 优先 Comfort；电影 Standard；图片 Strong；Extreme 仅调试/导出 |
 | Max Disparity Px | `max_disparity_px` | 结构化运行时字段，可为空 | 空值时由预算解析 | 已解析的像素上限；用于测试、debug、OpenXR/direct shader 对齐 | 不作为 GUI 常规输入；视觉回归 metadata 必须记录 |
-| Depth Strength | `Depth Strength` | 0.0-10.0，0.5 步进 | GUI 默认 2.5 | 连续深度强度 gain，直接乘到实际视差上 | 这是用户最直观的“立体强弱”滑杆；太平就升，顶眼/撕裂/重影就降 |
-| Depth Quick | `Depth Quick` | Soft, Standard, Enhanced | Standard | 快捷深度强度预设 | Soft=2.0、Standard=2.5、Enhanced=3.0；它应同步/代表 Depth Strength |
+| Depth Strength | `Depth Strength` | 0.00-0.50，0.05 步进 | GUI 默认 0.25 | 连续深度强度 gain，直接乘到实际视差上 | 这是用户最直观的“立体强弱”滑杆；太平就升，顶眼/撕裂/重影就降 |
+| Depth Quick | `Depth Quick` | Soft, Standard, Enhanced | Standard | 快捷深度强度预设 | Soft=0.20、Standard=0.25、Enhanced=0.30；它应同步/代表 Depth Strength |
 | Convergence | `Convergence` | -0.50 到 1.00，0.05 步进 | 0.00 | 零视差/汇聚平面，改变哪些深度落在屏幕平面附近 | 不是强度滑杆；近景太顶眼可适当提高，整体太靠后可降低 |
+| Dynamic Convergence | `Dynamic Convergence Strength` | 0.00-1.00，0.10 步进 | 0.00 | 按当前深度图自动微调零视差平面；0.00 关闭，静态 `Convergence` 生效；大于 0.00 时动态会聚生效 | 默认保持 0.00；视频前后景变化很大时再试 0.30-0.50；游戏/低延迟优先关闭 |
+| Depth Separation | `Depth Separation Preset` | Default, Standard, Strong, Weak | Cinema=Standard, Game=Weak, Image=Strong | 一键设置 `Foreground Pop` / `Midground Pop` / `Background Pop` | 先用模式默认；人物太顶眼或背景过强时再切 Weak；图片需要层次可用 Strong |
 | Render Scale | `Render Scale` | 4K / 100%, 3K / 85%, 2K / 75%, 1K / 50% | 4K / 100% | 对 4K 级输入按比例缩放并保持输入宽高比；影响 `render_size` 与预算解析 | 不每帧动态改变；只在用户切档、OpenXR scale 或输入尺寸稳定跨档时重算 |
 
 ### 预算解析参考
@@ -101,7 +105,10 @@ per_eye_shift_px = actual_disparity_px / 2
 |---|---|---|---|---|---|
 | Depth Model | `Depth Model` | 模型家族 + size | 模型列表首项 | 选择深度估计模型 | 参数视觉回归要固定模型；换模型后必须重新评分 |
 | Depth Resolution | `Depth Resolution` | 随模型提供的分辨率选项 | 518 | 深度推理输入宽度，影响深度细节和速度 | 低延迟用较低值，高质量图片可升高；不要把它当作输出分辨率 |
-| Foreground Scale | `Foreground Scale` | -0.9 到 5.0 | 0.0 | 深度后处理里的前景/近景形态调整 | 实时路径保持 0；静态图可小幅正向；文字/UI 弯曲时降低 |
+| Depth Pop | `Depth Pop` | -0.9 到 5.0 | 0.0 | 居中深度曲线调整，用于增强或压缩深度层次 | 默认 0；图片可小幅提高，文字/UI 弯曲或前景过强时降低 |
+| Foreground Pop | `Foreground Pop` | 0.50-1.60，0.05 步进 | Cinema=1.15 | 增强/减弱近处物体的位移，主要影响人物、手、桌面前景 | 前景太顶眼就降；人物层次不足可小幅升 |
+| Midground Pop | `Midground Pop` | 0.50-1.60，0.05 步进 | Cinema=1.05 | 增强/减弱画面主体层的位移，主要影响角色、车辆、常见焦点区域 | 主体层次不足可小幅升；主体边缘不稳就降 |
+| Background Pop | `Background Pop` | 0.50-1.60，0.05 步进 | Cinema=1.05 | 增强/减弱远处背景的位移，主要影响天空、墙面、远景建筑 | 背景漂浮或墙面凸起就降；风景图背景太平可小幅升 |
 | Anti-aliasing | `Anti-aliasing` / `Depth Antialias Strength` | 0-10 | 1 | 深度图平滑/抗锯齿强度 | 游戏和传统低；电影中等；图片可略高；过高会糊边 |
 
 ### 边缘、遮挡与补洞参数
@@ -121,7 +128,7 @@ per_eye_shift_px = actual_disparity_px / 2
 | 参数 | GUI / 字段 | 当前选项或范围 | 默认 / 预设 | 作用 | 调参建议 |
 |---|---|---|---|---|---|
 | Temporal | `Temporal` | bool，由强度推导 | true | 是否启用跨帧稳定 | `Temporal Strength` 为 0 时视为关闭 |
-| Temporal Strength | `Temporal Strength` | 0.0-1.0 | 0.7 | 跨帧平滑强度 | 视频可 0.7 左右；游戏低到 0.25 或更低；拖影就降 |
+| Temporal Strength | `Temporal Strength` | 0.0-1.0 | 0.25 | 跨帧平滑强度 | 视频可从 0.25 开始；游戏默认 0.0 或很低；拖影就降 |
 | Auto Scene Reset | `Auto Scene Reset` | bool，由阈值推导 | true | 场景切换时重置 temporal history | 快切视频必须开启；静态图无意义 |
 | Scene Threshold | `Scene Reset Threshold` | 0.00, 0.12, 0.18, 0.22, 0.28, 0.35 | 0.22 | 场景变化检测阈值 | 拖影/残影时降低；频繁闪断时升高 |
 
@@ -153,12 +160,12 @@ per_eye_shift_px = actual_disparity_px / 2
 
 当前 GUI 中的立体模式本身就是预设组合。视觉回归应按以下组合测试，而不是把后端、预算和强度完全拆散成任意笛卡尔积。
 
-| 模式 | 后端 | 视差预算 | Depth Strength | Depth Quick | 目标 |
-|---|---|---|---:|---|---|
-| 传统 / 旧算法 | `fast` | `standard` | 2.5 | Standard | 旧算法电影观看路径，速度快但不能过度保守 |
-| 电影 / 新算法路线 | `quality_4k` | `standard` | 2.5 | Standard | 默认观影模式，平衡质量、稳定性和舒适度 |
-| 游戏 | `fast_plus` | `comfort` | 2.0 | Soft | 低延迟、低拖影、HUD 稳定、降低眩晕 |
-| 图片 | `hq_4k` | `strong` | 3.0 | Enhanced | 静态图质量优先，更强层次和更完整边缘处理 |
+| 模式 | 后端 | 视差预算 | Depth Strength | Depth Quick | 前后分离 | 目标 |
+|---|---|---|---:|---|---|---|
+| 传统 / 旧算法 | `fast` | `standard` | 0.25 | Standard | default | 旧算法电影观看路径，速度快但不能过度保守 |
+| 电影 / 新算法路线 | `quality_4k` | `standard` | 0.25 | Standard | standard | 默认观影模式，平衡质量、稳定性和舒适度 |
+| 游戏 | `fast_plus` | `comfort` | 0.20 | Soft | weak | 低延迟、低拖影、HUD 稳定、降低眩晕 |
+| 图片 | `hq_4k` | `strong` | 0.30 | Enhanced | strong | 静态图质量优先，更强层次和更完整边缘处理 |
 
 `extreme` 只用于调试、演示或导出，不作为普通模式默认组合。
 
@@ -273,6 +280,12 @@ parallax_budget_preset
 max_disparity_px
 depth_strength
 convergence
+dynamic_convergence_strength
+depth_pop
+depth_separation_preset
+foreground_pop
+midground_pop
+background_pop
 depth_response
 hole_fill_mode
 edge_threshold
@@ -317,10 +330,10 @@ timing
 固定当前推荐组合：
 
 ```text
-traditional_fastest: fast + standard + depth_strength=2.5
-cinema: quality_4k + standard + depth_strength=2.5
-game_low_latency: fast_plus + comfort + depth_strength=2.0
-still_image_hq: hq_4k + strong + depth_strength=3.0
+traditional_fastest: fast + standard + depth_strength=0.25 + depth_separation=default
+cinema: quality_4k + standard + depth_strength=0.25 + depth_separation=standard
+game_low_latency: fast_plus + comfort + depth_strength=0.20 + depth_separation=weak
+still_image_hq: hq_4k + strong + depth_strength=0.30 + depth_separation=strong
 ```
 
 每个样本都跑四个 preset，确认 expected preset 是否是最稳选择，同时观察其它 preset 暴露出的风险。
@@ -330,10 +343,10 @@ still_image_hq: hq_4k + strong + depth_strength=3.0
 只改 `Depth Strength`：
 
 ```text
-traditional_fastest: 2.0 / 2.5 / 3.0
-cinema: 2.0 / 2.5 / 3.0
-game_low_latency: 1.5 / 2.0 / 2.5
-still_image_hq: 2.5 / 3.0 / 3.5
+traditional_fastest: 0.20 / 0.25 / 0.30
+cinema: 0.20 / 0.25 / 0.30
+game_low_latency: 0.15 / 0.20 / 0.25
+still_image_hq: 0.25 / 0.30 / 0.35
 ```
 
 判定：
@@ -359,33 +372,46 @@ comfort / standard / strong
 - `strong`：更强静态图层次，适合图片。
 - `extreme`：只用于暴露边界问题，不用于默认值。
 
-### 第四阶段：Convergence
+### 第四阶段：Convergence 与 Dynamic Convergence
 
-只改 `Convergence`：
+先只改静态 `Convergence`：
 
 ```text
--0.25 / 0.0 / 0.25 / 0.5
+-0.25 / 0.00 / 0.25 / 0.50
+```
+
+再只改 `Dynamic Convergence Strength`：
+
+```text
+0.00 / 0.30 / 0.50
 ```
 
 判定：
 
+- `Dynamic Convergence Strength = 0.00` 时关闭动态会聚，静态 `Convergence` 生效。
+- 大于 0.00 时启用动态会聚，按当前深度图自动微调零视差平面。
 - 背景跑到前面：先确认眼序，再调 convergence。
-- 近景太顶眼：提高 convergence 或降低 depth strength。
+- 近景太顶眼：提高 convergence、降低 dynamic convergence strength，或降低 depth strength。
 - 整体太往后：降低 convergence。
+- 视频主体前后变化大时可试 0.30-0.50；游戏/低延迟默认保持 0.00。
 
-`Convergence` 不是强度滑杆，不能用它替代 `Depth Strength`。
+`Convergence` 和动态会聚都不是强度滑杆，不能用它们替代 `Depth Strength`。
 
-### 第五阶段：边缘与补洞
+### 第五阶段：分层视差、边缘与补洞
 
 只在前四步稳定后再调：
 
 ```text
+depth_separation_preset: default / standard / strong / weak
+depth_pop: -0.2 / 0.0 / 0.2 / 0.4
+foreground_pop: 0.90 / 1.00 / 1.15 / 1.25
+midground_pop: 1.00 / 1.05 / 1.10
+background_pop: 0.85 / 1.00 / 1.05
 edge_threshold: 0.02 / 0.04 / 0.06
 edge_dilation: 0 / 1 / 2 / 3
 mask_feather_radius: 0 / 1 / 2 / 3 / 4
 hole_fill_mode: balanced / soft_low_ghost / sharp_test / quality
 depth_antialias_strength: 0.0 / 1.0 / 2.0
-foreground_scale: 0.0 / 0.2 / 0.4
 ```
 
 判定：
@@ -394,7 +420,7 @@ foreground_scale: 0.0 / 0.2 / 0.4
 - 边缘发糊：降低 edge_dilation、mask feather 或 depth antialias。
 - 重复纹理明显：提高 mask feather，或从 sharp_test 改 balanced / soft_low_ghost。
 - 人物轮廓软化：降低 depth antialias 和 mask feather。
-- 天空/墙面错误凸起：降低 foreground_scale 或 depth_strength。
+- 天空/墙面错误凸起：降低 background_pop、depth_pop 或 depth_strength。
 
 ## 模式判定标准
 
@@ -407,7 +433,9 @@ foreground_scale: 0.0 / 0.2 / 0.4
 ```text
 backend=fast
 parallax_budget_preset=standard
-depth_strength=2.5
+depth_strength=0.25
+depth_separation=default
+dynamic_convergence_strength=0.00
 temporal_strength=0.0
 hole_fill_mode=balanced
 ```
@@ -427,8 +455,13 @@ hole_fill_mode=balanced
 ```text
 backend=quality_4k
 parallax_budget_preset=standard
-depth_strength=2.5
-temporal_strength=0.7-0.75
+depth_strength=0.25
+depth_separation=standard
+foreground_pop=1.15
+midground_pop=1.05
+background_pop=1.05
+dynamic_convergence_strength=0.00
+temporal_strength=0.25
 hole_fill_mode=balanced
 ```
 
@@ -447,8 +480,13 @@ hole_fill_mode=balanced
 ```text
 backend=fast_plus
 parallax_budget_preset=comfort
-depth_strength=2.0
-temporal_strength=0.25 或更低
+depth_strength=0.20
+depth_separation=weak
+foreground_pop=1.15
+midground_pop=1.05
+background_pop=0.85
+dynamic_convergence_strength=0.00
+temporal_strength=0.0
 hole_fill_mode=soft_low_ghost
 ```
 
@@ -468,9 +506,14 @@ hole_fill_mode=soft_low_ghost
 ```text
 backend=hq_4k
 parallax_budget_preset=strong
-depth_strength=3.0
+depth_strength=0.30
+depth_separation=strong
+foreground_pop=1.25
+midground_pop=1.10
+background_pop=1.00
+dynamic_convergence_strength=0.00
 temporal_strength=0.0
-hole_fill_mode=sharp_test 或 quality 候选
+hole_fill_mode=quality
 ```
 
 通过标准：

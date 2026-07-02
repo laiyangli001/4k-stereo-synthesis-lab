@@ -19,6 +19,9 @@ class OpenXRRenderConfig:
     convergence: float = 0.0
     max_disparity_px: float | None = None
     parallax_preset: str = "standard"
+    foreground_shift_scale: float = 1.0
+    midground_shift_scale: float = 1.0
+    background_shift_scale: float = 1.0
     screen_roll: float = 0.0
     padding_mode: PaddingMode = "reflection"
 
@@ -297,6 +300,9 @@ def _shift_params(config: OpenXRRenderConfig) -> ShiftParams:
         convergence=config.convergence,
         max_disparity_px=config.max_disparity_px,
         parallax_preset=config.parallax_preset,
+        foreground_shift_scale=config.foreground_shift_scale,
+        midground_shift_scale=config.midground_shift_scale,
+        background_shift_scale=config.background_shift_scale,
     )
 
 

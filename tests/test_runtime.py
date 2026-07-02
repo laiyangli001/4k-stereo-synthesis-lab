@@ -110,6 +110,32 @@ def test_runtime_process_rgb_frame_uses_persistent_provider_and_returns_report()
     assert provider.close_count == 1
 
 
+def test_runtime_dynamic_convergence_uses_depth_quantile_in_debug_info():
+    provider = FakeDepthProvider()
+    config = StereoRuntimeConfig(
+        model_id="lc700x/Distill-Any-Depth-Base-hf",
+        model_dir=r"D:\Desktop2Stereo\models\models--lc700x--Distill-Any-Depth-Base-hf",
+        depth_backend="pytorch_cuda",
+        stereo_quality="fast",
+        temporal=False,
+        max_disparity_px=18.0,
+        convergence=0.0,
+        dynamic_convergence_enabled=True,
+        dynamic_convergence_strength=1.0,
+        dynamic_convergence_target=1.0,
+        dynamic_convergence_alpha=0.0,
+    )
+    runtime = StereoRuntime(config, depth_provider=provider, stats_window=4, collect_memory_stats=False)
+    rgb = torch.rand(1, 3, 8, 12)
+
+    result = runtime.process_rgb_frame(rgb)
+
+    assert result.debug_info["dynamic_convergence_enabled"] is True
+    assert result.debug_info["dynamic_convergence_measured"] == pytest.approx(1.0)
+    assert result.debug_info["dynamic_convergence_effective"] == pytest.approx(1.0)
+    assert result.debug_info["convergence"] == pytest.approx(1.0)
+
+
 def test_download_progress_prints_structured_event(capsys):
     progress = DownloadProgress(total=100, desc="model.safetensors", mininterval=0)
     progress.update(50)

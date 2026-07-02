@@ -12,6 +12,7 @@ MESSAGE_CATALOGS = {
         "Show FPS": "Show FPS",
         "Debug Mode": "Debug Mode",
         "Convergence:": "Convergence:",
+        "Dynamic Convergence:": "Dynamic Convergence:",
         "Display Mode:": "Display Mode:",
         "Depth Model:": "Depth Model:",
         "Depth Strength:": "Depth Strength:",
@@ -27,6 +28,11 @@ MESSAGE_CATALOGS = {
         "Debug / Export": "Debug / Export",
         "Synthetic View:": "Synthetic View:",
         "Parallax Budget:": "Parallax Budget:",
+        "Depth Separation:": "Depth Separation:",
+        "separation_default": "Default",
+        "separation_standard": "Standard",
+        "separation_strong": "Strong",
+        "separation_weak": "Weak",
         "comfort": "Comfort",
         "standard": "Standard",
         "strong": "Strong",
@@ -56,7 +62,10 @@ MESSAGE_CATALOGS = {
         "Advanced Device Options": "Advanced Options",
         "Depth Resolution:": "Depth Resolution:",
         "Anti-aliasing:": "Anti-aliasing:",
-        "Foreground Scale:": "Foreground Scale:",
+        "Depth Pop:": "Depth Pop:",
+        "Foreground Pop:": "Foreground Pop:",
+        "Midground Pop:": "Midground Pop:",
+        "Background Pop:": "Background Pop:",
         "FP16": "FP16",
         "Inference Acceleration:": "Acceleration:",
         "Recompile TensorRT": "Recompile TensorRT",
@@ -144,11 +153,13 @@ MESSAGE_CATALOGS = {
         "tooltip_model_size": "Model backbone size",
         "tooltip_depth_res": "Depth map resolution",
         "tooltip_convergence": "Zero-parallax screen plane. Raise it in 0.05 steps when foreground objects pop out too much or show ghosting; lower it when the whole scene feels too flat or sits behind the screen.",
+        "tooltip_dynamic_convergence_strength": "Dynamic convergence strength. 0.00 keeps manual Convergence; values above 0.00 enable automatic convergence and follow the measured depth target.",
         "tooltip_depth_strength": "Overall stereo depth intensity. Range is 0.00-0.50 in 0.05 steps. Use Standard / 0.25 as the baseline; raise it only when the scene feels flat, and lower it when foreground objects show ghosts, edges tear, or viewing feels uncomfortable.",
         "tooltip_depth_quick": "Quick fixed depth presets for everyday use: Soft, Standard, or Enhanced",
         "tooltip_stereo_preset": "Stereo preset. Traditional is fastest, Cinema uses quality_4k, Game uses fast_plus, and Image uses hq_4k; selecting a preset loads its advanced parameters.",
         "tooltip_stereo_quality": "Internal stereo synthesis backend derived from Stereo Mode.",
         "tooltip_parallax_budget": "Maximum stereo parallax budget resolved from render size. Comfort is safest, Standard is the default, Strong and Extreme increase separation.",
+        "tooltip_depth_separation": "Preset for Foreground, Midground, and Background Pop. Default uses 1.00/1.00/1.00; Standard uses 1.15/1.05/1.05; Strong uses 1.25/1.10/1.00; Weak uses 1.15/1.05/0.85.",
         "tooltip_max_shift": "Maximum horizontal shift as a ratio of image width; higher values increase stereo separation",
         "tooltip_temporal_strength": "Temporal smoothing strength for stereo output; higher values reduce flicker but can add lag",
         "tooltip_temporal": "Enable temporal stabilization between frames",
@@ -163,7 +174,10 @@ MESSAGE_CATALOGS = {
         "tooltip_advanced_stereo": "Show expert stereo/runtime parameters. Leave off for the simplified everyday UI.",
         "tooltip_advanced_device_options": "Show capture frame pacing, XR preview window, and image enhancement controls.",
         "tooltip_xr_preview": "Show the desktop XR preview window while running OpenXR Link.",
-        "tooltip_foreground_scale": "Adjust foreground depth shaping. Use 0 for no change; positive values strengthen near/far separation for still images, while negative values compress depth toward the middle for realtime use and fewer foreground artifacts.",
+        "tooltip_depth_pop": "Centered depth curve: output = 0.5 + sign(depth - 0.5) * abs(depth - 0.5) ** (1 / (1 + Depth Pop)). Use 0 for no change.",
+        "tooltip_foreground_pop": "Increase or reduce parallax shift for nearby objects, mainly people, hands, and tabletop foreground.",
+        "tooltip_midground_pop": "Increase or reduce parallax shift for the main subject layer, mainly characters, vehicles, and common focus areas.",
+        "tooltip_background_pop": "Increase or reduce parallax shift for distant background, mainly sky, walls, and far buildings.",
         "tooltip_antialiasing": "Depth-map smoothing level. Higher values reduce jagged depth edges and flicker, but can soften fine geometry; keep low for games/realtime, raise when object edges shimmer or produce broken stereo borders.",
         "tooltip_device": "Inference device",
         "tooltip_capture_tool": "Capture backend",
@@ -230,6 +244,7 @@ MESSAGE_CATALOGS = {
         "Show FPS": "显示帧率",
         "Debug Mode": "调试模式",
         "Convergence:": "会聚位置:",
+        "Dynamic Convergence:": "动态会聚:",
         "Display Mode:": "显示模式:",
         "Depth Model:": "深度模型:",
         "Depth Strength:": "深度强度:",
@@ -245,6 +260,11 @@ MESSAGE_CATALOGS = {
         "Debug / Export": "调试 / 导出",
         "Synthetic View:": "立体质量:",
         "Parallax Budget:": "视差预算:",
+        "Depth Separation:": "前后分离：",
+        "separation_default": "默认",
+        "separation_standard": "标准",
+        "separation_strong": "增强",
+        "separation_weak": "减弱",
         "comfort": "舒适",
         "standard": "标准",
         "strong": "强",
@@ -274,7 +294,10 @@ MESSAGE_CATALOGS = {
         "Advanced Device Options": "高级选项",
         "Depth Resolution:": "深度细节:",
         "Anti-aliasing:": "抗锯齿值:",
-        "Foreground Scale:": "前景缩放:",
+        "Depth Pop:": "深度弹出:",
+        "Foreground Pop:": "前景视差:",
+        "Midground Pop:": "中景视差:",
+        "Background Pop:": "背景视差:",
         "FP16": "FP16",
         "Inference Acceleration:": "推理加速:",
         "Recompile TensorRT": "重译TensorRT",
@@ -370,11 +393,13 @@ MESSAGE_CATALOGS = {
         "tooltip_model_size": "模型骨架大小",
         "tooltip_depth_res": "深度细节档位。建议使用最大 518，以获得更稳定的深度边缘、小物体结构和最好的立体细节；数值降低可减少推理耗时和显存占用，但更容易丢失轮廓层次。",
         "tooltip_convergence": "零视差屏幕平面。前景太突出或出现重影时，每次提高 0.05；画面整体太平、都贴在屏幕后方时，每次降低 0.05。",
+        "tooltip_dynamic_convergence_strength": "动态会聚强度。0.00 表示使用手动会聚位置；大于 0.00 时启用动态会聚并跟随测得的深度目标。",
         "tooltip_depth_strength": "整体立体深度强度。范围 0.00-0.50，步进 0.05；建议以标准档 0.25 为基准，画面太平时再上调，前景重影、边缘撕裂或观看不舒服时下调。",
         "tooltip_depth_quick": "给普通用户使用的固定深度档位：柔和、标准、增强",
         "tooltip_stereo_preset": "立体预设模式。传统速度快，电影使用 quality_4k，游戏使用 fast_plus，图片使用 hq_4k；选择模式会加载对应高级参数。",
         "tooltip_stereo_quality": "内部立体合成后端，由立体模式自动决定。",
         "tooltip_parallax_budget": "根据渲染尺寸解析最大视差预算。舒适最稳，标准为默认，强和极强会增加立体分离。",
+        "tooltip_depth_separation": "一键设置前景/中景/背景视差：默认为 1.00/1.00/1.00，标准为 1.15/1.05/1.05，增强为 1.25/1.10/1.00，减弱为 1.15/1.05/0.85。",
         "tooltip_max_shift": "水平位移占画面宽度的比例；越高立体分离越强",
         "tooltip_temporal_strength": "时域平滑强度；越高越稳定，但可能增加拖影或延迟",
         "tooltip_temporal": "启用帧间时域稳定",
@@ -389,7 +414,10 @@ MESSAGE_CATALOGS = {
         "tooltip_advanced_stereo": "显示专家级立体和运行时参数；普通使用建议保持关闭。",
         "tooltip_advanced_device_options": "显示捕获帧率、XR画面预览窗口、本地垂直同步和画面增强选项。",
         "tooltip_xr_preview": "运行 OpenXR Link 时显示桌面 XR 画面预览窗口。",
-        "tooltip_foreground_scale": "调整前景深度形状。0 表示不处理；正值增强近远层次，适合图片和高质量模式；负值把深度压向中间，适合实时模式，可降低前景突出和重影。",
+        "tooltip_depth_pop": "居中深度曲线：output = 0.5 + sign(depth - 0.5) * abs(depth - 0.5) ** (1 / (1 + Depth Pop))。0 表示不改变深度曲线。",
+        "tooltip_foreground_pop": "增强/减弱近处物体的位移，主要影响人物、手、桌面前景。",
+        "tooltip_midground_pop": "增强/减弱画面主体层的位移，主要影响角色、车辆、常见焦点区域。",
+        "tooltip_background_pop": "增强/减弱远处背景的位移，主要影响天空、墙面、远景建筑。",
         "tooltip_antialiasing": "深度图平滑级别。数值越高越能减少深度边缘锯齿和闪烁，但会软化细节；游戏和实时观看保持较低，物体边缘闪烁或立体边界破碎时再上调。",
         "tooltip_device": "计算设备",
         "tooltip_capture_tool": "捕获后端",
@@ -515,6 +543,13 @@ def gettext_for(locale, message):
 
 STEREO_QUALITY_KEYS = ("fast", "fast_plus", "quality_4k", "hq_4k")
 PARALLAX_BUDGET_KEYS = ("comfort", "standard", "strong", "extreme")
+DEPTH_SEPARATION_KEYS = ("default", "standard", "strong", "weak")
+DEPTH_SEPARATION_LABELS = {
+    "default": "separation_default",
+    "standard": "separation_standard",
+    "strong": "separation_strong",
+    "weak": "separation_weak",
+}
 
 
 def stereo_quality_options(locale=DEFAULT_LOCALE):
@@ -556,6 +591,29 @@ def display_to_parallax_budget(value):
             return key
         for locale in SUPPORTED_LOCALES:
             if text == get_messages(locale).get(key):
+                return key
+    return "standard"
+
+
+def depth_separation_options(locale=DEFAULT_LOCALE):
+    messages = get_messages(locale)
+    return [messages[DEPTH_SEPARATION_LABELS[key]] for key in DEPTH_SEPARATION_KEYS]
+
+
+def depth_separation_to_display(value, locale=DEFAULT_LOCALE):
+    key = str(value or "standard")
+    messages = get_messages(locale)
+    label = DEPTH_SEPARATION_LABELS.get(key, DEPTH_SEPARATION_LABELS["standard"])
+    return messages.get(label, label)
+
+
+def display_to_depth_separation(value):
+    text = str(value or "")
+    for key, label in DEPTH_SEPARATION_LABELS.items():
+        if text == key or text == label:
+            return key
+        for locale in SUPPORTED_LOCALES:
+            if text == get_messages(locale).get(label):
                 return key
     return "standard"
 

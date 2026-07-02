@@ -231,9 +231,11 @@ class GUIBuilderMixin:
             return
         left_labels = [
             self.depth_model_label, self.depth_resolution_label, self.depth_quick_label,
-            self.convergence_label, self.depth_strength_label, self.foreground_scale_label,
+            self.convergence_label, self.dynamic_convergence_label, self.depth_strength_label, self.depth_pop_label,
+            self.foreground_pop_label, self.midground_pop_label, self.background_pop_label,
             self.antialiasing_label, self.stereo_preset_label, self.parallax_budget_label,
             self.scene_reset_label, self.edge_dilation_label, self.mask_feather_label, self.hole_fill_mode_label,
+            self.depth_separation_label,
             self.acceleration_label, self.computing_device_label, self.capture_tool_label,
             self.target_fps_label, self.render_policy_label, self.render_fixed_label,
             self.render_min_dimension_label, self.run_mode_label,
@@ -308,6 +310,11 @@ class GUIBuilderMixin:
         self.convergence_dd = CompactDropdown(width=S(130),
             options=[v for v in conv_options], value="0.00",
             on_select=self.on_stereo_hot_param_change)
+        self.dynamic_convergence_label = ft.Text("Dynamic Convergence:", size=FONT_SIZE, width=S(130))
+        dynamic_conv_strength_options = [f"{i / 100:.2f}" for i in range(0, 101, 10)]
+        self.dynamic_convergence_strength_dd = CompactDropdown(width=S(130),
+            options=[v for v in dynamic_conv_strength_options], value="0.00",
+            on_select=self.on_stereo_hot_param_change)
         self.depth_quick_label = ft.Text("Depth Quick:", size=FONT_SIZE, width=S(130))
         self.depth_quick_dd = CompactDropdown(
             options=["Soft", "Standard", "Enhanced"], value="Standard",
@@ -325,14 +332,15 @@ class GUIBuilderMixin:
             on_select=self.on_stereo_hot_param_change)
         convergence_depth_row = ft.Row([
             self.convergence_label, self.convergence_dd,
-            ft.Container(width=S(40)), self.depth_strength_label, self.depth_strength_dd,
+            ft.Container(width=S(40)), self.dynamic_convergence_label, self.dynamic_convergence_strength_dd,
         ], spacing=1)
+        depth_strength_row = ft.Row([self.depth_strength_label, self.depth_strength_dd], spacing=1)
 
-        # Row 3b: Foreground scale + anti-aliasing
-        self.foreground_scale_label = ft.Text("Foreground Scale:", size=FONT_SIZE, width=S(130))
-        fg_options = [f"{i / 10:.1f}" for i in range(-9, 0)] + [f"{i / 2:.1f}" for i in range(0, 11)]
-        self.foreground_scale_dd = CompactDropdown(width=S(130),
-            options=[v for v in fg_options], value="0.5",
+        # Row 3b: Depth Pop + anti-aliasing
+        self.depth_pop_label = ft.Text("Depth Pop:", size=FONT_SIZE, width=S(130))
+        depth_pop_options = [f"{i / 10:.1f}" for i in range(-9, 0)] + [f"{i / 2:.1f}" for i in range(0, 11)]
+        self.depth_pop_dd = CompactDropdown(width=S(130),
+            options=[v for v in depth_pop_options], value="0.0",
             on_select=self.on_stereo_hot_param_change)
         self.antialiasing_label = ft.Text("Anti-aliasing:", size=FONT_SIZE, width=S(130))
         aa_options = [str(i) for i in range(11)]
@@ -340,7 +348,7 @@ class GUIBuilderMixin:
             options=[v for v in aa_options], value="2",
             on_select=self.on_stereo_hot_param_change)
         row2b = ft.Row([
-            self.foreground_scale_label, self.foreground_scale_dd,
+            self.depth_pop_label, self.depth_pop_dd,
             ft.Container(width=S(40)), self.antialiasing_label, self.antialiasing_dd,
         ], spacing=1)
 
@@ -363,10 +371,15 @@ class GUIBuilderMixin:
         self.hole_fill_mode_dd = CompactDropdown(
             options=self._hole_fill_mode_options(),
             value=self._hole_fill_mode_to_display("balanced"), width=S(130), on_select=self.on_stereo_hot_param_change)
+        self.depth_separation_label = ft.Text("Depth Separation:", size=FONT_SIZE, width=S(130))
+        self.depth_separation_dd = CompactDropdown(
+            options=self._depth_separation_options(),
+            value=self._depth_separation_to_display("standard"), width=S(130), on_select=self.on_depth_separation_change)
         self.advanced_stereo_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT,
             label="Advanced Stereo", value=False, on_change=self.on_advanced_stereo_change)
         hole_fill_row = ft.Row([self.hole_fill_mode_label, self.hole_fill_mode_dd,
-            ft.Container(width=S(40)), self.advanced_stereo_cb], spacing=1)
+            ft.Container(width=S(40)), self.depth_separation_label, self.depth_separation_dd], spacing=1)
+        advanced_stereo_row = ft.Row([ft.Container(width=S(130)), self.advanced_stereo_cb], spacing=1)
 
         self.temporal_strength_label = ft.Text("Temporal Strength:", size=FONT_SIZE, width=S(130))
         self.temporal_strength_dd = CompactDropdown(options=[f"{i / 10:.1f}" for i in range(0, 11)],
@@ -389,7 +402,20 @@ class GUIBuilderMixin:
         self.edge_threshold_label = ft.Text("Edge Threshold:", size=FONT_SIZE, width=S(130))
         self.edge_threshold_dd = CompactDropdown(options=[f"{i / 100:.2f}" for i in range(0, 11)],
             value="0.04", width=S(130), on_select=self.on_stereo_hot_param_change)
-        stereo_row3b = ft.Row([self.edge_threshold_label, self.edge_threshold_dd], spacing=1)
+
+        pop_options = [f"{i / 100:.2f}" for i in range(50, 161, 5)]
+        self.foreground_pop_label = ft.Text("Foreground Pop:", size=FONT_SIZE, width=S(130))
+        self.foreground_pop_dd = CompactDropdown(options=pop_options, value="1.00", width=S(130), on_select=self.on_stereo_hot_param_change)
+        stereo_row3b = ft.Row([self.edge_threshold_label, self.edge_threshold_dd,
+            ft.Container(width=S(40)), self.foreground_pop_label, self.foreground_pop_dd], spacing=1)
+        self.midground_pop_label = ft.Text("Midground Pop:", size=FONT_SIZE, width=S(130))
+        self.midground_pop_dd = CompactDropdown(options=pop_options, value="1.00", width=S(130), on_select=self.on_stereo_hot_param_change)
+        self.background_pop_label = ft.Text("Background Pop:", size=FONT_SIZE, width=S(130))
+        self.background_pop_dd = CompactDropdown(options=pop_options, value="1.00", width=S(130), on_select=self.on_stereo_hot_param_change)
+        stereo_row3c = ft.Row([
+            self.midground_pop_label, self.midground_pop_dd,
+            ft.Container(width=S(40)), self.background_pop_label, self.background_pop_dd,
+        ], spacing=1)
 
         self.cross_eyed_cb = ft.Checkbox(scale=SCALE, visual_density=ft.VisualDensity.COMPACT,
             label="Cross Eyed", value=False, on_change=self.on_stereo_hot_param_change)
@@ -399,7 +425,7 @@ class GUIBuilderMixin:
         stereo_row4 = ft.Row([self.anaglyph_label, self.anaglyph_dd,
             ft.Container(width=S(40)), self.cross_eyed_cb, ft.Container(width=S(20)), self.fp16_cb], spacing=1)
 
-        self._advanced_stereo_rows = [convergence_depth_row, row2b, stereo_row1, stereo_row3, stereo_row3b, stereo_row4]
+        self._advanced_stereo_rows = [convergence_depth_row, depth_strength_row, row2b, stereo_row1, stereo_row3, stereo_row3b, stereo_row3c, stereo_row4]
 
         # Acceleration group
         self.acceleration_label = ft.Text("Acceleration:", size=FONT_SIZE, width=S(130))
@@ -588,9 +614,9 @@ class GUIBuilderMixin:
 
         # Assembly
         depth_group = ft.Container(
-            ft.Column([row0, row1, stereo_row0, hole_fill_row, convergence_depth_row, row2b,
-                       stereo_row1, stereo_row3, stereo_row4,
-                       self.row4a, self.row4b, self.row4c], spacing=S(8)),
+            ft.Column([row0, row1, stereo_row0, hole_fill_row, advanced_stereo_row,
+                       convergence_depth_row, depth_strength_row, row2b, stereo_row1, stereo_row3, stereo_row3b,
+                       stereo_row3c, stereo_row4, self.row4a, self.row4b, self.row4c], spacing=S(8)),
             margin=ft.Margin(0, 0, 0, S(8)),
             border=ft.Border(ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE),
                              ft.BorderSide(1, ft.Colors.OUTLINE), ft.BorderSide(1, ft.Colors.OUTLINE)),

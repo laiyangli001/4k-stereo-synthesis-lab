@@ -76,14 +76,25 @@ def test_gui_hot_stereo_params_auto_save_on_select():
     assert '"Max Shift Ratio":' not in config_mgr_text
     assert '"Parallax Budget Preset": parallax_budget' in config_mgr_text
     assert '"Convergence": self._parse_float(self.convergence_dd.value' in config_mgr_text
+    assert '"Dynamic Convergence": dynamic_convergence_strength > 0.0' in config_mgr_text
+    assert 'dynamic_convergence_strength = self._parse_float(self.dynamic_convergence_strength_dd.value' in config_mgr_text
+    assert '"Dynamic Convergence Strength": dynamic_convergence_strength' in config_mgr_text
+    assert "dynamic_convergence_cb" not in all_text
     assert '"Depth Strength": self._clamp_depth_strength(self.depth_strength_dd.value)' in config_mgr_text
     assert '"Temporal Strength": temporal_strength' in config_mgr_text
     assert '"Scene Reset Threshold": scene_reset_threshold' in config_mgr_text
     assert "self.temporal_strength_label, self.temporal_strength_dd,\n            ft.Container(width=S(40)), self.scene_reset_label, self.scene_reset_dd" in builders_text
     assert ("Reset " + "Cooldown " + "Frames") not in config_mgr_text
-    assert "def _clamp_foreground_scale" in all_text
-    assert "fg_options = [f\"{i / 10:.1f}\" for i in range(-9, 0)]" in builders_text
-    assert '"Foreground Scale": foreground_scale' in config_mgr_text
+    assert "def _clamp_depth_pop" in all_text
+    assert "depth_pop_options = [f\"{i / 10:.1f}\" for i in range(-9, 0)]" in builders_text
+    assert '"Depth Pop": depth_pop' in config_mgr_text
+    assert '"Foreground Pop": self._parse_float(self.foreground_pop_dd.value' in config_mgr_text
+    assert '"Midground Pop": self._parse_float(self.midground_pop_dd.value' in config_mgr_text
+    assert '"Background Pop": self._parse_float(self.background_pop_dd.value' in config_mgr_text
+    assert '"Depth Separation Preset": self._display_to_depth_separation(self.depth_separation_dd.value)' in config_mgr_text
+    assert "def on_depth_separation_change" in all_text
+    assert "self._depth_separation_values(key)" in all_text
+    assert 'on_select=self.on_depth_separation_change' in builders_text
     assert '"Depth Antialias Strength": antialias_strength' in config_mgr_text
     assert '"Edge Dilation": self._parse_int(self.edge_dilation_dd.value' in config_mgr_text
     assert '"Mask Feather Radius": self._parse_int(self.mask_feather_dd.value' in config_mgr_text
@@ -114,6 +125,14 @@ def test_gui_status_translation_keys_are_safe_for_language_switch():
     assert 'key="Stereo parameters saved"' not in all_text
 
 
+def test_language_switch_resizes_window_after_label_width_changes():
+    handlers_text = _file_text("handlers.py")
+    block = handlers_text[handlers_text.index("def on_language_change"):handlers_text.index("def update_ui_texts")]
+    assert "self.update_ui_texts()" in block
+    assert "self._sync_visibility()" in block
+    assert "self._fit_window_to_content(resize_window=True)" in block
+
+
 def test_gui_scene_preset_loads_complete_advanced_stereo_controls():
     text = _file_text("handlers.py")
     apply_start = text.index("def _apply_stereo_preset_values")
@@ -131,9 +150,12 @@ def test_advanced_stereo_is_not_persisted_and_starts_collapsed():
     cfg_text = _file_text("config_mgr.py")
     builders_text = _file_text("builders.py")
     assert '"Advanced Stereo": False' not in all_text
-    assert "self.hole_fill_mode_label, self.hole_fill_mode_dd,\n            ft.Container(width=S(40)), self.advanced_stereo_cb" in builders_text
+    assert "self.hole_fill_mode_label, self.hole_fill_mode_dd,\n            ft.Container(width=S(40)), self.depth_separation_label, self.depth_separation_dd" in builders_text
+    assert "self.advanced_stereo_cb" not in builders_text[builders_text.index("hole_fill_row = ft.Row(["):builders_text.index("advanced_stereo_row = ft.Row([")]
+    assert "advanced_stereo_row = ft.Row([ft.Container(width=S(130)), self.advanced_stereo_cb]" in builders_text
+    depth_block = builders_text[builders_text.index("depth_group = ft.Container("):builders_text.index("device_group = ft.Container(")]
+    assert depth_block.index("hole_fill_row") < depth_block.index("advanced_stereo_row")
     assert 'label="Advanced Stereo", value=False, on_change=self.on_advanced_stereo_change' in builders_text
-    assert "advanced_stereo_row =" not in builders_text
     assert 'self.advanced_stereo_cb.value = False' in cfg_text
     assert '"Advanced Stereo": self.advanced_stereo_cb.value' not in all_text
     assert 'cfg.get("Advanced Stereo"' not in all_text
@@ -618,17 +640,32 @@ def test_parallax_budget_has_tooltips_without_legacy_ipd_scale_tooltips():
     assert '(self.parallax_budget_dd, "tooltip_parallax_budget")' in all_text
 
 
-def test_convergence_and_foreground_scale_tooltips_explain_tuning():
+def test_convergence_and_pop_tooltips_explain_tuning():
     all_text = _all_text()
     localization_text = _localization_source().read_text(encoding="utf-8")
     assert '"tooltip_convergence": "Zero-parallax screen plane. Raise it in 0.05 steps' in localization_text
     assert '"tooltip_convergence": "零视差屏幕平面。前景太突出或出现重影时，每次提高 0.05' in localization_text
-    assert 'positive values strengthen near/far separation' in localization_text
-    assert 'negative values compress depth toward the middle' in localization_text
-    assert '正值增强近远层次' in localization_text
-    assert '负值把深度压向中间' in localization_text
+    assert '"Depth Pop:": "Depth Pop:"' in localization_text
+    assert '"Depth Pop:": "深度弹出:"' in localization_text
+    assert '"Foreground Pop:": "Foreground Pop:"' in localization_text
+    assert '"Foreground Pop:": "前景视差:"' in localization_text
+    assert '"Midground Pop:": "Midground Pop:"' in localization_text
+    assert '"Midground Pop:": "中景视差:"' in localization_text
+    assert '"Background Pop:": "Background Pop:"' in localization_text
+    assert '"Background Pop:": "背景视差:"' in localization_text
+    assert 'Centered depth curve: output = 0.5 + sign(depth - 0.5)' in localization_text
+    assert '居中深度曲线：output = 0.5 + sign(depth - 0.5)' in localization_text
+    assert 'mainly people, hands, and tabletop foreground' in localization_text
+    assert 'mainly characters, vehicles, and common focus areas' in localization_text
+    assert 'mainly sky, walls, and far buildings' in localization_text
+    assert '主要影响人物、手、桌面前景' in localization_text
+    assert '主要影响角色、车辆、常见焦点区域' in localization_text
+    assert '主要影响天空、墙面、远景建筑' in localization_text
     assert '(self.convergence_dd, "tooltip_convergence")' in all_text
-    assert '(self.foreground_scale_dd, "tooltip_foreground_scale")' in all_text
+    assert '(self.depth_pop_dd, "tooltip_depth_pop")' in all_text
+    assert '(self.foreground_pop_dd, "tooltip_foreground_pop")' in all_text
+    assert '(self.midground_pop_dd, "tooltip_midground_pop")' in all_text
+    assert '(self.background_pop_dd, "tooltip_background_pop")' in all_text
 
 
 def test_depth_strength_and_antialiasing_tooltips_explain_tuning():
@@ -656,7 +693,14 @@ def test_convergence_dropdown_uses_five_percent_steps():
     handlers_text = _file_text("handlers.py")
     assert 'conv_options = [f"{i / 100:.2f}" for i in range(-50, 101, 5)]' in builders_text
     assert 'options=[v for v in conv_options], value="0.00"' in builders_text
+    assert 'self.dynamic_convergence_label = ft.Text("Dynamic Convergence:"' in builders_text
+    assert 'self.dynamic_convergence_strength_dd = CompactDropdown' in builders_text
+    dynamic_start = builders_text.index('self.dynamic_convergence_strength_dd = CompactDropdown')
+    dynamic_end = builders_text.index('self.depth_quick_label', dynamic_start)
+    assert 'value="0.00"' in builders_text[dynamic_start:dynamic_end]
+    assert 'on_select=self.on_stereo_hot_param_change' in builders_text[dynamic_start:dynamic_end]
     assert 'self.convergence_dd.value = f"{values[\'convergence\']:.2f}"' in handlers_text
+    assert 'self.dynamic_convergence_strength_dd.value = f"{values.get(\'dynamic_convergence_strength\', 0.0):.2f}"' in handlers_text
 
 
 def test_parallax_budget_label_is_localized():
@@ -666,6 +710,7 @@ def test_parallax_budget_label_is_localized():
     assert '"Parallax Budget:": "视差预算:"' in localization_text
     assert '"Stereo Scale:"' not in localization_text
     assert '"Convergence:": "会聚位置:"' in localization_text
+    assert '"Dynamic Convergence:": "动态会聚:"' in localization_text
     assert '"Convergence:": "会聚点:"' not in localization_text
     assert 'self.parallax_budget_label.value = t["Parallax Budget:"]' in handlers_text
 
@@ -732,7 +777,11 @@ def test_reset_defaults_restore_cinema_stereo_defaults():
     assert '"Depth Strength": 0.25' in config_text
     assert '"Depth Quick": "Standard"' in config_text
     assert '"IPD":' not in config_text
-    assert '"Foreground Scale": 0.0' in config_text
+    assert '"Depth Pop": 0.0' in config_text
+    assert '"Foreground Pop": 1.15' in config_text
+    assert '"Midground Pop": 1.05' in config_text
+    assert '"Background Pop": 1.05' in config_text
+    assert '"Depth Separation Preset": "standard"' in config_text
     assert '"Convergence": 0.0' in config_text
     assert '"Parallax Budget Preset": "standard"' in config_text
     assert '"Stereo Scale":' not in config_text
@@ -762,6 +811,49 @@ def test_stereo_mode_presets_keep_expected_parallax_budget_combinations():
     assert '"temporal_strength": 0.0, "scene_reset_threshold": 0.18' in config_mgr_text
     assert '"still_image_hq": {\n                "quality": "hq_4k", "parallax_budget": "strong", "depth_strength": 0.30' in config_mgr_text
     assert '"edge_dilation": 3, "mask_feather_radius": 3, "hole_fill_mode": "quality",' in config_mgr_text
+    assert '"cinema": {\n                "quality": "quality_4k", "parallax_budget": "standard", "depth_strength": 0.25, "depth_quick": "Standard",\n                "convergence": 0.0, "dynamic_convergence": False, "dynamic_convergence_strength": 0.0,\n                "temporal_strength": 0.25, "scene_reset_threshold": 0.22,\n                "depth_pop": 0.0, "depth_separation": "standard", "foreground_pop": 1.15, "midground_pop": 1.05, "background_pop": 1.05' in config_mgr_text
+    assert '"game_low_latency": {\n                "quality": "fast_plus", "parallax_budget": "comfort", "depth_strength": 0.20, "depth_quick": "Soft",\n                "convergence": 0.0, "dynamic_convergence": False, "dynamic_convergence_strength": 0.0,\n                "temporal_strength": 0.0, "scene_reset_threshold": 0.18,\n                "depth_pop": 0.0, "depth_separation": "weak", "foreground_pop": 1.15, "midground_pop": 1.05, "background_pop": 0.85' in config_mgr_text
+    assert '"still_image_hq": {\n                "quality": "hq_4k", "parallax_budget": "strong", "depth_strength": 0.30, "depth_quick": "Enhanced",\n                "convergence": 0.0, "dynamic_convergence": False, "dynamic_convergence_strength": 0.0,\n                "temporal_strength": 0.0, "scene_reset_threshold": 0.00,\n                "depth_pop": 0.0, "depth_separation": "strong", "foreground_pop": 1.25, "midground_pop": 1.10, "background_pop": 1.00' in config_mgr_text
+
+
+def test_depth_separation_preset_is_visible_next_to_hole_fill_and_updates_layer_pop():
+    builders_text = _file_text("builders.py")
+    config_mgr_text = _file_text("config_mgr.py")
+    handlers_text = _file_text("handlers.py")
+    localization_text = _localization_source().read_text(encoding="utf-8")
+
+    assert '"Depth Separation Preset": "standard"' in _config_source().read_text(encoding="utf-8")
+    assert 'self.depth_separation_label = ft.Text("Depth Separation:"' in builders_text
+    depth_group_block = builders_text[builders_text.index("depth_group = ft.Container("):builders_text.index("device_group = ft.Container(")]
+    assert "stereo_row3b" in depth_group_block
+    assert "stereo_row3c" in depth_group_block
+    row3b = builders_text[builders_text.index("stereo_row3b = ft.Row(["):builders_text.index("self.midground_pop_label", builders_text.index("stereo_row3b = ft.Row(["))]
+    row3c = builders_text[builders_text.index("stereo_row3c = ft.Row(["):builders_text.index("self.cross_eyed_cb", builders_text.index("stereo_row3c = ft.Row(["))]
+    assert "self.edge_threshold_dd" in row3b
+    assert "self.foreground_pop_label" in row3b
+    assert "self.foreground_pop_label" not in row3c
+    assert "self.midground_pop_label" in row3c
+    assert "self.background_pop_label" in row3c
+    assert 'options=self._depth_separation_options()' in builders_text
+    assert 'value=self._depth_separation_to_display("standard")' in builders_text
+    assert 'self.depth_separation_dd.value = self._depth_separation_to_display(' in config_mgr_text
+    assert '"Depth Separation Preset": self._display_to_depth_separation(self.depth_separation_dd.value)' in config_mgr_text
+    assert 'def _depth_separation_values' in config_mgr_text
+    assert '"default": (1.00, 1.00, 1.00)' in config_mgr_text
+    assert '"standard": (1.15, 1.05, 1.05)' in config_mgr_text
+    assert '"strong": (1.25, 1.10, 1.00)' in config_mgr_text
+    assert '"weak": (1.15, 1.05, 0.85)' in config_mgr_text
+    assert 'self.depth_separation_label.value = t["Depth Separation:"]' in handlers_text
+    assert '(self.depth_separation_dd, "tooltip_depth_separation")' in handlers_text
+    assert 'self.depth_separation_dd.value = self._depth_separation_to_display(values["depth_separation"])' in handlers_text
+    assert 'foreground, midground, background = self._depth_separation_values(key)' in handlers_text
+    assert '"Depth Separation:": "前后分离："' in localization_text
+    assert '"separation_default": "默认"' in localization_text
+    assert '"separation_standard": "标准"' in localization_text
+    assert '"separation_strong": "增强"' in localization_text
+    assert '"separation_weak": "减弱"' in localization_text
+    assert "def depth_separation_options" in localization_text
+    assert "def display_to_depth_separation" in localization_text
 
 
 def test_hole_fill_mode_gui_control_is_localized_and_hot_reloadable():

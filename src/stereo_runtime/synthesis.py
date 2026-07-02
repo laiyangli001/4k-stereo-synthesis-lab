@@ -40,10 +40,17 @@ class StereoConfig:
     convergence: float = 0.0
     max_disparity_px: float | None = None
     parallax_preset: str = "standard"
+    foreground_shift_scale: float = 1.0
+    midground_shift_scale: float = 1.0
+    background_shift_scale: float = 1.0
+    dynamic_convergence_enabled: bool = False
+    dynamic_convergence_strength: float = 0.0
+    dynamic_convergence_target: float = 0.5
+    dynamic_convergence_alpha: float = 0.85
     temporal_strength: float = 0.85
     auto_reset_temporal: bool = False
     scene_reset_threshold: float = 0.22
-    foreground_scale: float = 0.0
+    depth_pop: float = 0.0
     depth_antialias_strength: float = 0.0
     edge_dilation: int = 2
     edge_threshold: float = 0.04
@@ -92,11 +99,14 @@ def _layered_synthesis(
         convergence=config.convergence,
         max_disparity_px=config.max_disparity_px,
         parallax_preset=config.parallax_preset,
+        foreground_shift_scale=config.foreground_shift_scale,
+        midground_shift_scale=config.midground_shift_scale,
+        background_shift_scale=config.background_shift_scale,
     )
     rgb = ensure_bchw(rgb, name="rgb").float()
     depth = postprocess_depth(
         match_depth(depth, rgb.shape[-2], rgb.shape[-1]),
-        foreground_scale=config.foreground_scale,
+        depth_pop=config.depth_pop,
         antialias_strength=config.depth_antialias_strength,
     )
     base_shift = compute_shift_px(depth, rgb.shape[-1], params)
@@ -285,7 +295,7 @@ def synthesize_stereo(
         stage_start = time.perf_counter()
         depth = postprocess_depth(
             depth,
-            foreground_scale=config.foreground_scale,
+            depth_pop=config.depth_pop,
             antialias_strength=config.depth_antialias_strength,
         )
         _record_cuda_event(cuda_events, "synth_depth_shift", rgb)
@@ -373,7 +383,7 @@ def synthesize_stereo(
     if needs_output_depth:
         output_depth = postprocess_depth(
             match_depth(depth, left.shape[-2], left.shape[-1]),
-            foreground_scale=config.foreground_scale,
+            depth_pop=config.depth_pop,
             antialias_strength=config.depth_antialias_strength,
         )
     _record_cuda_event(cuda_events, "synth_output_depth", rgb)

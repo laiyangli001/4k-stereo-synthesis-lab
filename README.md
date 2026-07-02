@@ -44,7 +44,6 @@
 ## 重要文档
 
 - 当前交接入口：[docs/00-api-handoff-progress.md](docs/00-api-handoff-progress.md)
-- 项目目标：[docs/00-goals.md](docs/00-goals.md)
 - Host API 合同：[docs/15-host-api-contract.md](docs/15-host-api-contract.md)
 - Preset 调用示例：[docs/14-host-api-preset-examples.md](docs/14-host-api-preset-examples.md)
 - OpenXR 计划：[docs/12-openxr-stereo-runtime-plan.md](docs/12-openxr-stereo-runtime-plan.md)

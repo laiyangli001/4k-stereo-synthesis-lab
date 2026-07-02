@@ -85,9 +85,15 @@ class GUIConfigMixin:
             cfg.get("Render Min Dimension", DEFAULTS["Render Min Dimension"]), DEFAULTS["Render Min Dimension"]))
         self.render_align_dd.value = str(self._parse_int(cfg.get("Render Align", DEFAULTS["Render Align"]), DEFAULTS["Render Align"]))
         self.antialiasing_dd.value = str(cfg.get("Anti-aliasing", DEFAULTS["Anti-aliasing"]))
-        self.foreground_scale_dd.value = str(self._clamp_foreground_scale(
-            cfg.get("Foreground Scale", DEFAULTS["Foreground Scale"])))
+        self.depth_pop_dd.value = str(self._clamp_depth_pop(
+            cfg.get("Depth Pop", DEFAULTS["Depth Pop"])))
+        self.foreground_pop_dd.value = f'{self._parse_float(cfg.get("Foreground Pop", DEFAULTS["Foreground Pop"]), DEFAULTS["Foreground Pop"]):.2f}'
+        self.midground_pop_dd.value = f'{self._parse_float(cfg.get("Midground Pop", DEFAULTS["Midground Pop"]), DEFAULTS["Midground Pop"]):.2f}'
+        self.background_pop_dd.value = f'{self._parse_float(cfg.get("Background Pop", DEFAULTS["Background Pop"]), DEFAULTS["Background Pop"]):.2f}'
+        self.depth_separation_dd.value = self._depth_separation_to_display(
+            cfg.get("Depth Separation Preset", DEFAULTS["Depth Separation Preset"]))
         self.convergence_dd.value = str(cfg.get("Convergence", DEFAULTS["Convergence"]))
+        self.dynamic_convergence_strength_dd.value = f'{self._parse_float(cfg.get("Dynamic Convergence Strength", DEFAULTS["Dynamic Convergence Strength"]), DEFAULTS["Dynamic Convergence Strength"]):.2f}'
         stereo_preset = self._display_to_preset(cfg.get("Stereo Preset", DEFAULTS["Stereo Preset"]))
         self.stereo_preset_dd.value = self._preset_to_display(stereo_preset)
         self.stereo_quality_dd.value = self._stereo_quality_to_display(
@@ -198,7 +204,8 @@ class GUIConfigMixin:
 
         temporal_strength = self._parse_float(self.temporal_strength_dd.value, DEFAULTS["Temporal Strength"])
         scene_reset_threshold = self._parse_float(self.scene_reset_dd.value, DEFAULTS["Scene Reset Threshold"])
-        foreground_scale = self._clamp_foreground_scale(self._parse_float(self.foreground_scale_dd.value, DEFAULTS["Foreground Scale"]))
+        depth_pop = self._clamp_depth_pop(self._parse_float(self.depth_pop_dd.value, DEFAULTS["Depth Pop"]))
+        dynamic_convergence_strength = self._parse_float(self.dynamic_convergence_strength_dd.value, DEFAULTS["Dynamic Convergence Strength"])
         accelerator_values, recompile_values = self._platform_accelerator_values()
         fp16_value = False if "MPS" in (self.device_dd.value or "") else bool(self.fp16_cb.value)
 
@@ -219,6 +226,8 @@ class GUIConfigMixin:
             "Synthetic View": stereo_quality,
             "Parallax Budget Preset": parallax_budget,
             "Convergence": self._parse_float(self.convergence_dd.value, DEFAULTS["Convergence"]),
+            "Dynamic Convergence": dynamic_convergence_strength > 0.0,
+            "Dynamic Convergence Strength": dynamic_convergence_strength,
             "Display Mode": self.display_mode_dd.value,
             "Model List": ALL_MODELS,
             "Depth Model": self.current_model_name,
@@ -238,7 +247,11 @@ class GUIConfigMixin:
             "Edge Threshold": self._parse_float(self.edge_threshold_dd.value, DEFAULTS["Edge Threshold"]),
             "Cross Eyed": self.cross_eyed_cb.value,
             "Anaglyph Method": self.anaglyph_dd.value,
-            "Foreground Scale": foreground_scale,
+            "Depth Pop": depth_pop,
+            "Foreground Pop": self._parse_float(self.foreground_pop_dd.value, DEFAULTS["Foreground Pop"]),
+            "Midground Pop": self._parse_float(self.midground_pop_dd.value, DEFAULTS["Midground Pop"]),
+            "Background Pop": self._parse_float(self.background_pop_dd.value, DEFAULTS["Background Pop"]),
+            "Depth Separation Preset": self._display_to_depth_separation(self.depth_separation_dd.value),
             "Depth Resolution": self._parse_int(self.depth_res_dd.value, DEFAULTS["Depth Resolution"]),
             "FP16": fp16_value,
             "Computing Device": self.device_label_to_index.get(self.device_dd.value, DEFAULTS["Computing Device"]),
@@ -316,8 +329,9 @@ class GUIConfigMixin:
         temporal_strength = self._parse_float(self.temporal_strength_dd.value, DEFAULTS["Temporal Strength"])
         scene_reset_threshold = self._parse_float(self.scene_reset_dd.value, DEFAULTS["Scene Reset Threshold"])
         antialias_strength = self._parse_float(self.antialiasing_dd.value, DEFAULTS["Depth Antialias Strength"])
-        foreground_scale = self._clamp_foreground_scale(self._parse_float(self.foreground_scale_dd.value, DEFAULTS["Foreground Scale"]))
-        self.foreground_scale_dd.value = f"{foreground_scale:.1f}"
+        depth_pop = self._clamp_depth_pop(self._parse_float(self.depth_pop_dd.value, DEFAULTS["Depth Pop"]))
+        self.depth_pop_dd.value = f"{depth_pop:.1f}"
+        dynamic_convergence_strength = self._parse_float(self.dynamic_convergence_strength_dd.value, DEFAULTS["Dynamic Convergence Strength"])
         stereo_preset = self._display_to_preset(self.stereo_preset_dd.value)
         preset_values = self._stereo_preset_gui_values(stereo_preset) or {}
         stereo_quality = self._stereo_quality_for_preset(stereo_preset)
@@ -329,13 +343,19 @@ class GUIConfigMixin:
             "Synthetic View": stereo_quality,
             "Parallax Budget Preset": parallax_budget,
             "Convergence": self._parse_float(self.convergence_dd.value, DEFAULTS["Convergence"]),
+            "Dynamic Convergence": dynamic_convergence_strength > 0.0,
+            "Dynamic Convergence Strength": dynamic_convergence_strength,
             "Depth Strength": self._clamp_depth_strength(self.depth_strength_dd.value),
             "Depth Quick": self._display_to_depth_quick(self.depth_quick_dd.value),
             "Temporal": temporal_strength > 0.0,
             "Temporal Strength": temporal_strength,
             "Auto Scene Reset": scene_reset_threshold > 0.0,
             "Scene Reset Threshold": scene_reset_threshold,
-            "Foreground Scale": foreground_scale,
+            "Depth Pop": depth_pop,
+            "Foreground Pop": self._parse_float(self.foreground_pop_dd.value, DEFAULTS["Foreground Pop"]),
+            "Midground Pop": self._parse_float(self.midground_pop_dd.value, DEFAULTS["Midground Pop"]),
+            "Background Pop": self._parse_float(self.background_pop_dd.value, DEFAULTS["Background Pop"]),
+            "Depth Separation Preset": self._display_to_depth_separation(self.depth_separation_dd.value),
             "Anti-aliasing": self._parse_int(self.antialiasing_dd.value, DEFAULTS["Anti-aliasing"]),
             "Depth Antialias Strength": antialias_strength,
             "Edge Dilation": self._parse_int(self.edge_dilation_dd.value, DEFAULTS["Edge Dilation"]),
@@ -361,51 +381,60 @@ class GUIConfigMixin:
         presets = {
             "traditional_fastest": {
                 "quality": "fast", "parallax_budget": "standard", "depth_strength": 0.25, "depth_quick": "Standard",
-                "convergence": 0.0,
+                "convergence": 0.0, "dynamic_convergence": False, "dynamic_convergence_strength": 0.0,
                 "temporal_strength": 0.0, "scene_reset_threshold": 0.22,
-                "foreground_scale": 0.0, "antialiasing": 0, "depth_antialias_strength": 0.0,
+                "depth_pop": 0.0, "depth_separation": "default", "foreground_pop": 1.0, "midground_pop": 1.0, "background_pop": 1.0, "antialiasing": 0, "depth_antialias_strength": 0.0,
                 "edge_dilation": 0, "mask_feather_radius": 0, "hole_fill_mode": "balanced",
                 "hole_fill_radius": 0, "hole_fill_strength": 0.0, "edge_threshold": 0.04,
                 "cross_eyed": False,
             },
             "cinema": {
                 "quality": "quality_4k", "parallax_budget": "standard", "depth_strength": 0.25, "depth_quick": "Standard",
-                "convergence": 0.0,
+                "convergence": 0.0, "dynamic_convergence": False, "dynamic_convergence_strength": 0.0,
                 "temporal_strength": 0.25, "scene_reset_threshold": 0.22,
-                "foreground_scale": 0.0, "antialiasing": 1, "depth_antialias_strength": 1.0,
+                "depth_pop": 0.0, "depth_separation": "standard", "foreground_pop": 1.15, "midground_pop": 1.05, "background_pop": 1.05, "antialiasing": 1, "depth_antialias_strength": 1.0,
                 "edge_dilation": 1, "mask_feather_radius": 1, "hole_fill_mode": "balanced",
                 "hole_fill_radius": 1, "hole_fill_strength": 0.60, "edge_threshold": 0.04,
                 "cross_eyed": False,
             },
             "game_low_latency": {
                 "quality": "fast_plus", "parallax_budget": "comfort", "depth_strength": 0.20, "depth_quick": "Soft",
-                "convergence": 0.0,
+                "convergence": 0.0, "dynamic_convergence": False, "dynamic_convergence_strength": 0.0,
                 "temporal_strength": 0.0, "scene_reset_threshold": 0.18,
-                "foreground_scale": 0.0, "antialiasing": 0, "depth_antialias_strength": 0.0,
+                "depth_pop": 0.0, "depth_separation": "weak", "foreground_pop": 1.15, "midground_pop": 1.05, "background_pop": 0.85, "antialiasing": 0, "depth_antialias_strength": 0.0,
                 "edge_dilation": 1, "mask_feather_radius": 0, "hole_fill_mode": "soft_low_ghost",
                 "hole_fill_radius": 1, "hole_fill_strength": 0.60, "edge_threshold": 0.04,
                 "cross_eyed": False,
             },
             "still_image_hq": {
                 "quality": "hq_4k", "parallax_budget": "strong", "depth_strength": 0.30, "depth_quick": "Enhanced",
-                "convergence": 0.0,
+                "convergence": 0.0, "dynamic_convergence": False, "dynamic_convergence_strength": 0.0,
                 "temporal_strength": 0.0, "scene_reset_threshold": 0.00,
-                "foreground_scale": 0.0, "antialiasing": 2, "depth_antialias_strength": 2.0,
+                "depth_pop": 0.0, "depth_separation": "strong", "foreground_pop": 1.25, "midground_pop": 1.10, "background_pop": 1.00, "antialiasing": 2, "depth_antialias_strength": 2.0,
                 "edge_dilation": 3, "mask_feather_radius": 3, "hole_fill_mode": "quality",
                 "hole_fill_radius": 3, "hole_fill_strength": 1.0, "edge_threshold": 0.04,
                 "cross_eyed": False,
             },
             "debug_export": {
                 "quality": "quality_4k", "parallax_budget": "standard", "depth_strength": 0.30, "depth_quick": "Enhanced",
-                "convergence": 0.0,
+                "convergence": 0.0, "dynamic_convergence": False, "dynamic_convergence_strength": 0.0,
                 "temporal_strength": 0.0, "scene_reset_threshold": 0.22,
-                "foreground_scale": 0.0, "antialiasing": 0, "depth_antialias_strength": 0.0,
+                "depth_pop": 0.0, "depth_separation": "default", "foreground_pop": 1.0, "midground_pop": 1.0, "background_pop": 1.0, "antialiasing": 0, "depth_antialias_strength": 0.0,
                 "edge_dilation": 1, "mask_feather_radius": 0, "hole_fill_mode": "sharp_test",
                 "hole_fill_radius": 1, "hole_fill_strength": 0.45, "edge_threshold": 0.04,
                 "cross_eyed": False,
             },
         }
         return presets.get(preset)
+
+    @staticmethod
+    def _depth_separation_values(value):
+        return {
+            "default": (1.00, 1.00, 1.00),
+            "standard": (1.15, 1.05, 1.05),
+            "strong": (1.25, 1.10, 1.00),
+            "weak": (1.15, 1.05, 0.85),
+        }.get(value, (1.15, 1.05, 1.05))
 
     @classmethod
     def _stereo_quality_for_preset(cls, preset):
@@ -451,6 +480,19 @@ class GUIConfigMixin:
     def _hole_fill_mode_to_display(self, value):
         from .localization import hole_fill_mode_to_display
         return hole_fill_mode_to_display(value, self.locale)
+
+    def _depth_separation_options(self):
+        from .localization import depth_separation_options
+        return depth_separation_options(self.locale)
+
+    def _depth_separation_to_display(self, value):
+        from .localization import depth_separation_to_display
+        return depth_separation_to_display(value, self.locale)
+
+    @staticmethod
+    def _display_to_depth_separation(value):
+        from .localization import display_to_depth_separation
+        return display_to_depth_separation(value)
 
     @staticmethod
     def _display_to_hole_fill_mode(value):
@@ -534,11 +576,11 @@ class GUIConfigMixin:
         return width, height
 
     @staticmethod
-    def _clamp_foreground_scale(value):
+    def _clamp_depth_pop(value):
         try:
             value = float(value)
         except (ValueError, TypeError):
-            value = float(DEFAULTS["Foreground Scale"])
+            value = float(DEFAULTS["Depth Pop"])
         return max(-0.9, min(5.0, value))
 
     @staticmethod

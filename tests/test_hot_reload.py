@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from stereo_runtime.adapter import StereoRuntimeConfig
 from stereo_runtime.hot_reload import (
     StereoHotReloader,
-    clamp_foreground_scale_hot_reload,
+    clamp_depth_pop_hot_reload,
     hot_reload_runtime_settings_snapshot,
     hot_reload_value_snapshot,
     runtime_stereo_overrides,
@@ -23,7 +23,14 @@ def make_config(**overrides):
         "max_disparity_px": None,
         "parallax_preset": "standard",
         "temporal": True,
-        "foreground_scale": 1.0,
+        "depth_pop": 1.0,
+        "foreground_shift_scale": 1.0,
+        "midground_shift_scale": 1.0,
+        "background_shift_scale": 1.0,
+        "dynamic_convergence_enabled": False,
+        "dynamic_convergence_strength": 0.0,
+        "dynamic_convergence_target": 0.5,
+        "dynamic_convergence_alpha": 0.85,
         "depth_antialias_strength": 0.25,
         "edge_threshold": 0.1,
         "edge_dilation": 2,
@@ -61,7 +68,10 @@ def test_hot_reload_value_snapshot_parses_expected_fields():
         "Parallax Preset": "strong",
         "Temporal Strength": "0",
         "Scene Reset Threshold": "0.3",
-        "Foreground Scale": "9.0",
+        "Depth Pop": "9.0",
+        "Foreground Pop": "1.20",
+        "Midground Pop": "1.10",
+        "Background Pop": "0.90",
         "Depth Antialias Strength": "0.8",
         "Edge Dilation": "3",
         "Mask Feather Radius": "4",
@@ -93,7 +103,10 @@ def test_hot_reload_value_snapshot_parses_expected_fields():
     assert values["temporal"] is False
     assert values["scene_reset_threshold"] == 0.3
     assert ("reset_" + "cooldown" + "_frames") not in values
-    assert values["foreground_scale"] == 5.0
+    assert values["depth_pop"] == 5.0
+    assert values["foreground_shift_scale"] == 1.2
+    assert values["midground_shift_scale"] == 1.1
+    assert values["background_shift_scale"] == 0.9
     assert values["depth_antialias_strength"] == 0.8
     assert values["edge_dilation"] == 3
     assert values["mask_feather_radius"] == 4
@@ -201,22 +214,22 @@ def test_hot_reload_explicit_temporal_toggles_override_positive_values():
     assert snapshot.auto_reset_temporal is False
 
 
-def test_hot_reload_bool_and_foreground_helpers():
+def test_hot_reload_bool_and_depth_pop_helpers():
     assert to_bool_hot_reload(True) is True
     assert to_bool_hot_reload("on") is True
     assert to_bool_hot_reload(None) is False
-    assert clamp_foreground_scale_hot_reload(-5.0) == -0.9
-    assert clamp_foreground_scale_hot_reload(10.0) == 5.0
+    assert clamp_depth_pop_hot_reload(-5.0) == -0.9
+    assert clamp_depth_pop_hot_reload(10.0) == 5.0
 
 
 def test_hot_reload_fast_quality_disables_temporal_and_postprocess():
-    config = make_config(stereo_quality="fast", temporal_strength=0.7, foreground_scale=0.5, depth_antialias_strength=2.0)
+    config = make_config(stereo_quality="fast", temporal_strength=0.7, depth_pop=0.5, depth_antialias_strength=2.0)
     settings = {
         "Stereo Quality": "fast",
         "Synthetic View": "fast",
         "Temporal Strength": "0.7",
         "Scene Reset Threshold": "0.22",
-        "Foreground Scale": "0.5",
+        "Depth Pop": "0.5",
         "Depth Antialias Strength": "2.0",
     }
 
@@ -228,7 +241,7 @@ def test_hot_reload_fast_quality_disables_temporal_and_postprocess():
     assert values["auto_reset_temporal"] is False
     assert values["scene_reset_threshold"] == 0.0
     assert ("reset_" + "cooldown" + "_frames") not in values
-    assert values["foreground_scale"] == 0.0
+    assert values["depth_pop"] == 0.0
     assert values["depth_antialias_strength"] == 0.0
 
 

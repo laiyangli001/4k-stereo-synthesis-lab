@@ -33,7 +33,14 @@ _HOT_RELOAD_FIELDS = frozenset(
         "temporal_strength",
         "auto_reset_temporal",
         "scene_reset_threshold",
-        "foreground_scale",
+        "depth_pop",
+        "foreground_shift_scale",
+        "midground_shift_scale",
+        "background_shift_scale",
+        "dynamic_convergence_enabled",
+        "dynamic_convergence_strength",
+        "dynamic_convergence_target",
+        "dynamic_convergence_alpha",
         "depth_antialias_strength",
         "edge_dilation",
         "edge_threshold",
@@ -78,7 +85,14 @@ _CONFIG_UPDATE_FIELDS = frozenset(
         "temporal_strength",
         "auto_reset_temporal",
         "scene_reset_threshold",
-        "foreground_scale",
+        "depth_pop",
+        "foreground_shift_scale",
+        "midground_shift_scale",
+        "background_shift_scale",
+        "dynamic_convergence_enabled",
+        "dynamic_convergence_strength",
+        "dynamic_convergence_target",
+        "dynamic_convergence_alpha",
         "depth_antialias_strength",
         "edge_dilation",
         "edge_threshold",
@@ -131,7 +145,14 @@ class RuntimeSettingsSnapshot:
     temporal_strength: float | None = None
     auto_reset_temporal: bool | None = None
     scene_reset_threshold: float | None = None
-    foreground_scale: float | None = None
+    depth_pop: float | None = None
+    foreground_shift_scale: float | None = None
+    midground_shift_scale: float | None = None
+    background_shift_scale: float | None = None
+    dynamic_convergence_enabled: bool | None = None
+    dynamic_convergence_strength: float | None = None
+    dynamic_convergence_target: float | None = None
+    dynamic_convergence_alpha: float | None = None
     depth_antialias_strength: float | None = None
     edge_dilation: int | None = None
     edge_threshold: float | None = None

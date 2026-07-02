@@ -17,7 +17,7 @@ https://github.com/laiyangli001/4k-stereo-synthesis-lab
 Current focus:
 
 ```text
-Desktop2Stereo engineering-spec refactor tasks from prompts/codex-refactor-prompt.md
+Desktop2Stereo GUI stereo-parameter cleanup, OpenXR comfort defaults, and engineering-spec refactor follow-ups
 ```
 
 Latest pushed task commit:
@@ -28,14 +28,14 @@ Latest pushed task commit:
 
 Canonical specs for current work:
 
-- `docs/28-Realtime-2d-to-3d-specification.md` - official final runtime process spec; `docs/25` is obsolete.
-- `docs/26-desktop2stereo-engineering-design-specification.md` - engineering implementation, migration, compatibility cleanup, and compliance status.
+- `docs/01-Realtime-2d-to-3d-specification.md` - official final runtime process spec; `docs/25` is obsolete.
+- `docs/01-desktop2stereo-engineering-design-specification.md` - engineering implementation, migration, compatibility cleanup, and compliance status.
 - `prompts/codex-refactor-prompt.md`
 - This file: `docs/00-api-handoff-progress.md`
 
 ## Current Boundaries
 
-- Treat `docs/28-Realtime-2d-to-3d-specification.md` as canonical when Parallax Budget, render_size, OpenXR, or output contract details differ from the prompt or historical docs.
+- Treat `docs/01-Realtime-2d-to-3d-specification.md` as canonical when Parallax Budget, render_size, OpenXR, or output contract details differ from the prompt or historical docs.
 - Keep `stereo_runtime` responsible for depth inference, stereo synthesis, OpenXR render-core config, output tensors, timings, and provider/debug contracts.
 - Keep capture/session/window lifecycle, GUI settings persistence, OpenXR session/swapchain timing, and final display/submit outside `stereo_runtime`.
 - Keep compatibility paths where recent tasks introduced new contracts: `RuntimeSettingsSnapshot`, normalized parallax budgets, and `CapturedFrame` metadata.
@@ -51,7 +51,7 @@ Canonical specs for current work:
 
 ## Future Work
 
-Detailed engineering and migration rules live in `docs/26-desktop2stereo-engineering-design-specification.md`. This handoff file only tracks the current task queue and verification status.
+Detailed engineering and migration rules live in `docs/01-desktop2stereo-engineering-design-specification.md`. This handoff file only tracks the current task queue and verification status.
 
 Current task queue:
 
@@ -62,11 +62,51 @@ Current task queue:
 5. Trace the remaining SBS/display FPS gap outside `StereoRuntime.process_*()`: add or inspect timing around raw dequeue, runtime call, runtime_q put/drop, viewer dequeue, texture upload, OpenXR/local submit, present/vsync, and FPS reporting.
 6. Deepen CUDA/GL image texture diagnostics: image texture must be tried first, PBO must be marked as GPU fallback, CPU fallback must be red-warning visible, and the original image texture failure reason must not be swallowed.
 7. Optimize TensorRT ORT depth provider for real GPU zero-copy: replace CPU numpy input binding with CUDA/DLPack or direct CUDA OrtValue binding, keep iobinding output on CUDA, and return a CUDA torch tensor without `OrtValue.numpy()` / `torch.from_numpy()` CPU staging.
-8. Remove remaining compatibility redundancy after all consumers use the docs/28 contract: old snapshot/API aliases and debug-only fallback keys. Legacy parallax multiplier fields and historical render-scale numeric thresholds have been cleaned from the current runtime/config path and should now be guarded against regressions.
+8. Remove remaining compatibility redundancy after all consumers use the docs/01 contract: old snapshot/API aliases and debug-only fallback keys. Legacy parallax multiplier fields and historical render-scale numeric thresholds have been cleaned from the current runtime/config path and should now be guarded against regressions.
 9. Continue network_stream encoder transport work, especially RTMP / low-latency paths, without redefining stereo synthesis semantics.
-10. Keep `docs/26-desktop2stereo-engineering-design-specification.md` aligned to the `docs/28-Realtime-2d-to-3d-specification.md` eleven-step runtime flow.
+10. Keep `docs/01-desktop2stereo-engineering-design-specification.md` aligned to the `docs/01-Realtime-2d-to-3d-specification.md` eleven-step runtime flow.
 
 ## Current Status
+
+### 2026-07-02 Stereo Parameter GUI, Dynamic Convergence, and Depth Separation Pass
+
+Implemented locally in the current worktree:
+
+- Replaced the old `Foreground Scale` GUI/config path with `Depth Pop`, keeping the current centered depth-curve behavior and removing the legacy compatibility alias to keep the live settings path readable.
+- Added layered parallax controls under Advanced Stereo: `Foreground Pop`, `Midground Pop`, and `Background Pop`. These controls are exposed as `前景视差` / `中景视差` / `背景视差` in Chinese and affect near, subject-layer, and far-background shift weights respectively.
+- Added the `Depth Separation Preset` / `前后分离` preset beside Hole Fill Mode. Presets are `default` = 1.00/1.00/1.00, `standard` = 1.15/1.05/1.05, `strong` = 1.25/1.10/1.00, and `weak` = 1.15/1.05/0.85. Stereo Mode maps Cinema -> standard, Game -> weak, Image -> strong.
+- Added `Dynamic Convergence Strength` as a value-only GUI control. There is no separate checkbox: `0.00` disables dynamic convergence and keeps static `Convergence` active; values greater than `0.00` enable dynamic convergence at that strength. All presets default it to `0.00`.
+- Moved Advanced Stereo below Hole Fill Mode, moved Foreground Pop beside Edge Threshold, and kept Midground/Background Pop in the following advanced row.
+- Updated the Flet window resize path so language switching with the log panel visible calls `_fit_window_to_content(resize_window=True)`, preventing stale total window width after Chinese/English label changes.
+- Simplified FG/MG/BG tooltips to describe visible user impact instead of internal formulas: foreground affects people/hands/tabletop foreground, midground affects subject/focus layers, and background affects sky/walls/far buildings.
+- Updated `docs/13-realtime-stereo-parameter-guide.md` to document the current 0.20/0.25/0.30 depth-strength scale, dynamic convergence value rule, depth-separation presets, layered Pop controls, metadata fields, and sweep strategy.
+
+Verification run during this pass:
+
+```powershell
+src\python3\python.exe -m py_compile src\gui\builders.py src\gui\config.py src\gui\config_mgr.py src\gui\handlers.py src\gui\localization.py tests\test_gui_config.py
+src\python3\python.exe -m pytest tests\test_gui_config.py tests\test_hot_reload.py -q
+src\python3\python.exe -m py_compile src\gui\localization.py tests\test_gui_config.py
+src\python3\python.exe -m pytest tests\test_gui_config.py -q
+git diff --check
+```
+
+Result:
+
+```text
+py_compile passed
+74 passed for GUI config + hot reload after dynamic convergence changes
+62 passed for focused GUI config after tooltip/documentation cleanup
+git diff --check passed with CRLF warnings only
+```
+
+Handoff notes:
+
+- Do not reintroduce `Foreground Scale` as a public GUI/config field. The user explicitly requested the latest naming without compatibility clutter.
+- `Dynamic Convergence Strength` is the switch. Keep `Dynamic Convergence` as the saved/runtime boolean derived from strength > 0.0, not as an extra GUI checkbox.
+- All Stereo Mode presets should keep `dynamic_convergence_strength=0.0` unless the user explicitly asks for an automatic mode default.
+- Keep Depth Separation as a preset layer on top of the explicit FG/MG/BG advanced values; changing the preset should update the three advanced values.
+- The OpenXR headset focal-distance table controls virtual screen geometry. It must not be treated as a replacement for stereo `Convergence`, dynamic convergence, or parallax budget controls.
 
 ### 2026-07-01 GUI Log Panel, Standard Logging, and Download Progress Pass
 
@@ -175,7 +215,7 @@ Summary:
 - OpenXR full synthesis path now expects runtime-produced uint8/RGBA CUDA eye tensors where possible so the viewer only performs texture upload and present, avoiding repeated float clamp/multiply/to-uint8 work at the viewer boundary.
 - TensorRT native now records real CUDA event timing for depth preprocess/model/normalize/upsample/postprocess so CPU enqueue timing is not mistaken for GPU model time.
 - MIGraphX ROCm provider imported the ROCm7 build rule from the legacy v2.5 engine: try FP8 autocast first, fall back to FP16, and skip quantization for force-FP32 models.
-- Docs updated so `docs/28` is the normative rule set, `docs/26` records engineering implementation/status, and this handoff tracks remaining work.
+- Docs updated so `docs/01` is the normative rule set, `docs/26` records engineering implementation/status, and this handoff tracks remaining work.
 
 Verification:
 
@@ -260,14 +300,14 @@ Finding:
 
 Spec updates:
 
-- `docs/28-Realtime-2d-to-3d-specification.md`: added global realtime scheduling and backpressure rules.
-- `docs/26-desktop2stereo-engineering-design-specification.md`: added engineering rules for CUDA runtime sync, latest-frame queues, and log interpretation.
+- `docs/01-Realtime-2d-to-3d-specification.md`: added global realtime scheduling and backpressure rules.
+- `docs/01-desktop2stereo-engineering-design-specification.md`: added engineering rules for CUDA runtime sync, latest-frame queues, and log interpretation.
 - `docs/00-api-handoff-progress.md`: added this handoff entry plus future-work guardrails.
 
 Verification:
 
 ```powershell
-git diff --check -- docs\28-Realtime-2d-to-3d-specification.md docs\26-desktop2stereo-engineering-design-specification.md docs\00-api-handoff-progress.md
+git diff --check -- docs\01-Realtime-2d-to-3d-specification.md docs\01-desktop2stereo-engineering-design-specification.md docs\00-api-handoff-progress.md
 ```
 
 Expected result:
@@ -371,7 +411,7 @@ Handoff notes:
 
 ### 2026-06-29 Legacy IPD / Parallax Multiplier Cleanup
 
-Continued compliance against `docs/26-desktop2stereo-engineering-design-specification.md`, with runtime semantics governed by `docs/28-Realtime-2d-to-3d-specification.md`. This pass removed the remaining runtime/config/test protection for the old physical-IPD-style parallax chain.
+Continued compliance against `docs/01-desktop2stereo-engineering-design-specification.md`, with runtime semantics governed by `docs/01-Realtime-2d-to-3d-specification.md`. This pass removed the remaining runtime/config/test protection for the old physical-IPD-style parallax chain.
 
 Implemented in this follow-up:
 
@@ -381,7 +421,7 @@ Implemented in this follow-up:
 - Renamed local/Metal viewer residuals from `ipd_uv` / `eyeOffset` to `parallax_budget_uv` / `parallaxOffset` while preserving the current viewer fallback displacement behavior.
 - Renamed legacy MJPEG SBS helper parameter `ipd_uv` to `parallax_budget_uv` without changing its output math.
 - Removed `IPD`, `Stereo Scale`, and `Max Shift Ratio` from active `src/settings.yaml` and removed old-field compatibility inputs from adapter/hot-reload tests.
-- Updated `docs/26-desktop2stereo-engineering-design-specification.md` so it no longer says IPD / Stereo Scale / Max Shift Ratio continue to be read as compatibility inputs; the engineering spec now records that those compatibility entries are cleaned.
+- Updated `docs/01-desktop2stereo-engineering-design-specification.md` so it no longer says IPD / Stereo Scale / Max Shift Ratio continue to be read as compatibility inputs; the engineering spec now records that those compatibility entries are cleaned.
 
 Compliance scan result:
 
@@ -415,7 +455,7 @@ Handoff notes:
 
 ### 2026-06-28 GUI Render Size Policy User-Layer Convergence
 
-Continued compliance against `docs/28-Realtime-2d-to-3d-specification.md` using `docs/26-desktop2stereo-engineering-design-specification.md` as the engineering checklist. This pass focused on the Render Size / 4K Tier contract: users should see only fixed 4K render-size tiers, not `native` / `fixed` / `dynamic` policy choices.
+Continued compliance against `docs/01-Realtime-2d-to-3d-specification.md` using `docs/01-desktop2stereo-engineering-design-specification.md` as the engineering checklist. This pass focused on the Render Size / 4K Tier contract: users should see only fixed 4K render-size tiers, not `native` / `fixed` / `dynamic` policy choices.
 
 Implemented in this follow-up:
 
@@ -439,19 +479,19 @@ Result:
 
 ### 2026-06-28 Docs 26 Engineering Flow Alignment
 
-Reduced `docs/00-api-handoff-progress.md` Future Work to a task queue and moved detailed compatibility/migration rules into `docs/26-desktop2stereo-engineering-design-specification.md`.
+Reduced `docs/00-api-handoff-progress.md` Future Work to a task queue and moved detailed compatibility/migration rules into `docs/01-desktop2stereo-engineering-design-specification.md`.
 
 Implemented in this follow-up:
 
-- Added a docs/26 document-position section: docs/28 is the final runtime process spec, docs/26 is the engineering implementation and migration spec, docs/00 is only handoff/progress.
-- Added a docs/26 mapping table from each docs/28 runtime step to current implementation modules and remaining migration boundaries.
+- Added a docs/26 document-position section: docs/01 is the final runtime process spec, docs/26 is the engineering implementation and migration spec, docs/00 is only handoff/progress.
+- Added a docs/26 mapping table from each docs/01 runtime step to current implementation modules and remaining migration boundaries.
 - Added a docs/26 compatibility cleanup section covering snapshot aliases, debug fallback keys, legacy parallax multipliers, historical render-scale paths, and D3D11 direct shader parity.
 - Replaced the detailed docs/00 Future Work explanation with a concise current task queue that points to docs/26 for engineering detail.
 
 Verification:
 
 ```powershell
-git diff --check -- docs\26-desktop2stereo-engineering-design-specification.md docs\00-api-handoff-progress.md
+git diff --check -- docs\01-desktop2stereo-engineering-design-specification.md docs\00-api-handoff-progress.md
 ```
 
 Result:
@@ -462,19 +502,19 @@ passed; CRLF warnings only
 
 ### 2026-06-28 Docs 28 Canonical Runtime Spec Promotion
 
-Promoted `docs/28-Realtime-2d-to-3d-specification.md` to the official final runtime process specification and made `docs/25-2d-to-3d-runtime-specification.md` obsolete.
+Promoted `docs/01-Realtime-2d-to-3d-specification.md` to the official final runtime process specification and made `docs/25-2d-to-3d-runtime-specification.md` obsolete.
 
 Implemented in this follow-up:
 
-- Updated `docs/28-Realtime-2d-to-3d-specification.md` so it carries the final runtime-flow authority while preserving its structured eleven-step format.
-- Ensured the former `docs/25` normative content is represented in docs/28: render_size / 4K tier semantics, normalized-depth parallax budget, depth provider contract, RuntimeSettingsSnapshot, hot-reload classification, OpenXR RGB+depth direct/full synthesis, output packing contracts, and runtime debug/result fields.
+- Updated `docs/01-Realtime-2d-to-3d-specification.md` so it carries the final runtime-flow authority while preserving its structured eleven-step format.
+- Ensured the former `docs/25` normative content is represented in docs/01: render_size / 4K tier semantics, normalized-depth parallax budget, depth provider contract, RuntimeSettingsSnapshot, hot-reload classification, OpenXR RGB+depth direct/full synthesis, output packing contracts, and runtime debug/result fields.
 - Marked `docs/25-2d-to-3d-runtime-specification.md` as obsolete at the top of the file instead of deleting it.
-- Updated `docs/26-desktop2stereo-engineering-design-specification.md` and `docs/README.md` so current spec references point to docs/28.
+- Updated `docs/01-desktop2stereo-engineering-design-specification.md` and `docs/README.md` so current spec references point to docs/01.
 
 Verification:
 
 ```powershell
-git diff --check -- docs\28-Realtime-2d-to-3d-specification.md docs\25-2d-to-3d-runtime-specification.md docs\26-desktop2stereo-engineering-design-specification.md docs\README.md docs\00-api-handoff-progress.md
+git diff --check -- docs\01-Realtime-2d-to-3d-specification.md docs\25-2d-to-3d-runtime-specification.md docs\01-desktop2stereo-engineering-design-specification.md docs\README.md docs\00-api-handoff-progress.md
 ```
 
 Result:
@@ -493,7 +533,7 @@ Implemented in this follow-up:
 - Removed legacy/current-code wording from the `docs/25` runtime flow, OpenXR RGB+depth direct path, RuntimeSettingsSnapshot field list, hot-reload debug fields, IPD handling, render-scale semantics, and parallax implementation section.
 - Renamed the mode matrix row from `openxr traditional` to `openxr_rgb_depth_direct` and clarified that the direct shader path must consume a spec-derived shader uniform snapshot.
 - Removed `render_size_policy` from the `docs/25` final RuntimeSettingsSnapshot/debug field contract; remaining compatibility handling stays in `docs/26` and Future Work.
-- Left `docs/26-desktop2stereo-engineering-design-specification.md` as the place for current implementation state, legacy adapters, compatibility fallbacks, and cleanup tracking.
+- Left `docs/01-desktop2stereo-engineering-design-specification.md` as the place for current implementation state, legacy adapters, compatibility fallbacks, and cleanup tracking.
 
 Verification:
 
@@ -509,7 +549,7 @@ passed; CRLF warnings only
 
 ### 2026-06-28 Docs 25/26 Compliance Alignment Follow-up
 
-Checked `docs/25-2d-to-3d-runtime-specification.md` and `docs/26-desktop2stereo-engineering-design-specification.md` together after the render-size, parallax, capture metadata, RuntimeSettingsSnapshot, OpenXR adapter, and stream transport passes.
+Checked `docs/25-2d-to-3d-runtime-specification.md` and `docs/01-desktop2stereo-engineering-design-specification.md` together after the render-size, parallax, capture metadata, RuntimeSettingsSnapshot, OpenXR adapter, and stream transport passes.
 
 Outcome:
 
@@ -524,7 +564,7 @@ Outcome:
 Verification:
 
 ```powershell
-git diff --check -- docs\26-desktop2stereo-engineering-design-specification.md docs\00-api-handoff-progress.md
+git diff --check -- docs\01-desktop2stereo-engineering-design-specification.md docs\00-api-handoff-progress.md
 ```
 
 Result:
@@ -651,12 +691,12 @@ Implemented in this follow-up:
 - Added the portrait 4K equivalent tiers: 2160x3840 / 1800x3200 / 1440x2560 / 1080x1920.
 - Replaced the old landscape-only 4K detection pseudocode with a 4K-tier input rule based on full/ultrawide 4K dimensions or near-4K pixel area: `long_side >= 3840 and short_side >= 1600`, or `pixels >= 3840*2160*0.85 and long_side >= 3200 and short_side >= 1600`.
 - Clarified that 3840x2160, 2160x3840, 4096x2160, 3840x2400, and 3840x1600 enter 4K tier, while 2560x1440, 3440x1440, 1080x1920, and 1000x3000 stay at capture size.
-- Updated `docs/26-desktop2stereo-engineering-design-specification.md` so the implementation gap and follow-up priority no longer point to user-selectable `native/scaled/fixed/dynamic` policy modes.
+- Updated `docs/01-desktop2stereo-engineering-design-specification.md` so the implementation gap and follow-up priority no longer point to user-selectable `native/scaled/fixed/dynamic` policy modes.
 
 Verification:
 
 ```powershell
-git diff --check -- docs/25-2d-to-3d-runtime-specification.md docs/26-desktop2stereo-engineering-design-specification.md docs/00-api-handoff-progress.md
+git diff --check -- docs/25-2d-to-3d-runtime-specification.md docs/01-desktop2stereo-engineering-design-specification.md docs/00-api-handoff-progress.md
 ```
 
 Result:
@@ -727,7 +767,7 @@ Notes / next improvements:
 
 ### 2026-06-28 Polling Capture Copy Metadata Follow-up
 
-Continued the `docs/26-desktop2stereo-engineering-design-specification.md` capture-copy compliance pass by making polling capture backends explicitly report their non-zero-copy status, matching the event capture metadata contract.
+Continued the `docs/01-desktop2stereo-engineering-design-specification.md` capture-copy compliance pass by making polling capture backends explicitly report their non-zero-copy status, matching the event capture metadata contract.
 
 Implemented in this follow-up:
 
@@ -788,7 +828,7 @@ Notes / next improvements:
 
 ### 2026-06-28 Settings YAML Hot Reload Snapshot Queue Follow-up
 
-Continued the `docs/25-2d-to-3d-runtime-specification.md` and `docs/26-desktop2stereo-engineering-design-specification.md` hot-reload compliance pass by moving the main-process `settings.yaml` compatibility hot-reload path onto `RuntimeSettingsSnapshot + settings_update_q` instead of directly mutating `StereoRuntime`.
+Continued the `docs/25-2d-to-3d-runtime-specification.md` and `docs/01-desktop2stereo-engineering-design-specification.md` hot-reload compliance pass by moving the main-process `settings.yaml` compatibility hot-reload path onto `RuntimeSettingsSnapshot + settings_update_q` instead of directly mutating `StereoRuntime`.
 
 Implemented in this follow-up:
 
@@ -1764,7 +1804,7 @@ refactor: add parallax budget resolver
 
 ### 2026-06-26 RuntimeSettingsSnapshot Queue - Phase 1
 
-Task 1 from `prompts/codex-refactor-prompt.md` has started against `docs/26-desktop2stereo-engineering-design-specification.md`.
+Task 1 from `prompts/codex-refactor-prompt.md` has started against `docs/01-desktop2stereo-engineering-design-specification.md`.
 
 Implemented in this phase:
 

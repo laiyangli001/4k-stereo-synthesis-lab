@@ -32,11 +32,18 @@ def runtime_stereo_overrides(runtime) -> dict:
         "convergence": config.convergence,
         "max_disparity_px": getattr(config, "max_disparity_px", None),
         "parallax_preset": getattr(config, "parallax_preset", "standard"),
+        "foreground_shift_scale": getattr(config, "foreground_shift_scale", 1.0),
+        "midground_shift_scale": getattr(config, "midground_shift_scale", 1.0),
+        "background_shift_scale": getattr(config, "background_shift_scale", 1.0),
+        "dynamic_convergence_enabled": getattr(config, "dynamic_convergence_enabled", False),
+        "dynamic_convergence_strength": getattr(config, "dynamic_convergence_strength", 0.0),
+        "dynamic_convergence_target": getattr(config, "dynamic_convergence_target", 0.5),
+        "dynamic_convergence_alpha": getattr(config, "dynamic_convergence_alpha", 0.85),
         "temporal": config.temporal,
         "temporal_strength": config.temporal_strength,
         "auto_reset_temporal": config.auto_reset_temporal,
         "scene_reset_threshold": config.scene_reset_threshold,
-        "foreground_scale": config.foreground_scale,
+        "depth_pop": config.depth_pop,
         "depth_antialias_strength": config.depth_antialias_strength,
         "edge_threshold": config.edge_threshold,
         "edge_dilation": config.edge_dilation,
@@ -60,7 +67,7 @@ def to_bool_hot_reload(value) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
-def clamp_foreground_scale_hot_reload(value) -> float:
+def clamp_depth_pop_hot_reload(value) -> float:
     return max(-0.9, min(5.0, float(value)))
 
 
@@ -185,13 +192,18 @@ def hot_reload_value_snapshot(settings_dict: dict, config) -> dict:
                 settings_dict.get("Parallax Preset", getattr(config, "parallax_preset", "standard")),
             )
         ),
+        "foreground_shift_scale": float(settings_dict.get("Foreground Pop", getattr(config, "foreground_shift_scale", 1.0))),
+        "midground_shift_scale": float(settings_dict.get("Midground Pop", getattr(config, "midground_shift_scale", 1.0))),
+        "background_shift_scale": float(settings_dict.get("Background Pop", getattr(config, "background_shift_scale", 1.0))),
+        "dynamic_convergence_enabled": to_bool_hot_reload(settings_dict.get("Dynamic Convergence", settings_dict.get("Dynamic Convergence Enabled", getattr(config, "dynamic_convergence_enabled", False)))),
+        "dynamic_convergence_strength": float(settings_dict.get("Dynamic Convergence Strength", getattr(config, "dynamic_convergence_strength", 0.0))),
+        "dynamic_convergence_target": float(settings_dict.get("Dynamic Convergence Target", getattr(config, "dynamic_convergence_target", 0.5))),
+        "dynamic_convergence_alpha": float(settings_dict.get("Dynamic Convergence Alpha", getattr(config, "dynamic_convergence_alpha", 0.85))),
         "temporal": temporal_enabled,
         "temporal_strength": temporal_strength,
         "auto_reset_temporal": auto_reset_temporal,
         "scene_reset_threshold": scene_reset_threshold,
-        "foreground_scale": clamp_foreground_scale_hot_reload(
-            settings_dict.get("Foreground Scale", config.foreground_scale)
-        ),
+        "depth_pop": clamp_depth_pop_hot_reload(settings_dict.get("Depth Pop", config.depth_pop)),
         "depth_antialias_strength": float(
             settings_dict.get(
                 "Depth Antialias Strength",
@@ -221,7 +233,7 @@ def hot_reload_value_snapshot(settings_dict: dict, config) -> dict:
                 "temporal_strength": 0.0,
                 "auto_reset_temporal": False,
                 "scene_reset_threshold": 0.0,
-                "foreground_scale": 0.0,
+                "depth_pop": 0.0,
                 "depth_antialias_strength": 0.0,
             }
         )
@@ -311,7 +323,11 @@ class StereoHotReloader:
                 f" stereo_quality={values['stereo_quality']}"
                 f" temporal_strength={values['temporal_strength']:.3f}"
                 f" scene_reset={values['scene_reset_threshold']:.3f}"
-                f" foreground_scale={values['foreground_scale']:.3f}"
+                f" depth_pop={values['depth_pop']:.3f}"
+                f" fg_shift={values['foreground_shift_scale']:.3f}"
+                f" mg_shift={values['midground_shift_scale']:.3f}"
+                f" bg_shift={values['background_shift_scale']:.3f}"
+                f" dynamic_convergence={int(values['dynamic_convergence_enabled'])}/{values['dynamic_convergence_strength']:.3f}"
                 f" antialias={values['depth_antialias_strength']:.3f}"
                 f" edge_dilation={values['edge_dilation']}"
                 f" mask_feather={values['mask_feather_radius']}"

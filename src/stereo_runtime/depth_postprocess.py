@@ -6,20 +6,20 @@ import torch.nn.functional as F
 from .output import ensure_b1hw
 
 
-def apply_foreground_scale(depth: torch.Tensor, scale: float, mid: float = 0.5, eps: float = 1e-6) -> torch.Tensor:
+def apply_depth_pop(depth: torch.Tensor, depth_pop: float, mid: float = 0.5, eps: float = 1e-6) -> torch.Tensor:
     depth = ensure_b1hw(depth).float().clamp(0.0, 1.0)
-    if abs(scale) < eps:
+    if abs(depth_pop) < eps:
         return depth
-    if scale <= -1.0:
-        raise ValueError("foreground_scale must be greater than -1.0")
-    if scale < 0.0:
-        strength = min(1.0, max(0.0, -float(scale)))
+    if depth_pop <= -1.0:
+        raise ValueError("depth_pop must be greater than -1.0")
+    if depth_pop < 0.0:
+        strength = min(1.0, max(0.0, -float(depth_pop)))
         centered = depth - float(mid)
-        # Negative scale is a realtime compression control. Avoid torch.pow here:
+        # Negative Depth Pop is a realtime compression control. Avoid torch.pow here:
         # high exponents near -1.0 are extremely slow on 4K CUDA tensors.
         compressed = centered * (1.0 - strength)
         return (float(mid) + compressed).clamp(0.0, 1.0)
-    exponent = 1.0 / (1.0 + float(scale))
+    exponent = 1.0 / (1.0 + float(depth_pop))
     centered = depth - float(mid)
     out = float(mid) + torch.sign(centered) * torch.abs(centered).pow(exponent)
     return out.clamp(0.0, 1.0)
@@ -44,10 +44,10 @@ def anti_alias_depth(depth: torch.Tensor, strength: float) -> torch.Tensor:
 def postprocess_depth(
     depth: torch.Tensor,
     *,
-    foreground_scale: float = 0.0,
+    depth_pop: float = 0.0,
     antialias_strength: float = 0.0,
 ) -> torch.Tensor:
     out = ensure_b1hw(depth).float().clamp(0.0, 1.0)
-    out = apply_foreground_scale(out, foreground_scale)
+    out = apply_depth_pop(out, depth_pop)
     out = anti_alias_depth(out, antialias_strength)
     return out

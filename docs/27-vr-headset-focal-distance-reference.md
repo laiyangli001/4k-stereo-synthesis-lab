@@ -98,6 +98,7 @@
 - 进入 OpenXR 模式时，运行时根据设备型号自动应用对应的 `openxr_screen_distance` 与 `openxr_screen_width`。
 - OpenXR viewer 内部按 16:9 从宽度计算高度；无需在 GUI 中单独保存高度。
 - 当前默认设备型号与默认 PICO 手柄匹配：`Pico 4 / 4 Ultra`，对应 20.0 m 距离与 23.09 m 屏幕宽度。
+- 本表只负责 OpenXR 虚拟屏幕的光学焦距、距离和尺寸。立体合成里的 `Convergence`、`Dynamic Convergence Strength`、`Parallax Budget`、`Depth Separation`、`Foreground/Midground/Background Pop` 仍按 `docs/13-realtime-stereo-parameter-guide.md` 调整；不要用头显焦距表替代这些立体参数。
 
 ---
 
@@ -177,3 +178,4 @@ GUI 中可提供水平视角滑块（可选，当前默认 **60°**）：
 - **自动检测**：可作为后续扩展，通过 OpenXR runtime 获取头显型号（如 `XrSystemProperties` 中的 `systemName`）后匹配上表。
 - **自定义**：可作为后续扩展，允许用户手动输入距离（范围 0.5~40 米），宽度和高度随之自动计算。
 - **默认值**：当前默认 `Pico 4 / 4 Ultra`，对应 20.0 米距离、23.09×12.99 米屏幕尺寸。
+- **立体参数边界**：头显型号只决定虚拟屏幕几何，不改变 Stereo Mode 默认值。OpenXR 模式下动态会聚仍默认 `0.00`，即静态 `Convergence` 生效；需要处理视频前后景变化时，再在高级立体参数中手动提高 `Dynamic Convergence Strength`。

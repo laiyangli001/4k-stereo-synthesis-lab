@@ -93,6 +93,26 @@ def test_compute_shift_px_scales_actual_displacement_by_depth_strength():
     assert flat.item() == pytest.approx(0.0)
 
 
+def test_compute_shift_px_applies_layered_parallax_scales():
+    depth = torch.tensor([[[[0.0, 0.5, 1.0]]]])
+    shift = compute_shift_px(
+        depth,
+        1920,
+        ShiftParams(
+            depth_strength=1.0,
+            convergence=0.5,
+            max_disparity_px=40.0,
+            foreground_shift_scale=2.0,
+            midground_shift_scale=1.0,
+            background_shift_scale=0.5,
+        ),
+    )
+
+    assert shift[0, 0, 0, 0].item() == pytest.approx(5.0)
+    assert shift[0, 0, 0, 1].item() == pytest.approx(0.0)
+    assert shift[0, 0, 0, 2].item() == pytest.approx(-20.0)
+
+
 def test_shift_params_do_not_expose_legacy_ipd_formula_fields():
     fields = ShiftParams.__dataclass_fields__
 
