@@ -1,0 +1,11 @@
+﻿# AMD Radeon RX 9000 Series Graphics Cards (GFX120X)
+--index-url https://rocm.nightlies.amd.com/whl-multi-arch/
+# torchaudio
+rocm[libraries,device-gfx1201,device-gfx1200]==7.14.0a20260615
+torch[device-gfx1201,device-gfx1200]==2.10.0+rocm7.14.0a20260615
+torchvision[device-gfx1201,device-gfx1200]==0.25.0+rocm7.14.0a20260615
+rocm_sdk_devel==7.14.0a20260615
+triton<3.8; sys_platform == "linux"
+triton-windows==3.7.1.post27; sys_platform == "win32"
+migraphx @ https://ghfast.top/github.com/lc700x/MIGraphX-Windows/releases/download/v7.14.0a20260615.post.2.2/migraphx-0.1.2+multiarch-cp312-cp312-win_amd64.whl ; sys_platform == "win32"
+wc-rocm==0.1.3.post1 ; sys_platform == "win32"

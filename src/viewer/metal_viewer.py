@@ -235,6 +235,8 @@ def _as_numpy_rgb(rgb):
         import torch
 
         t = rgb.detach()
+        if t.ndim == 4 and t.shape[0] == 1:
+            t = t.squeeze(0)
         if t.ndim == 3 and t.shape[0] in (3, 4):
             t = t[:3].permute(1, 2, 0)
         elif t.ndim == 3 and t.shape[-1] >= 3:
@@ -247,6 +249,9 @@ def _as_numpy_rgb(rgb):
             detail=describe_tensor(t),
             key="metal_rgb_cpu_transfer",
         )
+        # Scale float [0,1] → uint8 [0,255]; skip if already uint8
+        if t.is_floating_point():
+            t = t.float() * 255.0
         return t.contiguous().clamp(0, 255).to(torch.uint8).cpu().numpy()
     warn_cpu_transfer(
         "Metal RGB texture upload",

@@ -30,3 +30,6 @@ samples/private/
 !samples/README.md
 src/gui/flet_clients/
 src/gui/flet_packages/*.partial
+src/.env
+CLAUDE.md
+.claude

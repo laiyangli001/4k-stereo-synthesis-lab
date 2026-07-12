@@ -13,10 +13,9 @@ onnx==1.22.0
 onnxscript==0.7.0
 mss==10.2.0
 pynput==1.8.2
-wincam==1.0.14
-windows-capture==2.0.0
-wc-cuda==0.1.3
-
+wincam==1.0.14; sys_platform == "win32"
+windows-capture==2.0.0; sys_platform == "win32"
+python_xlib; sys_platform == "linux"
 # for video depth anything
 imageio==2.37.3
 easydict==1.13
