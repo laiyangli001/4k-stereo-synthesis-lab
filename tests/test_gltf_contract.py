@@ -24,6 +24,7 @@ from xr_viewer.gltf import (
     load_glb_model,
     load_gltf_scene,
     parse_gltf_material,
+    raise_unsupported_required_extensions,
     summarize_gltf_scene,
 )
 ROOT = Path(__file__).resolve().parents[1]
@@ -67,7 +68,11 @@ def test_gltf_package_reexports_stable_loader_contract_and_render_plan_api():
     assert gltf_materials_module.parse_gltf_material is parse_gltf_material
     assert legacy_gltf_loader.parse_gltf_material is parse_gltf_material
     assert gltf_render_plan_module.sort_transparent_primitives is sort_transparent_primitives
+    assert legacy_gltf_loader.audit_gltf_extensions is audit_gltf_extensions
     assert gltf_validation_module.audit_gltf_extensions is audit_gltf_extensions
+    assert gltf_package.raise_unsupported_required_extensions is raise_unsupported_required_extensions
+    assert gltf_loader_module.raise_unsupported_required_extensions is raise_unsupported_required_extensions
+    assert gltf_validation_module.raise_unsupported_required_extensions is raise_unsupported_required_extensions
 
     scene = gltf_package.load_gltf_scene(SRC / "xr_viewer" / "environments" / "Bedroom" / "environment.glb")
 

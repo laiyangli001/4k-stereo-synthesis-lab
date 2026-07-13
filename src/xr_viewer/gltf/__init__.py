@@ -22,7 +22,6 @@ from .contract import (
 )
 from .loader import (
     apply_gltf_sampler_to_texture,
-    audit_gltf_extensions,
     diagnose_gltf_model,
     format_gltf_scene_summary,
     gltf_primitive_mode_to_moderngl,
@@ -33,6 +32,7 @@ from .loader import (
     parse_gltf_material,
     summarize_gltf_scene,
 )
+from .validation import audit_gltf_extensions, raise_unsupported_required_extensions
 from .render_plan import (
     RenderPass,
     RenderPlan,
@@ -77,6 +77,7 @@ __all__ = [
     "normalize_gltf_sampler",
     "parse_gltf_material",
     "primitive_sort_center",
+    "raise_unsupported_required_extensions",
     "render_pass_from_primitive",
     "sort_transparent_primitives",
     "summarize_gltf_scene",

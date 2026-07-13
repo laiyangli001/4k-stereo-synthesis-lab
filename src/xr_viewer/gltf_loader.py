@@ -88,63 +88,6 @@ def _buffer_data(buffers, buffer_index=0):
     return buffers[index]
 
 
-_SUPPORTED_REQUIRED_EXTENSIONS = {
-    'KHR_lights_punctual',
-    'KHR_materials_unlit',
-    'KHR_texture_transform',
-}
-
-
-_SUPPORTED_OPTIONAL_EXTENSIONS = _SUPPORTED_REQUIRED_EXTENSIONS | {
-    'KHR_materials_emissive_strength',
-    'KHR_materials_pbrSpecularGlossiness',
-}
-
-
-def _extension_list(value):
-    if not isinstance(value, list):
-        return []
-    return [str(item) for item in value if isinstance(item, str) and item]
-
-
-def audit_gltf_extensions(gltf):
-    used = set(_extension_list(gltf.get('extensionsUsed')))
-    required = set(_extension_list(gltf.get('extensionsRequired')))
-    material_extensions = set()
-    primitive_extensions = set()
-
-    for material in gltf.get('materials') or []:
-        if isinstance(material, dict) and isinstance(material.get('extensions'), dict):
-            material_extensions.update(str(key) for key in material['extensions'].keys())
-    for mesh in gltf.get('meshes') or []:
-        if not isinstance(mesh, dict):
-            continue
-        for primitive in mesh.get('primitives') or []:
-            if isinstance(primitive, dict) and isinstance(primitive.get('extensions'), dict):
-                primitive_extensions.update(str(key) for key in primitive['extensions'].keys())
-
-    used.update(material_extensions)
-    used.update(primitive_extensions)
-    return {
-        'extensionsUsed': sorted(used),
-        'extensionsRequired': sorted(required),
-        'unsupportedRequired': sorted(required - _SUPPORTED_REQUIRED_EXTENSIONS),
-        'unsupportedOptional': sorted((used - required) - _SUPPORTED_OPTIONAL_EXTENSIONS),
-        'materialExtensions': sorted(material_extensions),
-        'primitiveExtensions': sorted(primitive_extensions),
-    }
-
-
-def _raise_unsupported_required_extensions(gltf, path):
-    diagnostics = audit_gltf_extensions(gltf)
-    unsupported = diagnostics['unsupportedRequired']
-    if unsupported:
-        raise ValueError(
-            f"Unsupported required glTF extensions for {path}: {', '.join(unsupported)}. "
-            "Convert the asset or add decoder/material support before loading it."
-        )
-    return diagnostics
-
 
 _DTYPE_MAP = {5120: np.int8, 5121: np.uint8, 5122: np.int16,
             5123: np.uint16, 5125: np.uint32, 5126: np.float32}
@@ -1207,7 +1150,11 @@ def diagnose_gltf_model(path):
     return summary
 
 
-# Compatibility export: keep xr_viewer.gltf_loader.parse_gltf_material while the
-# implementation lives in the glTF compliance package. This import stays at the
+# Compatibility exports: keep legacy xr_viewer.gltf_loader symbols while the
+# implementations live in the glTF compliance package. These imports stay at the
 # end to avoid package initialization cycles with xr_viewer.gltf.__init__.
 from .gltf.materials import parse_gltf_material  # noqa: E402
+from .gltf.validation import audit_gltf_extensions  # noqa: E402
+from .gltf.validation import (  # noqa: E402
+    raise_unsupported_required_extensions as _raise_unsupported_required_extensions,
+)
