@@ -1,0 +1,83 @@
+"""glTF renderer compliance layer public API.
+
+This package provides the stable import surface for renderer-facing glTF
+contracts while legacy modules continue to exist during incremental migration.
+"""
+
+from .contract import (
+    ColorSpace,
+    D3D11_VERTEX_OFFSETS_BYTES,
+    D3D11_VERTEX_STRIDE_BYTES,
+    GltfMaterial,
+    GltfPrimitive,
+    GltfScene,
+    OPENGL_VERTEX_FORMAT,
+    TANGENT_FLOAT_COUNT,
+    TextureBinding,
+    TextureTransform,
+    VERTEX_FLOAT_COUNT,
+    attach_primitive_contract,
+    build_primitive_contract,
+    validate_mesh_contract,
+)
+from .loader import (
+    apply_gltf_sampler_to_texture,
+    audit_gltf_extensions,
+    diagnose_gltf_model,
+    format_gltf_scene_summary,
+    gltf_primitive_mode_to_moderngl,
+    load_glb_model,
+    load_gltf_scene,
+    normalize_gltf_sampler,
+    parse_gltf_material,
+    summarize_gltf_scene,
+)
+from .render_plan import (
+    RenderPass,
+    RenderPlan,
+    TRANSPARENT_SORT_POLICY,
+    TransparentSortPolicy,
+    build_render_plan,
+    classify_render_pass,
+    primitive_sort_center,
+    render_pass_from_primitive,
+    sort_transparent_primitives,
+    transparent_sort_key,
+)
+
+__all__ = [
+    "ColorSpace",
+    "D3D11_VERTEX_OFFSETS_BYTES",
+    "D3D11_VERTEX_STRIDE_BYTES",
+    "GltfMaterial",
+    "GltfPrimitive",
+    "GltfScene",
+    "OPENGL_VERTEX_FORMAT",
+    "RenderPass",
+    "RenderPlan",
+    "TANGENT_FLOAT_COUNT",
+    "TRANSPARENT_SORT_POLICY",
+    "TextureBinding",
+    "TextureTransform",
+    "TransparentSortPolicy",
+    "VERTEX_FLOAT_COUNT",
+    "apply_gltf_sampler_to_texture",
+    "attach_primitive_contract",
+    "audit_gltf_extensions",
+    "build_primitive_contract",
+    "build_render_plan",
+    "classify_render_pass",
+    "diagnose_gltf_model",
+    "format_gltf_scene_summary",
+    "gltf_primitive_mode_to_moderngl",
+    "load_glb_model",
+    "load_gltf_scene",
+    "normalize_gltf_sampler",
+    "parse_gltf_material",
+    "primitive_sort_center",
+    "render_pass_from_primitive",
+    "sort_transparent_primitives",
+    "summarize_gltf_scene",
+    "transparent_sort_key",
+    "validate_mesh_contract",
+]

@@ -260,7 +260,7 @@ def test_openxr_keyboard_hover_pulses_controller_haptics_on_key_changes():
 
 def test_gltf_loader_treats_empty_unlit_extension_as_unlit(tmp_path, monkeypatch):
     monkeypatch.chdir(SRC)
-    from xr_viewer.gltf_loader import load_glb_model
+    from xr_viewer.gltf import load_glb_model
 
     positions = np.array([
         [0.0, 0.0, 0.0],
@@ -331,7 +331,7 @@ def test_gltf_loader_treats_empty_unlit_extension_as_unlit(tmp_path, monkeypatch
 
 def test_gltf_loader_reads_external_gltf_bin_buffers(tmp_path, monkeypatch):
     monkeypatch.chdir(SRC)
-    from xr_viewer.gltf_loader import load_glb_model
+    from xr_viewer.gltf import load_glb_model
 
     positions = np.array([
         [0.0, 0.0, 0.0],
@@ -387,7 +387,7 @@ def test_gltf_loader_reads_external_gltf_bin_buffers(tmp_path, monkeypatch):
 
 def test_openxr_controller_button_press_animates_individual_button_nodes(monkeypatch):
     monkeypatch.chdir(SRC)
-    from xr_viewer.gltf_loader import load_glb_model
+    from xr_viewer.gltf import load_glb_model
 
     impl_text = (SRC / "xr_viewer" / "implementation.py").read_text(encoding="utf-8")
     models_text = (SRC / "xr_viewer" / "controller_models.py").read_text(encoding="utf-8")

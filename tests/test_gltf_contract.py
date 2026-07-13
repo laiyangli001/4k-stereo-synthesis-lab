@@ -4,12 +4,19 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+import xr_viewer.gltf as gltf_package
+import xr_viewer.gltf_contract as legacy_gltf_contract
+import xr_viewer.gltf_loader as legacy_gltf_loader
+from xr_viewer.gltf import contract as gltf_contract_module
+from xr_viewer.gltf import loader as gltf_loader_module
+from xr_viewer.gltf import render_plan as gltf_render_plan_module
+from xr_viewer.gltf import validation as gltf_validation_module
 from xr_viewer.controller_materials import (
     collect_controller_texture_requests,
     controller_texture_cache_key,
     prepare_controller_material,
 )
-from xr_viewer.gltf_loader import (
+from xr_viewer.gltf import (
     audit_gltf_extensions,
     diagnose_gltf_model,
     load_glb_model,
@@ -20,7 +27,7 @@ from xr_viewer.gltf_loader import (
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 
-from xr_viewer.gltf_contract import (
+from xr_viewer.gltf import (
     D3D11_VERTEX_OFFSETS_BYTES,
     D3D11_VERTEX_STRIDE_BYTES,
     GltfMaterial,
@@ -38,6 +45,29 @@ from xr_viewer.gltf_contract import (
     transparent_sort_key,
     validate_mesh_contract,
 )
+
+
+def test_gltf_package_reexports_stable_loader_contract_and_render_plan_api():
+    assert gltf_package.GltfMaterial is GltfMaterial
+    assert gltf_package.GltfScene is GltfScene
+    assert gltf_package.TextureBinding is TextureBinding
+    assert gltf_package.load_glb_model is load_glb_model
+    assert gltf_package.load_gltf_scene is load_gltf_scene
+    assert gltf_package.parse_gltf_material is parse_gltf_material
+    assert gltf_package.summarize_gltf_scene is summarize_gltf_scene
+    assert gltf_package.build_render_plan is build_render_plan
+    assert gltf_package.TRANSPARENT_SORT_POLICY == TRANSPARENT_SORT_POLICY
+    assert legacy_gltf_loader.load_gltf_scene is load_gltf_scene
+    assert legacy_gltf_contract.GltfMaterial is GltfMaterial
+    assert gltf_contract_module.validate_mesh_contract is validate_mesh_contract
+    assert gltf_loader_module.audit_gltf_extensions is audit_gltf_extensions
+    assert gltf_render_plan_module.sort_transparent_primitives is sort_transparent_primitives
+    assert gltf_validation_module.audit_gltf_extensions is audit_gltf_extensions
+
+    scene = gltf_package.load_gltf_scene(SRC / "xr_viewer" / "environments" / "Bedroom" / "environment.glb")
+
+    assert isinstance(scene, gltf_package.GltfScene)
+    assert sum(len(indices) for indices in scene.render_plan.values()) == len(scene.primitives)
 
 
 def _primitive(**overrides):

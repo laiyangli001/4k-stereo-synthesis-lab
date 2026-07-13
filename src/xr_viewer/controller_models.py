@@ -11,7 +11,7 @@ from .controller_materials import (
     load_controller_common_config,
     prepare_controller_material,
 )
-from .gltf_loader import (
+from .gltf import (
     apply_gltf_sampler_to_texture,
     gltf_primitive_mode_to_moderngl,
     load_glb_model,

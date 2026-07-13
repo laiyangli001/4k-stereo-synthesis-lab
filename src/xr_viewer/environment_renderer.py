@@ -4,7 +4,7 @@ import moderngl
 
 from .implementation import *
 from .gl_state import get_depth_mask, set_depth_mask
-from .gltf_contract import sort_transparent_primitives
+from .gltf import sort_transparent_primitives
 
 
 def _view_mat_inv(view_mat):

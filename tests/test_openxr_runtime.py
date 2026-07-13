@@ -201,7 +201,7 @@ def test_keyboard_quad_hover_center_is_solid_disk():
 
 def test_controller_material_preserves_gltf_double_sided_without_override():
     from xr_viewer.controller_materials import prepare_controller_material
-    from xr_viewer.gltf_contract import GltfMaterial
+    from xr_viewer.gltf import GltfMaterial
 
     config = {"diagnostics": {"materialMode": "opaque_unlit"}}
     material_contract = GltfMaterial(metallic=0.5, roughness=0.55, alpha_mode="OPAQUE", double_sided=True)
@@ -3813,7 +3813,7 @@ def test_d3d11_projection_path_uses_native_renderer():
     assert "or config_material_diag" in renderer
     assert 'diag_opaque_unlit = material_diag in ("1", "true", "unlit", "opaque_unlit")' in renderer
     assert "env_srv = None" in renderer
-    assert "from .gltf_contract import (" in renderer
+    assert "from .gltf import (" in renderer
     assert "D3D11_VERTEX_STRIDE_BYTES" in renderer
     assert "format_gltf_scene_summary" in renderer
     assert "_d3d11_environment_summary_logged" in renderer

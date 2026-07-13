@@ -375,7 +375,7 @@ src\python3\python.exe -c "import sys, pytest; sys.path.insert(0, 'src'); raise 
 Artemis smoke check：
 
 ```powershell
-src\python3\python.exe -c "import sys; sys.path.insert(0,'src'); from xr_viewer.gltf_loader import load_glb_model; prims,tex,lights=load_glb_model('src/xr_viewer/environments/Artemis/environment.glb'); print(len(prims), len(tex), len(lights), prims[0]['vertices'].shape)"
+src\python3\python.exe -c "import sys; sys.path.insert(0,'src'); from xr_viewer.gltf import load_glb_model; prims,tex,lights=load_glb_model('src/xr_viewer/environments/Artemis/environment.glb'); print(len(prims), len(tex), len(lights), prims[0]['vertices'].shape)"
 ```
 
 preview 检查：

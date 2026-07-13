@@ -9,14 +9,14 @@ from PIL import Image
 
 from utils.cpu_warnings import describe_tensor, warn_cpu_fallback, warn_cpu_operation, warn_cpu_transfer
 from .controller_lighting import CONTROLLER_HEAD_LIGHT_COLOR, CONTROLLER_TOP_LIGHT_INTENSITY
-from .gltf_contract import (
+from .gltf import (
     D3D11_VERTEX_OFFSETS_BYTES,
     D3D11_VERTEX_STRIDE_BYTES,
+    format_gltf_scene_summary,
     render_pass_from_primitive,
     sort_transparent_primitives,
 )
 from .material_contract import GLTF_MATERIAL_TEXTURE_BINDINGS
-from .gltf_loader import format_gltf_scene_summary
 from .laser_geometry import build_laser_beam_vertices
 from .laser_params import CURSOR_RING_INNER_RATIO, LASER_BASE_HALF_WIDTH_M, LASER_MAX_LENGTH_M, LASER_TIP_HALF_WIDTH_M
 

@@ -94,7 +94,7 @@ from .input import (
 
 
 from .implementation_support import _float_option, _openxr_app_api_version
-from .gltf_loader import *
+from .gltf import *
 
 EDGE_STRENGTH = 0.6 # snapping strength of cursor around screen edge
 

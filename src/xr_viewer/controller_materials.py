@@ -3,8 +3,7 @@ import os
 
 import numpy as np
 
-from .gltf_contract import GltfMaterial, TextureBinding, TextureTransform
-from .gltf_loader import normalize_gltf_sampler
+from .gltf import GltfMaterial, TextureBinding, TextureTransform, normalize_gltf_sampler
 from .material_contract import GLTF_MATERIAL_TEXTURE_BINDINGS
 
 

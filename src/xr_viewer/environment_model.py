@@ -3,13 +3,14 @@
 import moderngl
 
 from .implementation import *
-from .gltf_contract import (
+from .gltf import (
     OPENGL_VERTEX_FORMAT,
+    format_gltf_scene_summary,
     render_pass_from_primitive,
+    summarize_gltf_scene,
     validate_mesh_contract,
 )
 from .material_contract import GLTF_MATERIAL_TEXTURE_BINDINGS
-from .gltf_loader import format_gltf_scene_summary, summarize_gltf_scene
 
 
 class EnvironmentModelMixin:

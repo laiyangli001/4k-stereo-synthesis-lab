@@ -27,16 +27,14 @@ warnings.filterwarnings(
 )
 
 from xr_viewer.gl_state import set_depth_mask  # noqa: E402
-from xr_viewer.gltf_contract import (  # noqa: E402
+from xr_viewer.gltf import (  # noqa: E402
     OPENGL_VERTEX_FORMAT,
-    render_pass_from_primitive,
-    sort_transparent_primitives,
-    validate_mesh_contract,
-)
-from xr_viewer.gltf_loader import (  # noqa: E402
     format_gltf_scene_summary,
     load_glb_model,
+    render_pass_from_primitive,
+    sort_transparent_primitives,
     summarize_gltf_scene,
+    validate_mesh_contract,
 )
 
 
