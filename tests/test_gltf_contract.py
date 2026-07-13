@@ -122,6 +122,16 @@ def test_gltf_loader_is_split_into_compliance_modules():
     assert gltf_loader_module.load_gltf_scene is gltf_scene_module.load_gltf_scene
 
 
+def test_preview_room_layout_uses_active_uv1_attribute_for_base_texcoord():
+    source = (SRC / "tools" / "preview_room_layout.py").read_text(encoding="utf-8")
+
+    assert "in vec2 in_uv1;" in source
+    assert "uniform int u_base_texcoord;" in source
+    assert "v_uv = u_base_texcoord == 1 ? in_uv1 : in_uv;" in source
+    assert '"base_texcoord": int(pd.get("base_texcoord", 0) or 0)' in source
+    assert 'env_prog["u_base_texcoord"].value' in source
+
+
 def test_gltf_color_management_policy_matches_material_texture_roles():
     from xr_viewer.material_contract import GLTF_MATERIAL_TEXTURE_BINDINGS
 

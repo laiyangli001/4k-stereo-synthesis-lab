@@ -49,11 +49,12 @@ out vec3 v_position;
 out vec2 v_uv;
 uniform mat4 u_mvp;
 uniform mat4 u_model;
+uniform int u_base_texcoord;
 void main() {
     vec4 world_pos = u_model * vec4(in_position, 1.0);
     v_position = world_pos.xyz;
     v_normal = mat3(transpose(inverse(u_model))) * in_normal;
-    v_uv = in_uv;
+    v_uv = u_base_texcoord == 1 ? in_uv1 : in_uv;
     gl_Position = u_mvp * world_pos;
 }
 """
@@ -330,6 +331,7 @@ def _make_env_resources(ctx, prog, glb_path: Path):
             "base_alpha": float(pd.get("base_alpha", 1.0)),
             "alpha_mode": str(pd.get("alpha_mode", "OPAQUE") or "OPAQUE").upper(),
             "alpha_cutoff": float(pd.get("alpha_cutoff", 0.5)),
+            "base_texcoord": int(pd.get("base_texcoord", 0) or 0),
             "render_pass": render_pass_from_primitive(pd),
             "sort_center_local": (
                 vertices[:, :3].mean(axis=0).astype("f4")
@@ -612,6 +614,7 @@ def main():
             bc = prim["base_color"]
             alpha_mode = prim.get("alpha_mode", "OPAQUE")
             alpha_mode_id = 1 if alpha_mode == "MASK" else (2 if alpha_mode == "BLEND" else 0)
+            env_prog["u_base_texcoord"].value = 1 if int(prim.get("base_texcoord", 0) or 0) == 1 else 0
             env_prog["u_base_color"].value = (float(bc[0]), float(bc[1]), float(bc[2]))
             env_prog["u_alpha"].value = min(max(float(prim["base_alpha"]), 0.0), 1.0)
             env_prog["u_alpha_mode"].value = alpha_mode_id
