@@ -1,6 +1,0 @@
-{
-  "python.defaultInterpreterPath": "${workspaceFolder}/src/python3/python.exe",
-  "python.analysis.extraPaths": [
-    "${workspaceFolder}/src"
-  ]
-}

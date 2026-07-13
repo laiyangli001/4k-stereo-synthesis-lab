@@ -1,8 +1,8 @@
 [project]
-name = "4k-stereo-synthesis-lab"
+name = "desktop2stereo"
 version = "3.0b0"
-description = "4K stereo synthesis research prototypes"
-requires-python = ">=3.10"
+description = "desktop2stereo poject"
+requires-python = ">=3.20"
 dependencies = [
   "torch",
   "pillow",
@@ -13,4 +13,4 @@ dependencies = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src/python3"]

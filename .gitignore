@@ -4,6 +4,7 @@ __pycache__/
 .ruff_cache/
 .mypy_cache/
 .codegraph/
+.tmp
 .venv/
 python-cu13/
 downloads/
