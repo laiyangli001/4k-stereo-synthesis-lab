@@ -175,7 +175,11 @@ class EnvironmentProfileMixin:
         else:
             glb_name = str(glb_value)
             glb_path = glb_name if os.path.isabs(glb_name) else os.path.join(room_dir, glb_name)
-        if getattr(self, '_openxr_panorama_background_enabled', False) and not is_panorama:
+        if (
+            getattr(self, '_openxr_panorama_background_enabled', False)
+            and not is_panorama
+            and selected.lower() == 'default'
+        ):
             glb_path = None
         if not is_panorama and (glb_path is None or not os.path.isfile(glb_path)):
             auto_panorama_path = self._find_panorama_image_file(room_dir)

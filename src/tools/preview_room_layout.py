@@ -26,6 +26,7 @@ warnings.filterwarnings(
     category=UserWarning,
 )
 
+from xr_viewer.gl_state import set_depth_mask  # noqa: E402
 from xr_viewer.implementation import load_glb_model  # noqa: E402
 
 
@@ -34,6 +35,7 @@ ENV_VERT = """
 in vec3 in_position;
 in vec3 in_normal;
 in vec2 in_uv;
+in vec2 in_uv1;
 out vec3 v_normal;
 out vec3 v_position;
 out vec2 v_uv;
@@ -61,16 +63,29 @@ uniform vec3 u_camera_pos;
 uniform vec3 u_ambient_color;
 uniform vec3 u_light_color;
 uniform float u_alpha;
+uniform int u_alpha_mode;
+uniform float u_alpha_cutoff;
+uniform float u_exposure;
+uniform float u_gamma;
 void main() {
     vec3 base = u_base_color;
+    float alpha = u_alpha;
     if (u_use_texture == 1) {
-        base *= texture(u_tex, v_uv).rgb;
+        vec4 texel = texture(u_tex, v_uv);
+        base *= texel.rgb;
+        if (u_alpha_mode != 0) {
+            alpha *= texel.a;
+        }
+    }
+    if (u_alpha_mode == 1 && alpha < u_alpha_cutoff) {
+        discard;
     }
     vec3 N = normalize(v_normal);
     vec3 L = normalize(u_camera_pos + vec3(0.0, 0.2, 0.0) - v_position);
     float diff = max(abs(dot(N, L)), 0.12);
-    vec3 color = base * (u_ambient_color + u_light_color * diff);
-    fragColor = vec4(color, u_alpha);
+    vec3 color = base * (u_ambient_color + u_light_color * diff) * u_exposure;
+    color = pow(clamp(color, 0.0, 1.0), vec3(1.0 / max(u_gamma, 0.001)));
+    fragColor = vec4(color, alpha);
 }
 """
 
@@ -111,6 +126,55 @@ def _vec3(data, default):
 
 def _rot_deg(data, default=(0.0, 0.0, 0.0)):
     return [math.radians(v) for v in _vec3(data, default)]
+
+
+def _active_view_pose(profile: dict) -> dict:
+    view_poses = profile.get("view_poses")
+    if isinstance(view_poses, list) and view_poses:
+        try:
+            idx = int(profile.get("view_pose_index", 0)) % len(view_poses)
+        except (TypeError, ValueError):
+            idx = 0
+        if isinstance(view_poses[idx], dict):
+            return view_poses[idx]
+    view = profile.get("view_pose", profile.get("camera", {}))
+    return view if isinstance(view, dict) else {}
+
+
+def _pose_position(view: dict, default):
+    if isinstance(view, dict):
+        if "position" in view:
+            return _vec3(view.get("position"), default)
+        if all(key in view for key in ("x", "y", "z")):
+            return _vec3([view.get("x"), view.get("y"), view.get("z")], default)
+    return list(default)
+
+
+def _pose_rotation_deg(view: dict, default=(0.0, 0.0, 0.0)):
+    if isinstance(view, dict):
+        if "rotation_deg" in view:
+            return _vec3(view.get("rotation_deg"), default)
+        if "rotation" in view:
+            return [math.degrees(v) for v in _rot_deg(view.get("rotation"), default)]
+        if "angle" in view:
+            return [float(view.get("angle") or 0.0), 0.0, 0.0]
+    return list(default)
+
+
+def _set_pose_position(view: dict, pos):
+    rounded = [round(float(v), 4) for v in pos]
+    if any(key in view for key in ("x", "y", "z")):
+        view["x"], view["y"], view["z"] = rounded
+    else:
+        view["position"] = rounded
+
+
+def _set_pose_rotation_deg(view: dict, rot):
+    rounded = [round(float(v), 3) for v in rot]
+    if "angle" in view and "rotation_deg" not in view:
+        view["angle"] = rounded[0]
+    else:
+        view["rotation_deg"] = rounded
 
 
 def _resolve_room_dir(room: str) -> Path:
@@ -203,6 +267,8 @@ def _screen_vertices(screen):
 
 def _make_env_resources(ctx, prog, glb_path: Path):
     prims_data, textures, _lights = load_glb_model(str(glb_path))
+    local_min = None
+    local_max = None
     tex_cache = {}
     for tid, arr in enumerate(textures):
         if arr is None:
@@ -216,26 +282,53 @@ def _make_env_resources(ctx, prog, glb_path: Path):
 
     prims = []
     for pd in prims_data:
-        vbo = ctx.buffer(pd["vertices"].astype("f4").tobytes())
+        vertices = pd["vertices"].astype("f4")
+        if vertices.size:
+            pos = vertices[:, :3]
+            mn = pos.min(axis=0)
+            mx = pos.max(axis=0)
+            local_min = mn if local_min is None else np.minimum(local_min, mn)
+            local_max = mx if local_max is None else np.maximum(local_max, mx)
+        vbo = ctx.buffer(vertices.tobytes())
         ibo = ctx.buffer(pd["indices"].astype("u4").tobytes())
-        vao = ctx.vertex_array(prog, [(vbo, "3f 3f 2f", "in_position", "in_normal", "in_uv")], ibo)
+        vao = ctx.vertex_array(prog, [(vbo, "3f 3f 2f 2f", "in_position", "in_normal", "in_uv", "in_uv1")], ibo)
         prims.append({
             "vao": vao,
             "tex_id": int(pd.get("tex_id", -1)),
             "base_color": np.array(pd.get("base_color", [1.0, 1.0, 1.0]), dtype="f4"),
             "base_alpha": float(pd.get("base_alpha", 1.0)),
+            "alpha_mode": str(pd.get("alpha_mode", "OPAQUE") or "OPAQUE").upper(),
+            "alpha_cutoff": float(pd.get("alpha_cutoff", 0.5)),
         })
-    return prims, tex_cache
+    return prims, tex_cache, local_min, local_max
+
+
+def _world_bounds_from_local(local_min, local_max, model):
+    if local_min is None or local_max is None:
+        return None, None
+    corners = np.array([
+        [x, y, z, 1.0]
+        for x in (float(local_min[0]), float(local_max[0]))
+        for y in (float(local_min[1]), float(local_max[1]))
+        for z in (float(local_min[2]), float(local_max[2]))
+    ], dtype="f4")
+    world = (model @ corners.T).T[:, :3]
+    return world.min(axis=0), world.max(axis=0)
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("room", nargs="?", default="bedroom")
+    parser.add_argument("--exposure", type=float, default=None, help="Preview-only brightness multiplier")
+    parser.add_argument("--gamma", type=float, default=None, help="Preview-only output gamma")
+    parser.add_argument("--center-view", action="store_true", help="Start camera at the transformed model bounds center")
     args = parser.parse_args()
 
     os.chdir(APP_DIR)
     room_dir, profile_path, profile, glb_path = _load_profile(args.room)
-    view_pose = profile.setdefault("view_pose", {})
+    view_pose = _active_view_pose(profile)
+    if not view_pose:
+        view_pose = profile.setdefault("view_pose", {})
     screen = profile.setdefault("screen", {})
     screen.setdefault("name", "Preview Screen")
     screen.setdefault("width", 2.4)
@@ -259,7 +352,7 @@ def main():
     env_prog = ctx.program(vertex_shader=ENV_VERT, fragment_shader=ENV_FRAG)
     screen_prog = ctx.program(vertex_shader=SCREEN_VERT, fragment_shader=SCREEN_FRAG)
 
-    env_prims, tex_cache = _make_env_resources(ctx, env_prog, glb_path)
+    env_prims, tex_cache, env_local_min, env_local_max = _make_env_resources(ctx, env_prog, glb_path)
     screen_vbo = ctx.buffer(reserve=4 * 5 * 4)
     screen_vao = ctx.vertex_array(screen_prog, [(screen_vbo, "3f 2f", "in_position", "in_uv")])
 
@@ -268,8 +361,15 @@ def main():
     model_scale = _vec3(profile.get("model_scale"), [1.0, 1.0, 1.0])
     env_model = _mat_from_trs(model_pos, model_rot, model_scale)
 
-    view_pos = _vec3(view_pose.get("position"), [0.0, 1.2, 0.0])
-    view_rot = _rot_deg(view_pose.get("rotation_deg", view_pose.get("rotation")), [0.0, 0.0, 0.0])
+    view_pos = _pose_position(view_pose, [0.0, 1.2, 0.0])
+    env_world_min, env_world_max = _world_bounds_from_local(env_local_min, env_local_max, env_model)
+    if args.center_view and env_world_min is not None and env_world_max is not None:
+        view_pos = ((env_world_min + env_world_max) * 0.5).astype(float).tolist()
+        _set_pose_position(view_pose, view_pos)
+    view_rot_deg = _pose_rotation_deg(view_pose, [0.0, 0.0, 0.0])
+    view_rot = [math.radians(v) for v in view_rot_deg]
+    preview_exposure = float(args.exposure if args.exposure is not None else profile.get("preview_exposure", 2.2))
+    preview_gamma = float(args.gamma if args.gamma is not None else profile.get("preview_gamma", 2.2))
     speed = 0.75
     rot_speed = 45.0
     size_speed = 0.8
@@ -281,6 +381,7 @@ def main():
 
     print(f"Room: {args.room}")
     print(f"Profile: {profile_path}")
+    print(f"Preview lighting: exposure={preview_exposure:.2f} gamma={preview_gamma:.2f}")
     print("Controls:")
     print("  Tab: switch edit target SCREEN/VIEW")
     print("  SCREEN: Arrow=screen X/Y, PageUp/PageDown=screen Z, +/-=width")
@@ -304,10 +405,10 @@ def main():
         dx = x - last_mouse[0]
         dy = y - last_mouse[1]
         last_mouse = (x, y)
-        view_rot_deg = _vec3(view_pose.get("rotation_deg"), [math.degrees(v) for v in view_rot])
+        view_rot_deg = _pose_rotation_deg(view_pose, [math.degrees(v) for v in view_rot])
         view_rot_deg[0] -= dx * 0.12
         view_rot_deg[1] = max(-89.0, min(89.0, view_rot_deg[1] - dy * 0.12))
-        view_pose["rotation_deg"] = [round(float(v), 3) for v in view_rot_deg]
+        _set_pose_rotation_deg(view_pose, view_rot_deg)
         view_rot = [math.radians(v) for v in view_rot_deg]
 
     glfw.set_mouse_button_callback(window, mouse_button_cb)
@@ -330,8 +431,8 @@ def main():
 
         pos = _vec3(screen.get("position"), [0.0, 1.2, -2.0])
         rot = _vec3(screen.get("rotation_deg"), [0.0, 0.0, 0.0])
-        view_pos = _vec3(view_pose.get("position"), view_pos)
-        view_rot_deg = _vec3(view_pose.get("rotation_deg"), [math.degrees(v) for v in view_rot])
+        view_pos = _pose_position(view_pose, view_pos)
+        view_rot_deg = _pose_rotation_deg(view_pose, [math.degrees(v) for v in view_rot])
         changed_screen = False
         changed_view = False
 
@@ -413,8 +514,8 @@ def main():
             screen["position"] = [round(v, 4) for v in pos]
             screen["rotation_deg"] = [round(v, 3) for v in rot]
         if changed_view:
-            view_pose["position"] = [round(float(v), 4) for v in view_pos]
-            view_pose["rotation_deg"] = [round(float(v), 3) for v in view_rot_deg]
+            _set_pose_position(view_pose, view_pos)
+            _set_pose_rotation_deg(view_pose, view_rot_deg)
             view_rot = [math.radians(v) for v in view_rot_deg]
 
         if glfw.get_key(window, glfw.KEY_P) == glfw.PRESS:
@@ -422,16 +523,19 @@ def main():
             saved_flash = 1.0
         if glfw.get_key(window, glfw.KEY_R) == glfw.PRESS:
             _room_dir, _profile_path, profile, _glb_path = _load_profile(args.room)
-            view_pose = profile.setdefault("view_pose", {})
+            view_pose = _active_view_pose(profile)
+            if not view_pose:
+                view_pose = profile.setdefault("view_pose", {})
             screen = profile.setdefault("screen", {})
-            view_pos = _vec3(view_pose.get("position"), [0.0, 1.2, 0.0])
-            view_rot = _rot_deg(view_pose.get("rotation_deg", view_pose.get("rotation")), [0.0, 0.0, 0.0])
+            view_pos = _pose_position(view_pose, [0.0, 1.2, 0.0])
+            view_rot_deg = _pose_rotation_deg(view_pose, [0.0, 0.0, 0.0])
+            view_rot = [math.radians(v) for v in view_rot_deg]
         if glfw.get_key(window, glfw.KEY_ESCAPE) == glfw.PRESS:
             glfw.set_window_should_close(window, True)
 
         title = (
             f"{args.room} | {edit_target} | {screen.get('name', 'Screen')} | "
-            f"view={view_pose.get('position', view_pos)} {view_pose.get('rotation_deg', view_rot_deg)} | "
+            f"view={view_pos} {view_rot_deg} | "
             f"pos={screen.get('position')} rot={screen.get('rotation_deg')} "
             f"w={float(screen.get('width', 2.4)):.3f}m"
         )
@@ -455,9 +559,13 @@ def main():
         env_prog["u_mvp"].write(vp.T.astype("f4").tobytes())
         env_prog["u_model"].write(env_model.T.astype("f4").tobytes())
         env_prog["u_camera_pos"].write(cam_pos.tobytes())
-        env_prog["u_ambient_color"].value = (0.24, 0.24, 0.26)
-        env_prog["u_light_color"].value = (0.70, 0.70, 0.72)
-        for prim in env_prims:
+        ambient = np.maximum(np.array(_vec3(profile.get("env_ambient_color"), [0.24, 0.24, 0.26]), dtype="f4"), 0.22)
+        light = np.maximum(np.array(_vec3(profile.get("env_head_light_color"), [0.70, 0.70, 0.72]), dtype="f4"), 0.85)
+        env_prog["u_ambient_color"].value = (float(ambient[0]), float(ambient[1]), float(ambient[2]))
+        env_prog["u_light_color"].value = (float(light[0]), float(light[1]), float(light[2]))
+        env_prog["u_exposure"].value = max(0.05, preview_exposure)
+        env_prog["u_gamma"].value = max(0.1, preview_gamma)
+        def draw_env_prim(prim):
             tid = prim["tex_id"]
             if tid in tex_cache:
                 tex_cache[tid].use(location=0)
@@ -465,9 +573,26 @@ def main():
             else:
                 env_prog["u_use_texture"].value = 0
             bc = prim["base_color"]
+            alpha_mode = prim.get("alpha_mode", "OPAQUE")
+            alpha_mode_id = 1 if alpha_mode == "MASK" else (2 if alpha_mode == "BLEND" else 0)
             env_prog["u_base_color"].value = (float(bc[0]), float(bc[1]), float(bc[2]))
-            env_prog["u_alpha"].value = min(max(float(prim["base_alpha"]), 0.15), 1.0)
+            env_prog["u_alpha"].value = min(max(float(prim["base_alpha"]), 0.0), 1.0)
+            env_prog["u_alpha_mode"].value = alpha_mode_id
+            env_prog["u_alpha_cutoff"].value = float(prim.get("alpha_cutoff", 0.5))
             prim["vao"].render(moderngl.TRIANGLES)
+
+        opaque_prims = [prim for prim in env_prims if prim.get("alpha_mode") != "BLEND"]
+        blend_prims = [prim for prim in env_prims if prim.get("alpha_mode") == "BLEND"]
+        for prim in opaque_prims:
+            draw_env_prim(prim)
+        if blend_prims:
+            ctx.enable(moderngl.BLEND)
+            ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
+            set_depth_mask(False)
+            for prim in blend_prims:
+                draw_env_prim(prim)
+            set_depth_mask(True)
+            ctx.disable(moderngl.BLEND)
 
         # Render the configured screen as a translucent blue grid.
         sv = _screen_vertices(screen)

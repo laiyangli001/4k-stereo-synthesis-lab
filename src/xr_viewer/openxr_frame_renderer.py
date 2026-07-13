@@ -17,6 +17,10 @@ class OpenXRFrameRenderer:
 
     def render_frame(self, *, composition_layers, display_time, default_fov, default_proj, default_proj_d3d):
         viewer = self.viewer
+        # Active sessions can start directly without the preview-only initialization path.
+        ensure_env = getattr(viewer, "_ensure_env_model_initialized", None)
+        if callable(ensure_env):
+            ensure_env("Active")
         screen_frame_uploaded = self.screen_presenter.poll_screen_frame()
         views, view_pose_adjusted = self.view_tracker.locate_views(display_time=display_time)
 

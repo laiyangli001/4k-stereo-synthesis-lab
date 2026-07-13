@@ -1,3 +1,5 @@
+import json
+import struct
 from pathlib import Path
 
 import numpy as np
@@ -254,6 +256,127 @@ def test_openxr_keyboard_hover_pulses_controller_haptics_on_key_changes():
     assert "min_interval_s=0.045" in helpers_text
     assert "idx is not None and idx != prev_hover and not gripping" in helpers_text
     assert "self._pulse_haptic(hand_path, amplitude=0.18, duration_s=0.018, min_interval_s=0.045)" in helpers_text
+
+
+def test_gltf_loader_treats_empty_unlit_extension_as_unlit(tmp_path, monkeypatch):
+    monkeypatch.chdir(SRC)
+    from xr_viewer.gltf_loader import load_glb_model
+
+    positions = np.array([
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+    ], dtype="<f4")
+    normals = np.array([[0.0, 0.0, 1.0]] * 3, dtype="<f4")
+    uvs = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype="<f4")
+    indices = np.array([0, 1, 2], dtype="<u2")
+    chunks = [positions.tobytes(), normals.tobytes(), uvs.tobytes(), indices.tobytes()]
+    offsets = []
+    bin_blob = b""
+    for chunk in chunks:
+        offsets.append(len(bin_blob))
+        bin_blob += chunk
+        bin_blob += b"\0" * ((4 - len(bin_blob) % 4) % 4)
+
+    gltf = {
+        "asset": {"version": "2.0"},
+        "extensionsUsed": ["KHR_materials_unlit"],
+        "scenes": [{"nodes": [0]}],
+        "scene": 0,
+        "nodes": [{"mesh": 0}],
+        "meshes": [{"primitives": [{
+            "attributes": {"POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2},
+            "indices": 3,
+            "material": 0,
+        }]}],
+        "materials": [{"extensions": {"KHR_materials_unlit": {}}}],
+        "buffers": [{"byteLength": len(bin_blob)}],
+        "bufferViews": [
+            {"buffer": 0, "byteOffset": offsets[0], "byteLength": positions.nbytes},
+            {"buffer": 0, "byteOffset": offsets[1], "byteLength": normals.nbytes},
+            {"buffer": 0, "byteOffset": offsets[2], "byteLength": uvs.nbytes},
+            {"buffer": 0, "byteOffset": offsets[3], "byteLength": indices.nbytes},
+        ],
+        "accessors": [
+            {"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3"},
+            {"bufferView": 1, "componentType": 5126, "count": 3, "type": "VEC3"},
+            {"bufferView": 2, "componentType": 5126, "count": 3, "type": "VEC2"},
+            {"bufferView": 3, "componentType": 5123, "count": 3, "type": "SCALAR"},
+        ],
+    }
+    json_blob = json.dumps(gltf, separators=(",", ":")).encode("utf-8")
+    json_blob += b" " * ((4 - len(json_blob) % 4) % 4)
+    total_len = 12 + 8 + len(json_blob) + 8 + len(bin_blob)
+    glb = (
+        struct.pack("<III", 0x46546C67, 2, total_len)
+        + struct.pack("<II", len(json_blob), 0x4E4F534A)
+        + json_blob
+        + struct.pack("<II", len(bin_blob), 0x004E4942)
+        + bin_blob
+    )
+    glb_path = tmp_path / "unlit_empty_extension.glb"
+    glb_path.write_bytes(glb)
+
+    prims, _, _ = load_glb_model(glb_path)
+
+    assert len(prims) == 1
+    assert prims[0]["unlit"] is True
+
+
+def test_gltf_loader_reads_external_gltf_bin_buffers(tmp_path, monkeypatch):
+    monkeypatch.chdir(SRC)
+    from xr_viewer.gltf_loader import load_glb_model
+
+    positions = np.array([
+        [0.0, 0.0, 0.0],
+        [2.0, 0.0, 0.0],
+        [0.0, 2.0, 0.0],
+    ], dtype="<f4")
+    normals = np.array([[0.0, 0.0, 1.0]] * 3, dtype="<f4")
+    uvs = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype="<f4")
+    indices = np.array([0, 1, 2], dtype="<u2")
+    chunks = [positions.tobytes(), normals.tobytes(), uvs.tobytes(), indices.tobytes()]
+    offsets = []
+    bin_blob = b""
+    for chunk in chunks:
+        offsets.append(len(bin_blob))
+        bin_blob += chunk
+        bin_blob += b"\0" * ((4 - len(bin_blob) % 4) % 4)
+
+    (tmp_path / "scene.bin").write_bytes(bin_blob)
+    gltf = {
+        "asset": {"version": "2.0"},
+        "scenes": [{"nodes": [0]}],
+        "scene": 0,
+        "nodes": [{"mesh": 0}],
+        "meshes": [{"primitives": [{
+            "attributes": {"POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2},
+            "indices": 3,
+        }]}],
+        "buffers": [{"uri": "scene.bin", "byteLength": len(bin_blob)}],
+        "bufferViews": [
+            {"buffer": 0, "byteOffset": offsets[0], "byteLength": positions.nbytes},
+            {"buffer": 0, "byteOffset": offsets[1], "byteLength": normals.nbytes},
+            {"buffer": 0, "byteOffset": offsets[2], "byteLength": uvs.nbytes},
+            {"buffer": 0, "byteOffset": offsets[3], "byteLength": indices.nbytes},
+        ],
+        "accessors": [
+            {"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3"},
+            {"bufferView": 1, "componentType": 5126, "count": 3, "type": "VEC3"},
+            {"bufferView": 2, "componentType": 5126, "count": 3, "type": "VEC2"},
+            {"bufferView": 3, "componentType": 5123, "count": 3, "type": "SCALAR"},
+        ],
+    }
+    gltf_path = tmp_path / "scene.gltf"
+    gltf_path.write_text(json.dumps(gltf), encoding="utf-8")
+
+    prims, textures, lights = load_glb_model(gltf_path)
+
+    assert len(prims) == 1
+    assert textures == []
+    assert lights == []
+    assert np.allclose(prims[0]["vertices"][:, :3], positions)
+    assert prims[0]["indices"].tolist() == [0, 1, 2]
 
 
 def test_openxr_controller_button_press_animates_individual_button_nodes(monkeypatch):

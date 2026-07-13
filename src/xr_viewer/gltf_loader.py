@@ -1,33 +1,99 @@
 # Desktop2Stereo OpenXR viewer: GLB/glTF loading helpers.
 
+import base64
 import io as _io
 import json
 import math
 import os
-import struct
+import urllib.parse
 
 import moderngl
 import numpy as np
 from PIL import Image
+from pygltflib import GLTF2
 
-# GLB loader (for VR controller models)
+# GLB/glTF parsing is delegated to pygltflib so file/container/schema handling
+# follows a maintained glTF 2.0 implementation. The renderer-facing contract
+# below remains our own: numpy vertex/index arrays plus material texture ids.
+def _gltf_to_dict(gltf):
+    return json.loads(gltf.to_json())
+
+
 def _read_glb_chunks(data):
-    magic = struct.unpack_from('<I', data, 0)[0]
-    if magic != 0x46546C67:
-        raise ValueError(f"Not a GLB file (magic=0x{magic:08X})")
-    total_len = struct.unpack_from('<I', data, 8)[0]
-    offset = 12
-    json_data, bin_data = None, None
-    while offset < total_len:
-        chunk_len = struct.unpack_from('<I', data, offset)[0]
-        chunk_type = struct.unpack_from('<I', data, offset + 4)[0]
-        raw = data[offset + 8:offset + 8 + chunk_len]
-        if chunk_type == 0x4E4F534A:
-            json_data = json.loads(raw.decode('utf-8'))
-        elif chunk_type == 0x004E4942:
-            bin_data = raw
-        offset += 8 + chunk_len
-    return json_data, bin_data
+    """Compatibility helper for diagnostics/tests that still pass GLB bytes."""
+    gltf = GLTF2().load_from_bytes(data)
+    return _gltf_to_dict(gltf), gltf.binary_blob()
+
+
+def _decode_data_uri(uri):
+    try:
+        header, payload = uri.split(',', 1)
+    except ValueError:
+        raise ValueError('Invalid glTF data URI')
+    if ';base64' in header:
+        return base64.b64decode(payload)
+    return urllib.parse.unquote_to_bytes(payload)
+
+
+def _load_gltf_document(path):
+    gltf_obj = GLTF2().load(path)
+    gltf = _gltf_to_dict(gltf_obj)
+    base_dir = os.path.dirname(os.path.abspath(path))
+    binary_blob = gltf_obj.binary_blob()
+    buffers = []
+    for index, buf in enumerate(gltf.get('buffers') or []):
+        uri = buf.get('uri') if isinstance(buf, dict) else None
+        data = None
+        if uri:
+            if uri.startswith('data:'):
+                data = _decode_data_uri(uri)
+            else:
+                parsed = urllib.parse.urlparse(uri)
+                if parsed.scheme not in ('', 'file'):
+                    raise ValueError(f'Unsupported glTF buffer URI scheme: {parsed.scheme}')
+                rel_path = urllib.parse.unquote(parsed.path if parsed.scheme == 'file' else uri)
+                rel_path = rel_path.replace('/', os.sep)
+                buffer_path = rel_path if os.path.isabs(rel_path) else os.path.join(base_dir, rel_path)
+                with open(buffer_path, 'rb') as bf:
+                    data = bf.read()
+        elif index == 0 and binary_blob is not None:
+            data = binary_blob
+        else:
+            data = b''
+        buffers.append(data)
+    return gltf, buffers
+
+
+def _buffer_data(buffers, buffer_index=0):
+    if isinstance(buffers, (bytes, bytearray, memoryview)):
+        return buffers if int(buffer_index or 0) == 0 else None
+    if not isinstance(buffers, (list, tuple)):
+        return None
+    try:
+        index = int(buffer_index or 0)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if index < 0 or index >= len(buffers):
+        return None
+    return buffers[index]
+
+
+_SUPPORTED_REQUIRED_EXTENSIONS = {
+    'KHR_lights_punctual',
+    'KHR_materials_unlit',
+    'KHR_texture_transform',
+}
+
+
+def _warn_unsupported_required_extensions(gltf, path):
+    required = gltf.get('extensionsRequired') or []
+    unsupported = [ext for ext in required if ext not in _SUPPORTED_REQUIRED_EXTENSIONS]
+    if unsupported:
+        print(
+            f"[OpenXRViewer] glTF required extensions not fully supported for {path}: "
+            f"{', '.join(unsupported)}"
+        )
+    return unsupported
 
 
 _DTYPE_MAP = {5120: np.int8, 5121: np.uint8, 5122: np.int16,
@@ -247,16 +313,17 @@ def _get_accessor(gltf, bin_data, acc_idx):
         if byte_stride and byte_stride < elem_size:
             raise ValueError(f"Accessor byteStride smaller than element size: {byte_stride} < {elem_size}")
         required_bytes = elem_size * count if (byte_stride == 0 or byte_stride == elem_size or count == 0) else byte_stride * (count - 1) + elem_size
-        if bin_data is None or byte_offset + required_bytes > len(bin_data):
-            raise ValueError("Accessor buffer range exceeds BIN chunk")
+        buffer_data = _buffer_data(bin_data, bv.get('buffer', 0))
+        if buffer_data is None or byte_offset + required_bytes > len(buffer_data):
+            raise ValueError("Accessor buffer range exceeds buffer data")
         if byte_stride == 0 or byte_stride == elem_size:
             # Contiguous (no stride or stride equals element size)
-            arr = np.frombuffer(bin_data, dtype=dt, count=count * nc,
+            arr = np.frombuffer(buffer_data, dtype=dt, count=count * nc,
                                offset=byte_offset).copy()
         else:
             # Interleaved vertex attributes -read each row with stride
             arr = np.ndarray(shape=(count, nc), dtype=dt,
-                             buffer=bin_data,
+                             buffer=buffer_data,
                              offset=byte_offset,
                              strides=(byte_stride, dt.itemsize)).copy()
     else:
@@ -288,10 +355,11 @@ def _get_accessor(gltf, bin_data, acc_idx):
         index_dt = np.dtype(_DTYPE_MAP[indices_info['componentType']]).newbyteorder('<')
         index_offset = _safe_int(index_bv.get('byteOffset'), 0) + _safe_int(indices_info.get('byteOffset'), 0)
         index_required = sparse_count * index_dt.itemsize
-        if bin_data is None or index_offset < 0 or index_offset + index_required > len(bin_data):
-            raise ValueError("Sparse index buffer range exceeds BIN chunk")
+        index_buffer = _buffer_data(bin_data, index_bv.get('buffer', 0))
+        if index_buffer is None or index_offset < 0 or index_offset + index_required > len(index_buffer):
+            raise ValueError("Sparse index buffer range exceeds buffer data")
         sparse_indices = np.frombuffer(
-            bin_data, dtype=index_dt, count=sparse_count, offset=index_offset
+            index_buffer, dtype=index_dt, count=sparse_count, offset=index_offset
         ).astype(np.uint32)
         if sparse_indices.size and int(sparse_indices.max()) >= count:
             raise ValueError("Sparse accessor index out of range")
@@ -299,10 +367,11 @@ def _get_accessor(gltf, bin_data, acc_idx):
         value_bv = buffer_views[value_bv_idx]
         value_offset = _safe_int(value_bv.get('byteOffset'), 0) + _safe_int(values_info.get('byteOffset'), 0)
         value_required = sparse_count * nc * dt.itemsize
-        if bin_data is None or value_offset < 0 or value_offset + value_required > len(bin_data):
-            raise ValueError("Sparse value buffer range exceeds BIN chunk")
+        value_buffer = _buffer_data(bin_data, value_bv.get('buffer', 0))
+        if value_buffer is None or value_offset < 0 or value_offset + value_required > len(value_buffer):
+            raise ValueError("Sparse value buffer range exceeds buffer data")
         sparse_values = np.frombuffer(
-            bin_data, dtype=dt, count=sparse_count * nc, offset=value_offset
+            value_buffer, dtype=dt, count=sparse_count * nc, offset=value_offset
         ).copy()
         if nc > 1:
             sparse_values = sparse_values.reshape(sparse_count, nc)
@@ -461,7 +530,7 @@ def _orthogonalize_tangent(tangent_xyz, normal_xyz):
 
 
 def load_glb_model(path):
-    """Load a GLB model, apply node transformations.
+    """Load a glTF/GLB model, apply node transformations.
     Returns:
         primitives: list of dict with keys:
             vertices (N, 8 float32: pos xyz, normal xyz, uv)
@@ -471,9 +540,8 @@ def load_glb_model(path):
     """
     _mat_log = open(os.devnull, 'w', encoding='utf-8')
     _mat_log.write(f"=== Material debug for: {path} ===\n")
-    with open(path, 'rb') as f:
-        data = f.read()
-    gltf, bin_data = _read_glb_chunks(data)
+    gltf, bin_data = _load_gltf_document(path)
+    _warn_unsupported_required_extensions(gltf, path)
     base_dir = os.path.dirname(os.path.abspath(path))
 
     # World matrices for all nodes
@@ -650,13 +718,12 @@ def load_glb_model(path):
                     bv = buffer_views[bv_idx]
                     off = _safe_int(bv.get('byteOffset'), 0)
                     byte_len = _safe_int(bv.get('byteLength'), 0)
-                    if bin_data is not None and off >= 0 and byte_len > 0 and off + byte_len <= len(bin_data):
-                        tex_data = bin_data[off:off + byte_len]
+                    image_buffer = _buffer_data(bin_data, bv.get('buffer', 0))
+                    if image_buffer is not None and off >= 0 and byte_len > 0 and off + byte_len <= len(image_buffer):
+                        tex_data = image_buffer[off:off + byte_len]
             elif isinstance(img, dict) and 'uri' in img and img['uri'].startswith('data:'):
-                import base64
-                tex_data = base64.b64decode(img['uri'].split(',', 1)[1])
+                tex_data = _decode_data_uri(img['uri'])
             elif isinstance(img, dict) and 'uri' in img:
-                import urllib.parse
                 uri = img['uri']
                 parsed = urllib.parse.urlparse(uri)
                 if parsed.scheme in ('', 'file'):
@@ -807,6 +874,7 @@ def load_glb_model(path):
             emissive_texcoord = 0
             unlit = False
             double_sided = False
+            foliage_mode = False
             alpha_mode = 'OPAQUE'
             alpha_cutoff = 0.5
             tex_offset = np.array([0.0, 0.0], dtype=np.float32)
@@ -951,8 +1019,10 @@ def load_glb_model(path):
                     if os_ is not None:
                         occlusion_strength = _clamp_float(os_, 0.0, 1.0, occlusion_strength)
 
-                # KHR_materials_unlit
-                unlit = bool(ext.get('KHR_materials_unlit'))
+                # KHR_materials_unlit is signaled by extension presence.
+                # The extension object is usually {}, so bool(ext.get(...))
+                # incorrectly treats valid unlit materials as lit.
+                unlit = 'KHR_materials_unlit' in ext
 
                 # alphaMode + alphaCutoff (glTF spec 3.9.4)
                 alpha_mode = mat.get('alphaMode', 'OPAQUE')

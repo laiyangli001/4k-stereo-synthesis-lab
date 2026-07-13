@@ -367,6 +367,12 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
         # Thin entry modules can pass environment_model='None' to run without
         # loading or rendering any room/environment scene.
         self._environment_enabled = self._environment_model.strip().lower() != 'none'
+        print(
+            "[OpenXRViewer] Environment init: "
+            f"class={type(self).__module__}.{type(self).__name__} "
+            f"requested={self._environment_model!r} enabled={self._environment_enabled}",
+            flush=True,
+        )
         self._environment_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'environments')
         self._available_environment_models = self._discover_environment_models()
         self._env_profile = {}
@@ -1031,10 +1037,10 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
 
         # D3D11 backend state (populated by _init_d3d11_device when D3D11 path is active)
         controller_renderer = str(
-            kwargs.get('openxr_controller_renderer', os.environ.get('D2S_OPENXR_CONTROLLER_RENDERER', 'd3d11')) or 'd3d11'
+            kwargs.get('openxr_controller_renderer', os.environ.get('D2S_OPENXR_CONTROLLER_RENDERER', 'opengl')) or 'opengl'
         ).strip().lower()
         forced_backend = str(
-            kwargs.get('openxr_backend', os.environ.get('D2S_OPENXR_BACKEND', 'd3d11')) or 'd3d11'
+            kwargs.get('openxr_backend', os.environ.get('D2S_OPENXR_BACKEND', 'opengl')) or 'opengl'
         ).strip().lower()
         if controller_renderer == 'opengl':
             if forced_backend not in ('auto', 'opengl'):
@@ -1043,8 +1049,8 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
         elif controller_renderer not in ('d3d11', 'native', 'auto'):
             print(f"[OpenXRViewer] Invalid D2S_OPENXR_CONTROLLER_RENDERER={controller_renderer!r}; using backend default")
         if forced_backend not in ('auto', 'opengl', 'd3d11'):
-            print(f"[OpenXRViewer] Invalid D2S_OPENXR_BACKEND={forced_backend!r}; using d3d11")
-            forced_backend = 'd3d11'
+            print(f"[OpenXRViewer] Invalid D2S_OPENXR_BACKEND={forced_backend!r}; using opengl")
+            forced_backend = 'opengl'
         self._forced_xr_backend     = forced_backend
         self._xr_backend            = 'd3d11' if forced_backend == 'd3d11' else None
         self._use_d3d11             = False   # True = D3D11 OpenXR session
@@ -1336,28 +1342,15 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
             self._border_prog,
             [(self.ctx.buffer(laser_verts.tobytes()), '2f 8x', 'in_position')],
         )
-        # Crossed quads approximate a light column while keeping the beam shader simple.
+        # Crossed beam quads are generated per frame from the shared laser geometry contract.
         self._beam_prog = self.ctx.program(
             vertex_shader=_BEAM_VERT,
             fragment_shader=_BEAM_FRAG,
         )
-        # Two crossed quadrilaterals: Y=0(base, thick) ->Y=1(tip, thin)
-        beam_verts = np.array([
-            -1.0, 0.0, 0.0, 0.0,   # bottom-left, v=0
-            1.0, 0.0, 0.0, 0.0,   # bottom-right, v=0
-            -0.15, 1.0, 0.0, 1.0,   # top-left, v=1
-            0.15, 1.0, 0.0, 1.0,   # top-right, v=1
-            0.15, 1.0, 0.0, 1.0,
-            0.0, 0.0, -1.0, 0.0,
-            0.0, 0.0, -1.0, 0.0,
-            0.0, 0.0, 1.0, 0.0,
-            0.0, 1.0, -0.15, 1.0,
-            0.0, 1.0, 0.15, 1.0,
-        ], dtype='f4')
-        beam_vbo = self.ctx.buffer(beam_verts.tobytes())
+        self._beam_vbo = self.ctx.buffer(reserve=1024, dynamic=True)
         self._beam_vao = self.ctx.vertex_array(
             self._beam_prog,
-            [(beam_vbo, '3f 4x 1f', 'in_position', 'in_v')],
+            [(self._beam_vbo, '3f 1f', 'in_position', 'in_v')],
         )
         # Hit-point indicator: annulus ring plus solid center disk.
         N_SEG = 32
@@ -1532,6 +1525,7 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
         self._env_prog['u_base_color_factor'].value = (1.0, 1.0, 1.0)
         self._env_prog['u_base_alpha'].value = 1.0
         self._env_prog['u_light_color'].value = (0.45, 0.45, 0.48)
+        self._env_prog['u_top_light_intensity'].value = 0.0
         self._env_prog['u_ambient_color'].value = (0.08, 0.08, 0.09)
         self._env_prog['u_roughness'].value = 1.0
         self._env_prog['u_metallic'].value = 0.0
@@ -2205,6 +2199,7 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
                 None,
             ),
         )
+        self._render_env_model(mgl_fbo, vp_mat, view_mat)
         if perf_enabled:
             _mark_perf('env')
 

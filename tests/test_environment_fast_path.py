@@ -489,6 +489,57 @@ def test_async_panorama_background_disables_default_glb_mesh(monkeypatch, tmp_pa
     assert viewer._panorama_background_path is None
     assert not hasattr(viewer, "_xr_quad_layer_enabled")
 
+def test_async_panorama_background_keeps_named_glb_room(monkeypatch, tmp_path):
+    import json
+
+    root = tmp_path / "environments"
+    room = root / "Bedroom"
+    room.mkdir(parents=True)
+    (room / "profile.json").write_text(
+        json.dumps({"glb": "environment.glb"}),
+        encoding="utf-8",
+    )
+    (room / "environment.glb").write_bytes(b"glb")
+    viewer = _make_default_viewer(monkeypatch)
+    viewer._env_base_settings = {
+        "model_pos": [0.0, -1.0, -3.0],
+        "model_rot": [0.0, 0.0, 0.0],
+        "model_scale": [1.0, 1.0, 1.0],
+        "head_light_color": [0.3, 0.3, 0.3],
+        "ambient_color": [0.1, 0.1, 0.1],
+        "fallback_dir": [0.25, -0.82, -0.52],
+        "fallback_dir_color": [1.0, 1.0, 1.0],
+        "fill_lights": [],
+        "exposure": 1.0,
+        "gamma": 2.2,
+        "emissive_strength": 1.0,
+        "khr_light_scale": 1.0,
+        "render_quality": "balanced",
+        "shading_mode": "pbr",
+        "texture_anisotropy": 1.0,
+        "perf_log": False,
+        "xr_render_scale": 1.0,
+        "screen_light_intensity": 3.5,
+        "controller_hdr_lighting": True,
+    }
+    viewer._environment_root = str(root)
+    viewer._environment_model = "Bedroom"
+    viewer._openxr_panorama_background_enabled = True
+    viewer._screen_light_intensity = 3.5
+
+    viewer._configure_environment_profile()
+
+    assert viewer._env_model_path == str(room / "environment.glb")
+    assert viewer._panorama_background_path is None
+
+def test_opengl_projection_renders_env_model_before_screen():
+    impl_text = (SRC / "xr_viewer" / "implementation.py").read_text(encoding="utf-8")
+
+    background_idx = impl_text.index("background_presenter.render_projection_background(")
+    env_idx = impl_text.index("self._render_env_model(mgl_fbo, vp_mat, view_mat)")
+    screen_idx = impl_text.index("self._screen_layer_presenter.render_projection_screen(")
+
+    assert background_idx < env_idx < screen_idx
 
 def test_panorama_environment_skips_glb_initialization(monkeypatch):
     viewer = _make_default_viewer(monkeypatch)

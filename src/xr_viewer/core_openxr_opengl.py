@@ -19,7 +19,7 @@ from .implementation_support import (
 _GL_SRGB8_ALPHA8 = 0x8C43
 _GL_RGBA8 = 0x8058
 _OPENGL_PREFERRED_FORMATS = (_GL_SRGB8_ALPHA8, _GL_RGBA8)
-_OPENGL_QUAD_PREFERRED_FORMATS = (_GL_RGBA8, _GL_SRGB8_ALPHA8)
+_OPENGL_QUAD_PREFERRED_FORMATS = (_GL_SRGB8_ALPHA8, _GL_RGBA8)
 
 
 def _opengl_swapchain_format_candidates(runtime_fmts, selected_format=None):

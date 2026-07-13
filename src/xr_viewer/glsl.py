@@ -377,8 +377,10 @@ in float v_v;
 out vec4 fragColor;
 uniform float u_time;
 void main() {
-    // Rainbow gradient: blue->cyan->green->yellow->red, flowing from root to tip
-    float t = fract(v_v + u_time * 0.4);
+    // Rainbow gradient: blue->cyan->green->yellow->red, flowing from root to tip.
+    // Keep the time sign aligned with the D3D11 laser shader so both backends
+    // show the same forward beam flow for the shared beamV contract.
+    float t = fract(v_v - u_time * 0.4);
     vec3 col;
     if (t < 0.167)      col = mix(vec3(0.0,0.4,1.0), vec3(0.0,1.0,1.0), t/0.167);
     else if (t < 0.333) col = mix(vec3(0.0,1.0,1.0), vec3(0.0,1.0,0.0), (t-0.167)/0.166);
@@ -573,6 +575,7 @@ uniform sampler2D u_occlusion_tex; // occlusion map (texture unit 5)
 uniform sampler2D u_mr_tex;        // metallicRoughness (texture unit 6: B=metal, G=rough)
 uniform sampler2D u_emissive_tex;  // emissive map (texture unit 7)
 uniform vec3 u_light_color;
+uniform float u_top_light_intensity;
 uniform vec3 u_ambient_color;
 uniform vec3 u_base_color_factor;
 uniform float u_base_alpha;
@@ -627,6 +630,11 @@ const float PI = 3.14159265359;
 
 vec2 uvForTexCoord(int texcoord) {
     return (texcoord == 1) ? v_uv1 : v_uv;
+}
+vec3 envSrgbToLinear(vec3 c) {
+    vec3 lo = c / 12.92;
+    vec3 hi = pow((c + vec3(0.055)) / 1.055, vec3(2.4));
+    return mix(lo, hi, step(vec3(0.04045), c));
 }
 
 // Fresnel-Schlick
@@ -717,7 +725,7 @@ void main() {
 
     vec3 baseColor;
     if (u_use_texture == 1) {
-        baseColor = texture(u_tex, base_uv).rgb * u_base_color_factor;
+        baseColor = envSrgbToLinear(texture(u_tex, base_uv).rgb) * u_base_color_factor;
     } else {
         baseColor = u_base_color_factor;
     }
@@ -781,6 +789,17 @@ void main() {
 
     // Head-lamp point light
     vec3 Lo = (diffuse + specular) * u_light_color * NdotL;
+
+    // Controller-only top fill. Environment programs keep this at zero.
+    vec3 top_light_pos = u_camera_pos + vec3(0.0, 0.45, -0.18);
+    vec3 top_vec = top_light_pos - v_position;
+    float top_dist = length(top_vec);
+    if (top_dist > 0.001 && u_top_light_intensity > 0.0) {
+        vec3 L_top = top_vec / top_dist;
+        float top_facing = max(dot(N, L_top), 0.0);
+        float top_fill = pow(top_facing, 1.25) * smoothstep(-0.20, 0.65, dot(N, V));
+        Lo += diffuse * vec3(0.95, 0.97, 1.0) * (u_top_light_intensity * top_fill) * PI;
+    }
 
     // Directional light (KHR_lights_punctual)
     if (length(u_light_intensity) > 0.001) {
@@ -861,7 +880,7 @@ void main() {
 
     vec3 emissive = u_emissive_factor;
     if (u_use_emissive_tex == 1) {
-        emissive *= texture(u_emissive_tex, uvForTexCoord(u_emissive_texcoord)).rgb;
+        emissive *= envSrgbToLinear(texture(u_emissive_tex, uvForTexCoord(u_emissive_texcoord)).rgb);
     }
     emissive *= u_emissive_strength;
 

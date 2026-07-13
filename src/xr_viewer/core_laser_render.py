@@ -10,12 +10,15 @@ import numpy as np
 from OpenGL.GL import GL_CCW, GL_CW, glFrontFace
 
 from .gl_state import set_depth_mask
+from .material_contract import GLTF_MATERIAL_TEXTURE_BINDINGS
 from .controller_lighting import CONTROLLER_HEAD_LIGHT_COLOR, CONTROLLER_TOP_LIGHT_INTENSITY
+from .laser_geometry import build_laser_beam_vertices
 from .laser_params import (
     CURSOR_RING_INNER_RADIUS_M,
     CURSOR_RING_OUTER_RADIUS_M,
     LASER_BASE_HALF_WIDTH_M,
     LASER_MAX_LENGTH_M,
+    LASER_TIP_HALF_WIDTH_M,
 )
 
 
@@ -282,8 +285,15 @@ class CoreLaserRenderMixin:
             self._render_laser_hit_circles(mgl_fbo, vp_mat, beams)
             return
         mgl_fbo.use()
+        self.ctx.enable(moderngl.DEPTH_TEST)
+        self.ctx.disable(moderngl.CULL_FACE)
+        set_depth_mask(True)
+        glFrontFace(GL_CCW)
         beam_max_len = LASER_MAX_LENGTH_M
-        for now, ctrl_name, _aim_mat, ctrl_pos, fwd_w, right2, fwd, up in beams:
+        draws = []
+        beam_time = 0.0
+        for now, ctrl_name, _aim_mat, ctrl_pos, fwd_w, right2, _fwd, up in beams:
+            beam_time = float(now)
             cursor_uv = self._cursor_uv_l if ctrl_name == 'left' else self._cursor_uv_r
             if self._cursor_ctrl == ctrl_name and cursor_uv is not None:
                 hit_dist = max(0.01, float(cursor_uv[2]))
@@ -296,18 +306,14 @@ class CoreLaserRenderMixin:
                 else:
                     hit_dist = min(sc_dist, kb_dist, ov_dist)
             draw_len = min(beam_max_len, max(0.01, hit_dist))
-            beam_r = LASER_BASE_HALF_WIDTH_M
-            scale = np.diag([beam_r, draw_len, beam_r, 1.0]).astype('f4')
-            rot = np.eye(4, dtype='f4')
-            rot[:3, 0] = right2
-            rot[:3, 1] = fwd
-            rot[:3, 2] = up
-            trans = np.eye(4, dtype='f4')
-            trans[:3, 3] = ctrl_pos.astype('f4')
-            beam_mvp = vp_mat @ trans @ rot @ scale
-            self._beam_prog['u_mvp'].write(beam_mvp.T.tobytes())
-            self._beam_prog['u_time'].value = float(now)
-            self._beam_vao.render(moderngl.TRIANGLE_STRIP)
+            draws.append((ctrl_pos, fwd_w, right2, up, draw_len))
+        beam_data = build_laser_beam_vertices(draws, LASER_BASE_HALF_WIDTH_M, LASER_TIP_HALF_WIDTH_M)
+        if beam_data.size == 0:
+            return
+        self._beam_vbo.write(beam_data.tobytes())
+        self._beam_prog['u_mvp'].write(vp_mat.astype('f4').T.tobytes())
+        self._beam_prog['u_time'].value = beam_time
+        self._beam_vao.render(moderngl.TRIANGLES, vertices=beam_data.size // 4)
 
     def _laser_hit_circle_draws(self, beams):
         draws = []
@@ -563,20 +569,15 @@ class CoreLaserRenderMixin:
                 self._controller_prog['u_tex_scale'].value = tuple(float(x) for x in mat.get('tex_scale', (1.0, 1.0))[:2])
                 self._controller_prog['u_tex_rotation'].value = float(mat.get('tex_rotation', 0.0))
                 self._controller_prog['u_base_texcoord'].value = int(mat.get('base_texcoord', 0))
-                for uniform, location, key_name in (
-                    ('texture', 3, 'base_key'),
-                    ('normal_tex', 4, 'normal_key'),
-                    ('occlusion_tex', 5, 'occlusion_key'),
-                    ('mr_tex', 6, 'mr_key'),
-                    ('emissive_tex', 7, 'emissive_key'),
-                ):
-                    tex = self._ctrl_tex_cache.get(mat.get(key_name))
+                for binding in GLTF_MATERIAL_TEXTURE_BINDINGS:
+                    uniform = binding.opengl_uniform
+                    tex = self._ctrl_tex_cache.get(mat.get(binding.material_key))
                     use_name = 'u_use_texture' if uniform == 'texture' else f'u_use_{uniform}'
                     if diag_opaque_unlit and uniform != 'texture':
                         self._controller_prog[use_name].value = 0
                         continue
                     if tex is not None:
-                        tex.use(location=location)
+                        tex.use(location=binding.opengl_texture_unit)
                         self._controller_prog[use_name].value = 1
                     else:
                         self._controller_prog[use_name].value = 0

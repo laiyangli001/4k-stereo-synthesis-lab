@@ -2,12 +2,15 @@ import ctypes
 import math
 import os
 import sys
+from types import SimpleNamespace
 
 import numpy as np
 from PIL import Image
 
 from utils.cpu_warnings import describe_tensor, warn_cpu_fallback, warn_cpu_operation, warn_cpu_transfer
 from .controller_lighting import CONTROLLER_HEAD_LIGHT_COLOR, CONTROLLER_TOP_LIGHT_INTENSITY
+from .material_contract import GLTF_MATERIAL_TEXTURE_BINDINGS
+from .laser_geometry import build_laser_beam_vertices
 from .laser_params import CURSOR_RING_INNER_RATIO, LASER_BASE_HALF_WIDTH_M, LASER_MAX_LENGTH_M, LASER_TIP_HALF_WIDTH_M
 
 
@@ -1978,11 +1981,15 @@ class D3D11NativeRenderer:
                 vb, ib, index_count, topology = res
                 mvp = (vp_mat @ model).astype(np.float32)
                 mat = prim.get("material") or {}
-                srv0 = self._controller_texture_srv(mat.get("base_key"), tex_images)
-                normal_srv = self._controller_texture_srv(mat.get("normal_key"), tex_images)
-                occlusion_srv = self._controller_texture_srv(mat.get("occlusion_key"), tex_images)
-                mr_srv = self._controller_texture_srv(mat.get("mr_key"), tex_images)
-                emissive_srv = self._controller_texture_srv(mat.get("emissive_key"), tex_images)
+                material_srvs = {
+                    binding.role: self._controller_texture_srv(mat.get(binding.material_key), tex_images)
+                    for binding in GLTF_MATERIAL_TEXTURE_BINDINGS
+                }
+                srv0 = material_srvs["base"]
+                normal_srv = material_srvs["normal"]
+                occlusion_srv = material_srvs["occlusion"]
+                mr_srv = material_srvs["mr"]
+                emissive_srv = material_srvs["emissive"]
                 base_color = np.asarray(mat.get("base_color", (1.0, 1.0, 1.0)), dtype=np.float32)
                 if base_color.size < 3:
                     base_color = np.array((1.0, 1.0, 1.0), dtype=np.float32)
@@ -2087,15 +2094,18 @@ class D3D11NativeRenderer:
                     self._set_depth_enabled(True)
                 self._context_call(43, None, ctypes.c_void_p)(_ptr_value(self.context), _ptr_value(self.rasterizer))
 
-                srv_arr = (ctypes.c_void_p * 7)(
+                srv_values = [
                     _ptr_value(srv0 or env_srv or 0),
                     _ptr_value(env_srv or srv0 or 0),
                     _ptr_value(screen_light_srv or 0),
-                    _ptr_value(normal_srv or 0),
-                    _ptr_value(occlusion_srv or 0),
-                    _ptr_value(mr_srv or 0),
-                    _ptr_value(emissive_srv or 0),
-                )
+                    0,
+                    0,
+                    0,
+                    0,
+                ]
+                for binding in GLTF_MATERIAL_TEXTURE_BINDINGS:
+                    srv_values[binding.d3d11_srv_slot] = _ptr_value(material_srvs[binding.role] or 0)
+                srv_arr = (ctypes.c_void_p * 7)(*srv_values)
                 self._context_call(8, None, ctypes.c_uint, ctypes.c_uint, ctypes.POINTER(ctypes.c_void_p))(_ptr_value(self.context), 0, 7, srv_arr)
                 stride = ctypes.c_uint(40)
                 offset = ctypes.c_uint(0)
@@ -2106,6 +2116,74 @@ class D3D11NativeRenderer:
                 self._context_call(19, None, ctypes.c_void_p, ctypes.c_uint, ctypes.c_uint)(_ptr_value(self.context), _ptr_value(ib), DXGI_FORMAT_R32_UINT, 0)
                 self._context_call(24, None, ctypes.c_uint)(_ptr_value(self.context), topology)
                 self._context_call(12, None, ctypes.c_uint, ctypes.c_uint, ctypes.c_int)(_ptr_value(self.context), index_count, 0, 0)
+
+    def _draw_environment_model(self, viewer, view_mat, proj_mat):
+        """Draw environment GLB primitives with environment-owned lighting state.
+
+        The D3D11 controller shader is shared as a rendering implementation, but
+        the proxy carries the room primitives and room profile values explicitly.
+        """
+        if viewer is None or view_mat is None or proj_mat is None:
+            return
+        prims = getattr(viewer, "_env_model_prims", None) or []
+        if not prims:
+            ensure_env = getattr(viewer, "_ensure_env_model_initialized", None)
+            if callable(ensure_env):
+                ensure_env("D3D11")
+            prims = getattr(viewer, "_env_model_prims", None) or []
+        if not prims or not getattr(viewer, "_env_model_visible", True):
+            if not getattr(self, "_d3d11_environment_empty_logged", False):
+                self._d3d11_environment_empty_logged = True
+                print(
+                    "[OpenXRViewer] D3D11 environment skipped: "
+                    f"prims={len(prims)} visible={bool(getattr(viewer, '_env_model_visible', False))} "
+                    f"init_done={bool(getattr(viewer, '_env_model_init_done', False))} "
+                    f"path={getattr(viewer, '_env_model_path', None)!s} "
+                    f"panorama={getattr(viewer, '_panorama_background_path', None)!s}",
+                    flush=True,
+                )
+            return
+        try:
+            model_fn = getattr(viewer, "_env_model_mat4", None) or getattr(viewer, "_build_env_model_mat4")
+            model = np.asarray(model_fn(), dtype=np.float32)
+        except Exception as exc:
+            if not getattr(self, "_d3d11_environment_error_logged", False):
+                self._d3d11_environment_error_logged = True
+                print(f"[OpenXRViewer] D3D11 environment transform failed: {type(exc).__name__}: {exc}", flush=True)
+            return
+        images = {}
+        for prim in prims:
+            images.update(prim.get("d3d_tex_images", {}) or {})
+            # Room geometry is viewed from the inside; keep controller back-face
+            # rejection from hiding outward-wound interior surfaces.
+            material = prim.get("material")
+            if isinstance(material, dict):
+                material["double_sided"] = True
+        proxy = SimpleNamespace(
+            _frame_now=getattr(viewer, "_frame_now", 0.0),
+            _LASER_HIDE_AFTER=0.0,
+            _grip_mat_l=model,
+            _grip_mat_r=None,
+            _ctrl_prims_l=prims,
+            _ctrl_prims_r=None,
+            _laser_last_move_l=getattr(viewer, "_frame_now", 0.0),
+            _laser_last_move_r=0.0,
+            _ctrl_press_l={},
+            _ctrl_press_r={},
+            _ctrl_tex_images=images,
+            _ctrl_model_offset=(0.0, 0.0, 0.0),
+            _ctrl_model_rot_deg=0.0,
+            _calibration_mode=False,
+            _controller_hdr_lighting=bool(getattr(viewer, "_controller_hdr_lighting", False)),
+            _env_head_light_color=getattr(viewer, "_env_head_light_color", CONTROLLER_HEAD_LIGHT_COLOR),
+            _env_ambient_color=getattr(viewer, "_env_ambient_color", (0.14, 0.13, 0.15)),
+            _env_fallback_dir=getattr(viewer, "_env_fallback_dir", (0.25, -0.82, -0.52)),
+            _env_exposure=getattr(viewer, "_env_exposure", 1.0),
+            _controller_anim_delta=lambda *_args: None,
+        )
+        if hasattr(viewer, "_screen_basis"):
+            proxy._screen_basis = viewer._screen_basis
+        self._draw_controller_models(proxy, view_mat, proj_mat, None)
 
     def _draw_lasers(self, viewer, view_mat, proj_mat):
         if viewer is None or view_mat is None or proj_mat is None or not hasattr(viewer, "_laser_beam_setup"):
@@ -2119,23 +2197,11 @@ class D3D11NativeRenderer:
             return
         if not beams:
             return
-        vertices = []
-        for _now, _ctrl_name, _aim_mat, ctrl_pos, fwd_w, right2, _fwd, _up in beams:
-            start = np.asarray(ctrl_pos, dtype=np.float32)
-            end = start + np.asarray(fwd_w, dtype=np.float32) * LASER_MAX_LENGTH_M
-            right = np.asarray(right2, dtype=np.float32)
-            up = np.asarray(_up, dtype=np.float32)
-            for axis in (right, up):
-                base_l = start - axis * LASER_BASE_HALF_WIDTH_M
-                base_r = start + axis * LASER_BASE_HALF_WIDTH_M
-                tip_l = end - axis * LASER_TIP_HALF_WIDTH_M
-                tip_r = end + axis * LASER_TIP_HALF_WIDTH_M
-                for p, beam_v in (
-                    (base_l, 0.0), (base_r, 0.0), (tip_l, 1.0),
-                    (base_r, 0.0), (tip_r, 1.0), (tip_l, 1.0),
-                ):
-                    vertices.extend([p[0], p[1], p[2], beam_v])
-        data = np.asarray(vertices, dtype=np.float32)
+        draws = [
+            (ctrl_pos, fwd_w, right2, up, LASER_MAX_LENGTH_M)
+            for _now, _ctrl_name, _aim_mat, ctrl_pos, fwd_w, right2, _fwd, up in beams
+        ]
+        data = build_laser_beam_vertices(draws, LASER_BASE_HALF_WIDTH_M, LASER_TIP_HALF_WIDTH_M)
         if data.size == 0:
             return
         vb = self._create_buffer(data, D3D11_BIND_VERTEX_BUFFER)
@@ -2245,6 +2311,7 @@ class D3D11NativeRenderer:
             self._context_call(43, None, ctypes.c_void_p)(_ptr_value(self.context), _ptr_value(self.rasterizer))
             self._context_call(24, None, ctypes.c_uint)(_ptr_value(self.context), D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP)
             self._draw_background(background_view_mat, background_proj_mat)
+            self._draw_environment_model(overlay_viewer, background_view_mat, background_proj_mat)
             self._context_call(11, None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint)(_ptr_value(self.context), _ptr_value(self.vertex_shader), None, 0)
             self._context_call(9, None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint)(_ptr_value(self.context), _ptr_value(self.pixel_shader), None, 0)
 

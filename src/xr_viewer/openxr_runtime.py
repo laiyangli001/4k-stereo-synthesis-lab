@@ -84,7 +84,14 @@ def _parse_size_text(value):
 
 
 def load_openxr_viewer(environment_model):
-    if use_environment_viewer(environment_model):
+    env_name = str(environment_model or "").strip()
+    use_env = use_environment_viewer(env_name)
+    print(
+        "[OpenXRViewer] Viewer selection: "
+        f"environment_model={env_name!r} use_environment={use_env}",
+        flush=True,
+    )
+    if use_env:
         from xr_viewer.environment import OPENXR_AVAILABLE, OpenXRViewer
     else:
         from xr_viewer.base import OPENXR_AVAILABLE, OpenXRViewer

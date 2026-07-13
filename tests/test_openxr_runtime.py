@@ -114,6 +114,8 @@ def test_d3d11_overlay_quads_are_separate_from_main_screen_quad_path():
     assert "def _render_keyboard" not in core_keyboard
     assert "_keyboard_tex" not in core_keyboard
     assert "np.flipud(spec" not in overlay_quad
+    upload_func = overlay_quad.split("def _upload_opengl_rgba", 1)[1]
+    assert "np.ascontiguousarray(np.flipud(rgba))" in upload_func
     assert "rgba = spec[\"rgba\"]" in overlay_quad
     assert 'content_keys = entry["content_keys"]' in overlay_quad
     assert 'content_keys.get(int(img_index)) != spec["content_key"]' in overlay_quad
@@ -215,17 +217,41 @@ def test_controller_material_preserves_gltf_double_sided_without_override():
     assert pico["material_diag"] == "opaque_unlit"
 
 
-def test_laser_width_is_shared_between_opengl_and_d3d11():
-    from xr_viewer.laser_params import LASER_BASE_HALF_WIDTH_M
+def test_laser_geometry_is_shared_between_opengl_and_d3d11():
+    from xr_viewer.laser_geometry import build_laser_beam_vertices
+    from xr_viewer.laser_params import LASER_BASE_HALF_WIDTH_M, LASER_TIP_HALF_WIDTH_M
 
     core_laser = (SRC / "xr_viewer" / "core_laser_render.py").read_text(encoding="utf-8")
     renderer = (SRC / "xr_viewer" / "d3d11_native_renderer.py").read_text(encoding="utf-8")
+    implementation = (SRC / "xr_viewer" / "implementation.py").read_text(encoding="utf-8")
+    glsl = (SRC / "xr_viewer" / "glsl.py").read_text(encoding="utf-8")
+
+    data = build_laser_beam_vertices(
+        [((0.0, 0.0, 0.0), (0.0, 1.0, 0.0), (1.0, 0.0, 0.0), (0.0, 0.0, 1.0), 2.0)],
+        LASER_BASE_HALF_WIDTH_M,
+        LASER_TIP_HALF_WIDTH_M,
+    )
+    verts = data.reshape(-1, 4)
 
     assert LASER_BASE_HALF_WIDTH_M == 0.003
-    assert "beam_r = LASER_BASE_HALF_WIDTH_M" in core_laser
-    assert "axis * LASER_BASE_HALF_WIDTH_M" in renderer
-    assert "Two crossed quadrilaterals" in (SRC / "xr_viewer" / "implementation.py").read_text(encoding="utf-8")
-    assert "for axis in (right, up):" in renderer
+    assert data.shape == (48,)
+    assert np.allclose(verts[:, 1].min(), 0.0)
+    assert np.allclose(verts[:, 1].max(), 2.0)
+    assert np.allclose(verts[2, :3], [-LASER_TIP_HALF_WIDTH_M, 2.0, 0.0])
+    assert "from .laser_geometry import build_laser_beam_vertices" in core_laser
+    assert "from .laser_geometry import build_laser_beam_vertices" in renderer
+    assert "build_laser_beam_vertices(draws, LASER_BASE_HALF_WIDTH_M, LASER_TIP_HALF_WIDTH_M)" in core_laser
+    assert "build_laser_beam_vertices(draws, LASER_BASE_HALF_WIDTH_M, LASER_TIP_HALF_WIDTH_M)" in renderer
+    assert "draws.append((ctrl_pos, fwd_w, right2, up, draw_len))" in core_laser
+    assert "self.ctx.disable(moderngl.CULL_FACE)" in core_laser
+    assert "glFrontFace(GL_CCW)" in core_laser
+    assert "(ctrl_pos, fwd_w, right2, up, LASER_MAX_LENGTH_M)" in renderer
+    assert "self._beam_vbo = self.ctx.buffer(reserve=1024, dynamic=True)" in implementation
+    assert "[(self._beam_vbo, '3f 1f', 'in_position', 'in_v')]" in implementation
+    assert "float t = fract(v_v - u_time * 0.4);" in glsl
+    assert "float t = frac(input.beamV - laserParams.x * 0.4);" in renderer
+    assert "Two crossed quadrilaterals" not in implementation
+    assert "axis * LASER_BASE_HALF_WIDTH_M" not in renderer
 
 
 def test_controller_lighting_ignores_environment_profile_lights():
@@ -250,10 +276,14 @@ def test_controller_top_light_intensity_is_shared_between_opengl_and_d3d11():
     renderer = (SRC / "xr_viewer" / "d3d11_native_renderer.py").read_text(encoding="utf-8")
     implementation = (SRC / "xr_viewer" / "implementation.py").read_text(encoding="utf-8")
 
+    env_frag = glsl.rsplit("_ENV_FRAG", 1)[1].split("_BLIT_FRAG", 1)[0]
+
     assert CONTROLLER_HEAD_LIGHT_COLOR == (0.55, 0.55, 0.58)
     assert CONTROLLER_TOP_LIGHT_INTENSITY == 0.55
-    assert "uniform float u_top_light_intensity;" in glsl
-    assert "u_top_light_intensity * top_fill" in glsl
+    assert "uniform float u_top_light_intensity;" in env_frag
+    assert "u_top_light_intensity * top_fill" in env_frag
+    assert "self._controller_prog = self.ctx.program(\n            vertex_shader=_ENV_VERT,\n            fragment_shader=_ENV_FRAG," in implementation
+    assert "self._env_prog['u_top_light_intensity'].value = 0.0" in implementation
     assert "CONTROLLER_TOP_LIGHT_INTENSITY" in core_laser
     assert "def _set_optional_uniform" in core_laser
     assert "_set_optional_uniform(self._controller_prog, 'u_top_light_intensity', CONTROLLER_TOP_LIGHT_INTENSITY)" in core_laser
@@ -459,14 +489,14 @@ def test_openxr_display_refresh_rate_skips_unadvertised_rate(monkeypatch, capsys
     assert "not advertised by runtime" in capsys.readouterr().out
 
 
-def test_openxr_backend_defaults_to_d3d11():
+def test_openxr_backend_defaults_to_opengl():
     implementation = (SRC / "xr_viewer" / "implementation.py").read_text(encoding="utf-8")
 
-    assert "os.environ.get('D2S_OPENXR_BACKEND', 'd3d11')" in implementation
-    assert "os.environ.get('D2S_OPENXR_CONTROLLER_RENDERER', 'd3d11')" in implementation
+    assert "os.environ.get('D2S_OPENXR_BACKEND', 'opengl')" in implementation
+    assert "os.environ.get('D2S_OPENXR_CONTROLLER_RENDERER', 'opengl')" in implementation
     assert "Controller renderer override: opengl (forcing OpenXR backend: opengl)" in implementation
     assert "forced_backend = 'opengl'" in implementation
-    assert "using d3d11" in implementation
+    assert "using opengl" in implementation
     assert "Primary OpenXR backend: d3d11" in implementation
     assert "Primary OpenXR backend: opengl (D3D11 fallback enabled)" in implementation
     assert "Forced OpenXR backend: opengl" in implementation
@@ -564,7 +594,7 @@ def test_opengl_swapchain_format_candidates_try_runtime_fallbacks():
 
     assert _opengl_swapchain_format_candidates(runtime_formats) == (35907, 32856, 34842, 36012)
     assert _opengl_swapchain_format_candidates(runtime_formats, 34842) == (34842, 35907, 32856, 36012)
-    assert _opengl_quad_swapchain_format_candidates(runtime_formats) == (32856, 35907, 34842, 36012)
+    assert _opengl_quad_swapchain_format_candidates(runtime_formats) == (35907, 32856, 34842, 36012)
     assert _opengl_quad_swapchain_format_candidates([35907, 34842]) == (35907, 34842)
 
 
@@ -833,6 +863,59 @@ def test_latest_vdxr_swapchain_detail_reads_runtime_log(monkeypatch):
             log_path.unlink()
         except FileNotFoundError:
             pass
+
+
+def test_shared_gltf_material_contract_drives_backend_texture_bindings():
+    from xr_viewer.material_contract import (
+        GLTF_COLOR_SPACE_LINEAR,
+        GLTF_COLOR_SPACE_SRGB,
+        GLTF_COLOR_TEXTURE_KEYS,
+        GLTF_DATA_TEXTURE_KEYS,
+        GLTF_MATERIAL_TEXTURE_BINDINGS,
+    )
+
+    contract = [
+        (
+            binding.role,
+            binding.material_key,
+            binding.source_tex_field,
+            binding.opengl_uniform,
+            binding.opengl_texture_unit,
+            binding.d3d11_srv_slot,
+            binding.color_space,
+        )
+        for binding in GLTF_MATERIAL_TEXTURE_BINDINGS
+    ]
+    assert contract == [
+        ("base", "base_key", "tex_id", "texture", 3, 0, GLTF_COLOR_SPACE_SRGB),
+        ("normal", "normal_key", "normal_tex_id", "normal_tex", 4, 3, GLTF_COLOR_SPACE_LINEAR),
+        ("occlusion", "occlusion_key", "occlusion_tex_id", "occlusion_tex", 5, 4, GLTF_COLOR_SPACE_LINEAR),
+        ("mr", "mr_key", "mr_tex_id", "mr_tex", 6, 5, GLTF_COLOR_SPACE_LINEAR),
+        ("emissive", "emissive_key", "emissive_tex_id", "emissive_tex", 7, 6, GLTF_COLOR_SPACE_SRGB),
+    ]
+    assert GLTF_COLOR_TEXTURE_KEYS == ("base_key", "emissive_key")
+    assert GLTF_DATA_TEXTURE_KEYS == ("normal_key", "occlusion_key", "mr_key")
+
+    controller_materials = (SRC / "xr_viewer" / "controller_materials.py").read_text(encoding="utf-8")
+    environment_model = (SRC / "xr_viewer" / "environment_model.py").read_text(encoding="utf-8")
+    core_laser = (SRC / "xr_viewer" / "core_laser_render.py").read_text(encoding="utf-8")
+    d3d11 = (SRC / "xr_viewer" / "d3d11_native_renderer.py").read_text(encoding="utf-8")
+
+    assert "GLTF_TEXTURE_FIELDS" in controller_materials
+    assert "for binding in GLTF_MATERIAL_TEXTURE_BINDINGS" in environment_model
+    assert "binding.opengl_texture_unit" in core_laser
+    assert "binding.d3d11_srv_slot" in d3d11
+
+def test_opengl_gltf_shader_linearizes_srgb_color_textures():
+    glsl = (SRC / "xr_viewer" / "glsl.py").read_text(encoding="utf-8")
+    env_frag = glsl.rsplit("_ENV_FRAG", 1)[1].split("_BLIT_FRAG", 1)[0]
+
+    assert "vec3 envSrgbToLinear(vec3 c)" in env_frag
+    assert "envSrgbToLinear(texture(u_tex, base_uv).rgb)" in env_frag
+    assert "envSrgbToLinear(texture(u_emissive_tex" in env_frag
+    assert "envSrgbToLinear(texture(u_normal_tex" not in env_frag
+    assert "envSrgbToLinear(texture(u_mr_tex" not in env_frag
+    assert "envSrgbToLinear(texture(u_occlusion_tex" not in env_frag
 
 
 def test_quad_layer_rgba8_copy_linearizes_srgb_source():
@@ -3736,10 +3819,10 @@ def test_d3d11_projection_path_uses_native_renderer():
     assert 'names = [b"POSITION", b"TEXCOORD"]' in renderer
     assert "lerp(float3(0.0,0.4,1.0), float3(0.0,1.0,1.0)" in renderer
     assert 'mat = prim.get("material") or {}' in renderer
-    assert 'self._controller_texture_srv(mat.get("normal_key"), tex_images)' in renderer
-    assert 'self._controller_texture_srv(mat.get("occlusion_key"), tex_images)' in renderer
-    assert 'self._controller_texture_srv(mat.get("mr_key"), tex_images)' in renderer
-    assert 'self._controller_texture_srv(mat.get("emissive_key"), tex_images)' in renderer
+    assert "from .material_contract import GLTF_MATERIAL_TEXTURE_BINDINGS" in renderer
+    assert "mat.get(binding.material_key)" in renderer
+    assert "binding.d3d11_srv_slot" in renderer
+    assert "srv_values[binding.d3d11_srv_slot]" in renderer
     assert "self.controller_constant_buffer = self._create_buffer(np.zeros(128" in renderer
     assert "float4 normalRow0;" in renderer
     assert "dot(normalRow0.xyz, input.normal)" in renderer

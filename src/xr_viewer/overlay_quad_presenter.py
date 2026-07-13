@@ -560,7 +560,10 @@ class QuadOverlayPresenter:
         return getattr(self.viewer, "_xr_opengl_swapchain_format")
 
     def _upload_opengl_rgba(self, texture, rgba):
-        rgba = np.ascontiguousarray(rgba)
+        # OpenGL interprets the first uploaded row as texture-space bottom.
+        # Overlay RGBA builders produce top-first PIL/NumPy rows, so flip only
+        # on the OpenGL swapchain upload path. D3D11 keeps the original order.
+        rgba = np.ascontiguousarray(np.flipud(rgba))
         glPixelStorei(GL_UNPACK_ALIGNMENT, 1)
         glBindTexture(GL_TEXTURE_2D, int(texture))
         try:

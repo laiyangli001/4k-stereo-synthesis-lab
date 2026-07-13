@@ -1,3 +1,5 @@
+import os
+
 import yaml
 
 
@@ -15,4 +17,5 @@ def read_yaml(path):
 
 
 def load_settings(path="settings.yaml"):
-    return read_yaml(path)
+    settings_path = path if os.path.isabs(path) else os.path.abspath(os.path.join(os.path.dirname(__file__), "..", path))
+    return read_yaml(settings_path)

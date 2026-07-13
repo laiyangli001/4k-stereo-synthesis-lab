@@ -4,25 +4,29 @@ import os
 import numpy as np
 
 from .gltf_loader import gltf_texture_cache_key, normalize_gltf_sampler
+from .material_contract import GLTF_MATERIAL_TEXTURE_BINDINGS, GLTF_TEXTURE_FIELDS
 
 
-_TEXTURE_FIELDS = (
-    ("base", "tex_id", "base_sampler"),
-    ("normal", "normal_tex_id", "normal_sampler"),
-    ("occlusion", "occlusion_tex_id", "occlusion_sampler"),
-    ("mr", "mr_tex_id", "mr_sampler"),
-    ("emissive", "emissive_tex_id", "emissive_sampler"),
-)
+_TEXTURE_FIELDS = GLTF_TEXTURE_FIELDS
 
 
 def load_controller_common_config(controllers_root):
-    path = os.path.join(controllers_root, "common.json")
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except Exception:
-        data = {}
-    return data if isinstance(data, dict) else {}
+    """Load shared glTF/PBR defaults from the environment-owned config.
+
+    The controller-local common.json remains a compatibility fallback for
+    installations that have not completed the configuration migration.
+    """
+    shared_path = os.path.join(os.path.dirname(controllers_root), "environments", "common.json")
+    legacy_path = os.path.join(controllers_root, "common.json")
+    for path in (shared_path, legacy_path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            continue
+    return {}
 
 
 def _vec(value, size, default):
@@ -82,11 +86,6 @@ def prepare_controller_material(pd, prefix, config):
     if alpha_mode not in ("OPAQUE", "MASK", "BLEND"):
         alpha_mode = "OPAQUE"
     material = {
-        "base_key": controller_texture_key(prefix, pd, "tex_id", "base_sampler"),
-        "normal_key": controller_texture_key(prefix, pd, "normal_tex_id", "normal_sampler"),
-        "occlusion_key": controller_texture_key(prefix, pd, "occlusion_tex_id", "occlusion_sampler"),
-        "mr_key": controller_texture_key(prefix, pd, "mr_tex_id", "mr_sampler"),
-        "emissive_key": controller_texture_key(prefix, pd, "emissive_tex_id", "emissive_sampler"),
         "base_color": base_color,
         "base_alpha": float(pd.get("base_alpha", defaults.get("baseAlpha", 1.0)) or 1.0),
         "roughness": float(brand_defaults.get("roughnessFactor", pd.get("roughness_factor", defaults.get("roughnessFactor", 1.0))) or 1.0),
@@ -111,4 +110,11 @@ def prepare_controller_material(pd, prefix, config):
         "use_environment_pbr": bool(pbr.get("useEnvironmentPbr", True)),
         "material_diag": str(diagnostics.get("materialMode", "") if isinstance(diagnostics, dict) else "").strip().lower(),
     }
+    for binding in GLTF_MATERIAL_TEXTURE_BINDINGS:
+        material[binding.material_key] = controller_texture_key(
+            prefix,
+            pd,
+            binding.source_tex_field,
+            binding.source_sampler_field,
+        )
     return material

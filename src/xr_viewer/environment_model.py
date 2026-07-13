@@ -3,6 +3,7 @@
 import moderngl
 
 from .implementation import *
+from .material_contract import GLTF_MATERIAL_TEXTURE_BINDINGS
 
 
 class EnvironmentModelMixin:
@@ -218,6 +219,9 @@ class EnvironmentModelMixin:
                 )
                 prim = {
                     'vao': vao, 'vbo': vbo, 'tan_vbo': tan_vbo, 'ibo': ibo,
+                    # Keep CPU geometry for the native D3D11 renderer.
+                    'vertices': np.ascontiguousarray(pd['vertices'], dtype=np.float32),
+                    'indices': np.ascontiguousarray(pd['indices'], dtype=np.uint32),
                     'tex_key': tex_key,
                     'render_mode': gltf_primitive_mode_to_moderngl(pd.get('primitive_mode', 4)),
                     'tri_count': len(pd['indices']) // 3,
@@ -251,6 +255,37 @@ class EnvironmentModelMixin:
                     'tex_scale': pd.get('tex_scale', np.array([1.0, 1.0], dtype=np.float32)),
                     'tex_rotation': pd.get('tex_rotation', 0.0),
                     'material_key': material_key,
+                }
+                material_texture_keys = {}
+                for binding in GLTF_MATERIAL_TEXTURE_BINDINGS:
+                    tid = int(pd.get(binding.source_tex_field, -1))
+                    material_texture_keys[binding.material_key] = (
+                        gltf_texture_cache_key(_prefix, tid, pd.get(binding.source_sampler_field))
+                        if tid >= 0 else None
+                    )
+                prim['material'] = {
+                    **material_texture_keys,
+                    'base_color': tuple(float(x) for x in base_color[:3]), 'base_alpha': base_alpha,
+                    'roughness': float(pd.get('roughness_factor', 1.0)), 'metallic': float(pd.get('metallic_factor', 0.0)),
+                    'alpha_mode_id': 0.0 if alpha_mode == 'OPAQUE' else (1.0 if alpha_mode == 'MASK' else 2.0),
+                    'alpha_cutoff': float(pd.get('alpha_cutoff', 0.5)), 'unlit': bool(pd.get('unlit', False)),
+                    'double_sided': bool(pd.get('double_sided', False)), 'normal_scale': float(pd.get('normal_scale', 1.0)),
+                    'occlusion_strength': float(pd.get('occlusion_strength', 1.0)),
+                    'emissive_factor': tuple(float(x) for x in emissive_factor[:3]),
+                    'tex_offset': tuple(float(x) for x in pd.get('tex_offset', (0.0, 0.0))[:2]),
+                    'tex_scale': tuple(float(x) for x in pd.get('tex_scale', (1.0, 1.0))[:2]),
+                    'tex_rotation': float(pd.get('tex_rotation', 0.0)),
+                    'base_texcoord': int(pd.get('base_texcoord', 0)), 'normal_texcoord': int(pd.get('normal_texcoord', 0)),
+                    'occlusion_texcoord': int(pd.get('occlusion_texcoord', 0)), 'mr_texcoord': int(pd.get('mr_texcoord', 0)),
+                    'emissive_texcoord': int(pd.get('emissive_texcoord', 0)),
+                }
+                prim['d3d_tex_images'] = {
+                    key: np.ascontiguousarray(textures[int(tid)], dtype=np.uint8)
+                    for key, tid in (
+                        (prim['material'][binding.material_key], pd.get(binding.source_tex_field, -1))
+                        for binding in GLTF_MATERIAL_TEXTURE_BINDINGS
+                    )
+                    if key and isinstance(tid, (int, np.integer)) and 0 <= int(tid) < len(textures) and textures[int(tid)] is not None
                 }
                 self._prebake_prim_render_state(prim)
                 self._env_model_prims.append(prim)
@@ -320,6 +355,8 @@ class EnvironmentModelMixin:
             )
             prim = {
                 'vao': vao, 'vbo': vbo, 'tan_vbo': tan_vbo, 'ibo': ibo,
+                'vertices': np.ascontiguousarray(verts, dtype=np.float32),
+                'indices': np.ascontiguousarray(idx, dtype=np.uint32),
                 'tex_key': None, 'tri_count': 2, 'color': color,
                 'base_color': np.array(color, dtype=np.float32),
                 'base_alpha': 1.0,
@@ -345,6 +382,16 @@ class EnvironmentModelMixin:
                 'tex_offset': np.array([0.0, 0.0], dtype=np.float32),
                 'tex_scale': np.array([1.0, 1.0], dtype=np.float32),
                 'tex_rotation': 0.0,
+                'material': {
+                    'base_key': None, 'normal_key': None, 'occlusion_key': None, 'mr_key': None, 'emissive_key': None,
+                    'base_color': tuple(float(x) for x in color), 'base_alpha': 1.0, 'roughness': 1.0, 'metallic': 0.0,
+                    'alpha_mode_id': 0.0, 'alpha_cutoff': 0.5, 'unlit': False, 'double_sided': False,
+                    'normal_scale': 1.0, 'occlusion_strength': 1.0, 'emissive_factor': (0.0, 0.0, 0.0),
+                    'tex_offset': (0.0, 0.0), 'tex_scale': (1.0, 1.0), 'tex_rotation': 0.0,
+                    'base_texcoord': 0, 'normal_texcoord': 0, 'occlusion_texcoord': 0,
+                    'mr_texcoord': 0, 'emissive_texcoord': 0,
+                },
+                'd3d_tex_images': {},
             }
             self._prebake_prim_render_state(prim)
             target_list.append(prim)
