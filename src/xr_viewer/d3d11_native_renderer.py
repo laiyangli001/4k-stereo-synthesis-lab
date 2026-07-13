@@ -13,6 +13,7 @@ from .gltf_contract import (
     D3D11_VERTEX_OFFSETS_BYTES,
     D3D11_VERTEX_STRIDE_BYTES,
     render_pass_from_primitive,
+    sort_transparent_primitives,
 )
 from .material_contract import GLTF_MATERIAL_TEXTURE_BINDINGS
 from .gltf_loader import format_gltf_scene_summary
@@ -756,6 +757,17 @@ float3 gltfSrgbToLinear(float3 c)
     return float3(srgbChannelToLinear(c.r), srgbChannelToLinear(c.g), srgbChannelToLinear(c.b));
 }
 
+float3 gltfToneMap(float3 linearColor)
+{
+    linearColor = max(linearColor, float3(0.0, 0.0, 0.0));
+    return linearColor / (linearColor + float3(1.0, 1.0, 1.0));
+}
+
+float3 gltfLinearToOutput(float3 linearColor)
+{
+    return pow(saturate(gltfToneMap(linearColor)), float3(1.0 / 2.2, 1.0 / 2.2, 1.0 / 2.2));
+}
+
 float3 fresnelSchlick(float cosTheta, float3 F0)
 {
     return F0 + (1.0 - F0) * pow(saturate(1.0 - cosTheta), 5.0);
@@ -895,7 +907,7 @@ float4 ps_main(VSOut input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
     if (unlit > 0.5) {
         color = baseColor + emissive;
     }
-    return float4(saturate(color), alphaMode > 1.5 ? alpha : 1.0);
+    return float4(gltfLinearToOutput(color), alphaMode > 1.5 ? alpha : 1.0);
 }
 """
 
@@ -1970,16 +1982,7 @@ class D3D11NativeRenderer:
                     sky_prims.append(prim)
                 else:
                     solid_prims.append(prim)
-            if len(transparent_prims) > 1:
-                def _blend_sort_key(prim):
-                    center = prim.get("sort_center_local")
-                    if center is None:
-                        center = np.zeros(3, dtype=np.float32)
-                    world = base_model @ np.array([float(center[0]), float(center[1]), float(center[2]), 1.0], dtype=np.float32)
-                    delta = world[:3] - eye_pos
-                    return float(np.dot(delta, delta))
-
-                transparent_prims.sort(key=_blend_sort_key, reverse=True)
+            transparent_prims = sort_transparent_primitives(transparent_prims, eye_pos, base_model)
             for prim in sky_prims + solid_prims + transparent_prims:
                 visible_key = prim.get("visible_key", "")
                 if visible_key and float(press_map.get(visible_key, 0.0) or 0.0) <= 0.001:

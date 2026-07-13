@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal, Mapping
+from typing import Any, Literal, Mapping, Sequence
 
 import numpy as np
 
@@ -15,11 +15,13 @@ D3D11_VERTEX_OFFSETS_BYTES = (0, 12, 24, 32)
 OPENGL_VERTEX_FORMAT = "3f 3f 2f 2f"
 
 RenderPass = Literal["opaque", "mask", "transparent", "sky"]
+TransparentSortPolicy = Literal["back_to_front"]
 ColorSpace = Literal["srgb", "linear"]
 
 _VALID_ALPHA_MODES = {"OPAQUE", "MASK", "BLEND"}
 _VALID_RENDER_PASSES = {"opaque", "mask", "transparent", "sky"}
 _DEFAULT_SAMPLER = (9729, 9987, 10497, 10497)
+TRANSPARENT_SORT_POLICY: TransparentSortPolicy = "back_to_front"
 
 
 @dataclass(frozen=True)
@@ -65,6 +67,19 @@ class GltfPrimitive:
     world_bounds: tuple[np.ndarray, np.ndarray]
     render_pass: RenderPass
     primitive_mode: int = 4
+
+
+RenderPlan = Mapping[RenderPass, tuple[int, ...]]
+
+
+@dataclass(frozen=True)
+class GltfScene:
+    primitives: tuple[Mapping[str, Any], ...]
+    textures: tuple[Any, ...]
+    lights: tuple[Mapping[str, Any], ...]
+    render_plan: RenderPlan
+    transparent_sort: TransparentSortPolicy = TRANSPARENT_SORT_POLICY
+    diagnostics: Mapping[str, Any] = field(default_factory=dict)
 
 
 def _is_sky_background_name(*names: str) -> bool:
@@ -160,6 +175,64 @@ def attach_primitive_contract(primitive: dict) -> GltfPrimitive:
     return contract
 
 
+def build_render_plan(primitives: Sequence[Mapping]) -> dict[RenderPass, tuple[int, ...]]:
+    buckets: dict[RenderPass, list[int]] = {
+        "sky": [],
+        "opaque": [],
+        "mask": [],
+        "transparent": [],
+    }
+    for index, primitive in enumerate(primitives):
+        buckets[render_pass_from_primitive(primitive)].append(index)
+    return {render_pass: tuple(indices) for render_pass, indices in buckets.items()}
+
+
+def primitive_sort_center(primitive: Mapping) -> np.ndarray:
+    center = primitive.get("sort_center_local")
+    if center is not None:
+        return np.asarray(center, dtype=np.float32)
+    world_bounds = primitive.get("world_bounds")
+    if isinstance(world_bounds, tuple) and len(world_bounds) == 2:
+        bounds_min = np.asarray(world_bounds[0], dtype=np.float32)
+        bounds_max = np.asarray(world_bounds[1], dtype=np.float32)
+        return ((bounds_min + bounds_max) * 0.5).astype(np.float32)
+    vertices = primitive.get("vertices")
+    if isinstance(vertices, np.ndarray) and vertices.ndim == 2 and vertices.shape[0] > 0 and vertices.shape[1] >= 3:
+        return vertices[:, :3].mean(axis=0).astype(np.float32)
+    return np.zeros(3, dtype=np.float32)
+
+
+def transparent_sort_key(
+    primitive: Mapping,
+    eye_position: Sequence[float],
+    model_matrix: np.ndarray | None = None,
+) -> float:
+    center = primitive_sort_center(primitive)
+    if model_matrix is not None:
+        model = np.asarray(model_matrix, dtype=np.float32)
+        local_center = np.array(
+            [float(center[0]), float(center[1]), float(center[2]), 1.0],
+            dtype=np.float32,
+        )
+        world_center = model @ local_center
+        center = world_center[:3]
+    eye = np.asarray(eye_position, dtype=np.float32)[:3]
+    delta = center[:3] - eye
+    return float(np.dot(delta, delta))
+
+
+def sort_transparent_primitives(
+    primitives: Sequence[Mapping],
+    eye_position: Sequence[float],
+    model_matrix: np.ndarray | None = None,
+) -> list[Mapping]:
+    return sorted(
+        primitives,
+        key=lambda primitive: transparent_sort_key(primitive, eye_position, model_matrix),
+        reverse=True,
+    )
+
+
 def render_pass_from_primitive(primitive: Mapping) -> RenderPass:
     render_pass = primitive.get("render_pass")
     if render_pass in _VALID_RENDER_PASSES:
@@ -184,16 +257,23 @@ __all__ = [
     "D3D11_VERTEX_STRIDE_BYTES",
     "GltfMaterial",
     "GltfPrimitive",
+    "GltfScene",
     "OPENGL_VERTEX_FORMAT",
     "RenderPass",
+    "RenderPlan",
     "TANGENT_FLOAT_COUNT",
+    "TRANSPARENT_SORT_POLICY",
     "TextureBinding",
     "TextureTransform",
     "VERTEX_FLOAT_COUNT",
     "attach_primitive_contract",
     "build_primitive_contract",
+    "build_render_plan",
     "classify_render_pass",
+    "primitive_sort_center",
     "render_pass_from_primitive",
+    "sort_transparent_primitives",
+    "transparent_sort_key",
     "validate_mesh_contract",
     "GLTF_COLOR_SPACE_LINEAR",
     "GLTF_COLOR_SPACE_SRGB",

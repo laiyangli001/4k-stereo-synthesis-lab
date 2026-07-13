@@ -4,6 +4,7 @@ import moderngl
 
 from .implementation import *
 from .gl_state import get_depth_mask, set_depth_mask
+from .gltf_contract import sort_transparent_primitives
 
 
 def _view_mat_inv(view_mat):
@@ -582,16 +583,7 @@ class EnvironmentRendererMixin:
                 else:
                     opaque_prims.append(prim)
 
-            if len(blend_prims) > 1:
-                def _blend_sort_key(prim):
-                    local_center = prim.get('sort_center_local')
-                    if local_center is None:
-                        local_center = np.zeros(3, dtype=np.float32)
-                    world_center = self._transform_env_point(local_center, model_mat)
-                    delta = world_center - cam_pos
-                    return float(np.dot(delta, delta))
-
-                blend_prims.sort(key=_blend_sort_key, reverse=True)
+            blend_prims = sort_transparent_primitives(blend_prims, cam_pos, model_mat)
 
             for prim in opaque_prims + blend_prims:
                 rs = prim.get('_rs')

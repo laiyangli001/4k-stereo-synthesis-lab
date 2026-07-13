@@ -909,12 +909,17 @@ def test_opengl_gltf_shader_linearizes_srgb_color_textures():
     glsl = (SRC / "xr_viewer" / "glsl.py").read_text(encoding="utf-8")
     env_frag = glsl.rsplit("_ENV_FRAG", 1)[1].split("_BLIT_FRAG", 1)[0]
 
-    assert "vec3 envSrgbToLinear(vec3 c)" in env_frag
-    assert "envSrgbToLinear(texture(u_tex, base_uv).rgb)" in env_frag
-    assert "envSrgbToLinear(texture(u_emissive_tex" in env_frag
-    assert "envSrgbToLinear(texture(u_normal_tex" not in env_frag
-    assert "envSrgbToLinear(texture(u_mr_tex" not in env_frag
-    assert "envSrgbToLinear(texture(u_occlusion_tex" not in env_frag
+    assert "vec3 gltfSrgbToLinear(vec3 c)" in env_frag
+    assert "vec3 gltfToneMap(vec3 linearColor)" in env_frag
+    assert "vec3 gltfLinearToOutput(vec3 linearColor, float gamma)" in env_frag
+    assert "gltfSrgbToLinear(texture(u_tex, base_uv).rgb)" in env_frag
+    assert "gltfSrgbToLinear(texture(u_emissive_tex" in env_frag
+    assert "fragColor = vec4(gltfLinearToOutput(color_preview, u_env_gamma), alpha);" in env_frag
+    assert "fragColor = vec4(gltfLinearToOutput(color_foliage, u_env_gamma), alpha);" in env_frag
+    assert "color = gltfLinearToOutput(color, u_env_gamma);" in env_frag
+    assert "gltfSrgbToLinear(texture(u_normal_tex" not in env_frag
+    assert "gltfSrgbToLinear(texture(u_mr_tex" not in env_frag
+    assert "gltfSrgbToLinear(texture(u_occlusion_tex" not in env_frag
 
 
 def test_d3d11_controller_shader_linearizes_gltf_srgb_color_textures():
@@ -923,11 +928,25 @@ def test_d3d11_controller_shader_linearizes_gltf_srgb_color_textures():
 
     assert "float3 gltfSrgbToLinear(float3 c)" in shader
     assert "float srgbChannelToLinear(float c)" in shader
+    assert "float3 gltfToneMap(float3 linearColor)" in shader
+    assert "float3 gltfLinearToOutput(float3 linearColor)" in shader
     assert "texel.rgb = gltfSrgbToLinear(texel.rgb);" in shader
     assert "emissive *= gltfSrgbToLinear(texEmissive.Sample" in shader
+    assert "return float4(gltfLinearToOutput(color), alphaMode > 1.5 ? alpha : 1.0);" in shader
     assert "gltfSrgbToLinear(texNormal" not in shader
     assert "gltfSrgbToLinear(texMR" not in shader
     assert "gltfSrgbToLinear(texOcclusion" not in shader
+
+
+def test_preview_room_layout_shader_uses_gltf_color_management():
+    preview = (SRC / "tools" / "preview_room_layout.py").read_text(encoding="utf-8")
+    env_frag = preview.split("ENV_FRAG", 1)[1].split("SCREEN_VERT", 1)[0]
+
+    assert "vec3 gltfSrgbToLinear(vec3 c)" in env_frag
+    assert "vec3 gltfToneMap(vec3 linearColor)" in env_frag
+    assert "vec3 gltfLinearToOutput(vec3 linearColor, float gamma)" in env_frag
+    assert "base *= gltfSrgbToLinear(texel.rgb);" in env_frag
+    assert "fragColor = vec4(gltfLinearToOutput(color, u_gamma), alpha);" in env_frag
 
 
 def test_quad_layer_rgba8_copy_linearizes_srgb_source():
@@ -3814,7 +3833,7 @@ def test_d3d11_projection_path_uses_native_renderer():
     assert "output.uv = float2(input.uv.x, 1.0 - input.uv.y);" not in renderer
     assert "texel.a" in renderer
     assert "alpha < alphaCutoff" in renderer
-    assert "return float4(saturate(color), alphaMode > 1.5 ? alpha : 1.0);" in renderer
+    assert "return float4(gltfLinearToOutput(color), alphaMode > 1.5 ? alpha : 1.0);" in renderer
     assert "D3D11_BIND_DEPTH_STENCIL" in renderer
     assert "CreateDepthStencilView(projection)" in renderer
     assert "DXGI_FORMAT_B8G8R8A8_UNORM_SRGB" in renderer

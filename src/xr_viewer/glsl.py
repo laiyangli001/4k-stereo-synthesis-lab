@@ -631,10 +631,20 @@ const float PI = 3.14159265359;
 vec2 uvForTexCoord(int texcoord) {
     return (texcoord == 1) ? v_uv1 : v_uv;
 }
-vec3 envSrgbToLinear(vec3 c) {
+vec3 gltfSrgbToLinear(vec3 c) {
+    c = clamp(c, 0.0, 1.0);
     vec3 lo = c / 12.92;
     vec3 hi = pow((c + vec3(0.055)) / 1.055, vec3(2.4));
     return mix(lo, hi, step(vec3(0.04045), c));
+}
+
+vec3 gltfToneMap(vec3 linearColor) {
+    linearColor = max(linearColor, vec3(0.0));
+    return linearColor / (linearColor + vec3(1.0));
+}
+
+vec3 gltfLinearToOutput(vec3 linearColor, float gamma) {
+    return pow(clamp(gltfToneMap(linearColor), 0.0, 1.0), vec3(1.0 / max(gamma, 0.001)));
 }
 
 // Fresnel-Schlick
@@ -725,7 +735,7 @@ void main() {
 
     vec3 baseColor;
     if (u_use_texture == 1) {
-        baseColor = envSrgbToLinear(texture(u_tex, base_uv).rgb) * u_base_color_factor;
+        baseColor = gltfSrgbToLinear(texture(u_tex, base_uv).rgb) * u_base_color_factor;
     } else {
         baseColor = u_base_color_factor;
     }
@@ -735,7 +745,7 @@ void main() {
         float diff_preview = max(abs(dot(N, L_preview)), 0.12);
         vec3 color_preview = baseColor * (u_ambient_color + u_light_color * diff_preview) * u_env_exposure;
         float alpha = (u_alpha_mode == 2) ? materialAlpha : 1.0;
-        fragColor = vec4(color_preview, alpha);
+        fragColor = vec4(gltfLinearToOutput(color_preview, u_env_gamma), alpha);
         return;
     }
 
@@ -744,7 +754,7 @@ void main() {
         float diff_foliage = max(abs(dot(N, L_foliage)), 0.12);
         vec3 color_foliage = baseColor * (u_ambient_color + u_light_color * diff_foliage) * u_env_exposure;
         float alpha = (u_alpha_mode == 2) ? materialAlpha : 1.0;
-        fragColor = vec4(color_foliage, alpha);
+        fragColor = vec4(gltfLinearToOutput(color_foliage, u_env_gamma), alpha);
         return;
     }
 
@@ -783,7 +793,7 @@ void main() {
     // KHR_materials_unlit: skip all lighting, output baseColor directly
     if (u_unlit == 1) {
         float alpha = (u_alpha_mode == 2) ? materialAlpha : 1.0;
-        fragColor = vec4(baseColor, alpha);
+        fragColor = vec4(gltfLinearToOutput(baseColor * u_env_exposure, u_env_gamma), alpha);
         return;
     }
 
@@ -880,15 +890,12 @@ void main() {
 
     vec3 emissive = u_emissive_factor;
     if (u_use_emissive_tex == 1) {
-        emissive *= envSrgbToLinear(texture(u_emissive_tex, uvForTexCoord(u_emissive_texcoord)).rgb);
+        emissive *= gltfSrgbToLinear(texture(u_emissive_tex, uvForTexCoord(u_emissive_texcoord)).rgb);
     }
     emissive *= u_emissive_strength;
 
     vec3 color = ((Lo + ambient) * bakedLight + emissive) * u_env_exposure;
-    // HDR ->LDR: Reinhard-like soft tonemap
-    color = color / (color + vec3(1.0));
-    // Gamma correction
-    color = pow(color, vec3(1.0 / max(u_env_gamma, 0.001)));
+    color = gltfLinearToOutput(color, u_env_gamma);
 
     float alpha = (u_alpha_mode == 2) ? materialAlpha : 1.0;
     fragColor = vec4(color, alpha);

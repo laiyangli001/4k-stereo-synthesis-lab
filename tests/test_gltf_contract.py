@@ -13,6 +13,7 @@ from xr_viewer.gltf_loader import (
     audit_gltf_extensions,
     diagnose_gltf_model,
     load_glb_model,
+    load_gltf_scene,
     parse_gltf_material,
     summarize_gltf_scene,
 )
@@ -23,13 +24,18 @@ from xr_viewer.gltf_contract import (
     D3D11_VERTEX_OFFSETS_BYTES,
     D3D11_VERTEX_STRIDE_BYTES,
     GltfMaterial,
+    GltfScene,
     OPENGL_VERTEX_FORMAT,
+    TRANSPARENT_SORT_POLICY,
     TextureBinding,
     TextureTransform,
     VERTEX_FLOAT_COUNT,
     attach_primitive_contract,
+    build_render_plan,
     classify_render_pass,
     render_pass_from_primitive,
+    sort_transparent_primitives,
+    transparent_sort_key,
     validate_mesh_contract,
 )
 
@@ -168,6 +174,45 @@ def test_load_glb_model_fails_fast_on_unsupported_required_extension(tmp_path):
         load_glb_model(gltf_path)
 
 
+def test_build_render_plan_groups_primitive_indices_by_pass():
+    primitives = [
+        _primitive(material_contract=GltfMaterial(alpha_mode="OPAQUE")),
+        _primitive(material_contract=GltfMaterial(alpha_mode="BLEND")),
+        _primitive(material_contract=GltfMaterial(alpha_mode="MASK")),
+        _primitive(material_contract=GltfMaterial(alpha_mode="OPAQUE"), mesh_name="SkyBox_Main"),
+    ]
+    for primitive in primitives:
+        attach_primitive_contract(primitive)
+
+    assert build_render_plan(primitives) == {
+        "sky": (3,),
+        "opaque": (0,),
+        "mask": (2,),
+        "transparent": (1,),
+    }
+
+
+def test_transparent_sort_policy_is_back_to_front_and_uses_model_matrix():
+    near = {"name": "near", "sort_center_local": np.array([0.0, 0.0, -1.0], dtype=np.float32)}
+    far = {"name": "far", "sort_center_local": np.array([0.0, 0.0, -3.0], dtype=np.float32)}
+    moved = {
+        "name": "moved",
+        "sort_center_local": np.array([0.0, 0.0, 1.0], dtype=np.float32),
+    }
+    model = np.eye(4, dtype=np.float32)
+    model[2, 3] = 5.0
+
+    assert TRANSPARENT_SORT_POLICY == "back_to_front"
+    assert transparent_sort_key(far, (0.0, 0.0, 0.0)) > transparent_sort_key(
+        near,
+        (0.0, 0.0, 0.0),
+    )
+    assert [
+        prim["name"] for prim in sort_transparent_primitives([near, far], (0.0, 0.0, 0.0))
+    ] == ["far", "near"]
+    assert sort_transparent_primitives([near, moved], (0.0, 0.0, 0.0), model)[0] is moved
+
+
 def test_summarize_gltf_scene_reports_counts_passes_and_bounds():
     primitive = _primitive(material_contract=GltfMaterial(alpha_mode="BLEND"))
     primitive["vertices"][:, :3] = np.array(
@@ -189,12 +234,19 @@ def test_summarize_gltf_scene_reports_counts_passes_and_bounds():
 
 
 def test_bedroom_diagnostics_smoke_matches_stable_contract():
+    scene = load_gltf_scene(SRC / "xr_viewer" / "environments" / "Bedroom" / "environment.glb")
     summary = diagnose_gltf_model(SRC / "xr_viewer" / "environments" / "Bedroom" / "environment.glb")
 
+    assert isinstance(scene, GltfScene)
+    assert len(scene.primitives) > 0
+    assert len(scene.textures) > 0
+    assert scene.diagnostics["unsupportedRequired"] == []
+    assert sum(len(indices) for indices in scene.render_plan.values()) == len(scene.primitives)
     assert summary["primitive_count"] > 0
     assert summary["texture_count"] > 0
     assert summary["vertex_widths"] == [10]
     assert summary["diagnostics"]["unsupportedRequired"] == []
+    assert summary["render_plan"] == scene.render_plan
     assert sum(summary["render_passes"].values()) == summary["primitive_count"]
 
 

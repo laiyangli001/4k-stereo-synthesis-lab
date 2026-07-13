@@ -30,6 +30,7 @@ from xr_viewer.gl_state import set_depth_mask  # noqa: E402
 from xr_viewer.gltf_contract import (  # noqa: E402
     OPENGL_VERTEX_FORMAT,
     render_pass_from_primitive,
+    sort_transparent_primitives,
     validate_mesh_contract,
 )
 from xr_viewer.gltf_loader import (  # noqa: E402
@@ -76,12 +77,29 @@ uniform int u_alpha_mode;
 uniform float u_alpha_cutoff;
 uniform float u_exposure;
 uniform float u_gamma;
+
+vec3 gltfSrgbToLinear(vec3 c) {
+    c = clamp(c, 0.0, 1.0);
+    vec3 lo = c / 12.92;
+    vec3 hi = pow((c + vec3(0.055)) / 1.055, vec3(2.4));
+    return mix(lo, hi, step(vec3(0.04045), c));
+}
+
+vec3 gltfToneMap(vec3 linearColor) {
+    linearColor = max(linearColor, vec3(0.0));
+    return linearColor / (linearColor + vec3(1.0));
+}
+
+vec3 gltfLinearToOutput(vec3 linearColor, float gamma) {
+    return pow(clamp(gltfToneMap(linearColor), 0.0, 1.0), vec3(1.0 / max(gamma, 0.001)));
+}
+
 void main() {
     vec3 base = u_base_color;
     float alpha = u_alpha;
     if (u_use_texture == 1) {
         vec4 texel = texture(u_tex, v_uv);
-        base *= texel.rgb;
+        base *= gltfSrgbToLinear(texel.rgb);
         if (u_alpha_mode != 0) {
             alpha *= texel.a;
         }
@@ -93,8 +111,7 @@ void main() {
     vec3 L = normalize(u_camera_pos + vec3(0.0, 0.2, 0.0) - v_position);
     float diff = max(abs(dot(N, L)), 0.12);
     vec3 color = base * (u_ambient_color + u_light_color * diff) * u_exposure;
-    color = pow(clamp(color, 0.0, 1.0), vec3(1.0 / max(u_gamma, 0.001)));
-    fragColor = vec4(color, alpha);
+    fragColor = vec4(gltfLinearToOutput(color, u_gamma), alpha);
 }
 """
 
@@ -316,6 +333,11 @@ def _make_env_resources(ctx, prog, glb_path: Path):
             "alpha_mode": str(pd.get("alpha_mode", "OPAQUE") or "OPAQUE").upper(),
             "alpha_cutoff": float(pd.get("alpha_cutoff", 0.5)),
             "render_pass": render_pass_from_primitive(pd),
+            "sort_center_local": (
+                vertices[:, :3].mean(axis=0).astype("f4")
+                if vertices.size
+                else np.zeros(3, dtype="f4")
+            ),
         })
     return prims, tex_cache, local_min, local_max
 
@@ -614,6 +636,11 @@ def main():
         for prim in solid_prims:
             draw_env_prim(prim)
         if transparent_prims:
+            transparent_prims = sort_transparent_primitives(
+                transparent_prims,
+                cam_pos,
+                env_model,
+            )
             ctx.enable(moderngl.BLEND)
             ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
             set_depth_mask(False)

@@ -12,7 +12,14 @@ import numpy as np
 from PIL import Image
 from pygltflib import GLTF2
 
-from .gltf_contract import GltfMaterial, TextureBinding, TextureTransform, attach_primitive_contract
+from .gltf_contract import (
+    GltfMaterial,
+    GltfScene,
+    TextureBinding,
+    TextureTransform,
+    attach_primitive_contract,
+    build_render_plan,
+)
 from .material_contract import GLTF_MATERIAL_TEXTURE_BINDINGS
 
 # GLB/glTF parsing is delegated to pygltflib so file/container/schema handling
@@ -1291,6 +1298,19 @@ def load_glb_model(path):
     return primitives, all_textures, lights
 
 
+def load_gltf_scene(path):
+    gltf, _buffers = _load_gltf_document(path)
+    diagnostics = _raise_unsupported_required_extensions(gltf, path)
+    primitives, textures, lights = load_glb_model(path)
+    return GltfScene(
+        primitives=tuple(primitives),
+        textures=tuple(textures),
+        lights=tuple(lights),
+        render_plan=build_render_plan(primitives),
+        diagnostics=diagnostics,
+    )
+
+
 def summarize_gltf_scene(primitives, textures, lights, diagnostics=None):
     alpha_modes = {}
     render_passes = {}
@@ -1348,7 +1368,7 @@ def format_gltf_scene_summary(summary, *, label='glTF model'):
 
 
 def diagnose_gltf_model(path):
-    gltf, _buffers = _load_gltf_document(path)
-    diagnostics = _raise_unsupported_required_extensions(gltf, path)
-    primitives, textures, lights = load_glb_model(path)
-    return summarize_gltf_scene(primitives, textures, lights, diagnostics)
+    scene = load_gltf_scene(path)
+    summary = summarize_gltf_scene(scene.primitives, scene.textures, scene.lights, scene.diagnostics)
+    summary['render_plan'] = scene.render_plan
+    return summary
