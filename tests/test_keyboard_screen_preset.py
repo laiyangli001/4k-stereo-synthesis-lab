@@ -320,7 +320,13 @@ def test_gltf_loader_treats_empty_unlit_extension_as_unlit(tmp_path, monkeypatch
     prims, _, _ = load_glb_model(glb_path)
 
     assert len(prims) == 1
-    assert prims[0]["unlit"] is True
+    primitive = prims[0]
+    assert primitive["unlit"] is True
+    assert primitive["vertices"].shape == (3, 10)
+    assert primitive["tangent"].shape == (3, 4)
+    assert primitive["material_contract"].unlit is True
+    assert primitive["gltf_primitive"].material is primitive["material_contract"]
+    assert primitive["render_pass"] == "opaque"
 
 
 def test_gltf_loader_reads_external_gltf_bin_buffers(tmp_path, monkeypatch):

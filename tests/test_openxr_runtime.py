@@ -201,12 +201,10 @@ def test_keyboard_quad_hover_center_is_solid_disk():
 
 def test_controller_material_preserves_gltf_double_sided_without_override():
     from xr_viewer.controller_materials import prepare_controller_material
+    from xr_viewer.gltf_contract import GltfMaterial
 
-    config = {
-        "defaults": {"metallicFactor": 0.0, "roughnessFactor": 1.0},
-        "diagnostics": {"materialMode": "opaque_unlit"},
-    }
-    pd = {"metallic_factor": 0.5, "roughness_factor": 0.55, "alpha_mode": "OPAQUE", "double_sided": True}
+    config = {"diagnostics": {"materialMode": "opaque_unlit"}}
+    pd = {"material_contract": GltfMaterial(metallic=0.5, roughness=0.55, alpha_mode="OPAQUE", double_sided=True)}
 
     vive = prepare_controller_material(pd, "VIVE/left", config)
     pico = prepare_controller_material(pd, "PICO/left", config)
@@ -901,7 +899,8 @@ def test_shared_gltf_material_contract_drives_backend_texture_bindings():
     core_laser = (SRC / "xr_viewer" / "core_laser_render.py").read_text(encoding="utf-8")
     d3d11 = (SRC / "xr_viewer" / "d3d11_native_renderer.py").read_text(encoding="utf-8")
 
-    assert "GLTF_TEXTURE_FIELDS" in controller_materials
+    assert "for binding in GLTF_MATERIAL_TEXTURE_BINDINGS" in controller_materials
+    assert "_require_material_contract" in controller_materials
     assert "for binding in GLTF_MATERIAL_TEXTURE_BINDINGS" in environment_model
     assert "binding.opengl_texture_unit" in core_laser
     assert "binding.d3d11_srv_slot" in d3d11
@@ -3782,7 +3781,12 @@ def test_d3d11_projection_path_uses_native_renderer():
     assert "or config_material_diag" in renderer
     assert 'diag_opaque_unlit = material_diag in ("1", "true", "unlit", "opaque_unlit")' in renderer
     assert "env_srv = None" in renderer
-    assert "alpha_mode = 0 if diag_opaque_unlit else int(mat.get(\"alpha_mode_id\", 0))" in renderer
+    assert "from .gltf_contract import (" in renderer
+    assert "D3D11_VERTEX_STRIDE_BYTES" in renderer
+    assert "format_gltf_scene_summary" in renderer
+    assert "_d3d11_environment_summary_logged" in renderer
+    assert "render_pass_from_primitive" in renderer
+    assert 'render_pass = "opaque" if diag_opaque_unlit else render_pass_from_primitive(prim)' in renderer
     assert 'controller_hdr = bool(getattr(viewer, "_controller_hdr_lighting", True))' in renderer
     assert "env_srv = self.background_srv if controller_hdr and self.background_srv else None" in renderer
     assert "if not controller_hdr:" in renderer

@@ -12,6 +12,9 @@ import numpy as np
 from PIL import Image
 from pygltflib import GLTF2
 
+from .gltf_contract import GltfMaterial, TextureBinding, TextureTransform, attach_primitive_contract
+from .material_contract import GLTF_MATERIAL_TEXTURE_BINDINGS
+
 # GLB/glTF parsing is delegated to pygltflib so file/container/schema handling
 # follows a maintained glTF 2.0 implementation. The renderer-facing contract
 # below remains our own: numpy vertex/index arrays plus material texture ids.
@@ -85,15 +88,55 @@ _SUPPORTED_REQUIRED_EXTENSIONS = {
 }
 
 
-def _warn_unsupported_required_extensions(gltf, path):
-    required = gltf.get('extensionsRequired') or []
-    unsupported = [ext for ext in required if ext not in _SUPPORTED_REQUIRED_EXTENSIONS]
+_SUPPORTED_OPTIONAL_EXTENSIONS = _SUPPORTED_REQUIRED_EXTENSIONS | {
+    'KHR_materials_emissive_strength',
+    'KHR_materials_pbrSpecularGlossiness',
+}
+
+
+def _extension_list(value):
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if isinstance(item, str) and item]
+
+
+def audit_gltf_extensions(gltf):
+    used = set(_extension_list(gltf.get('extensionsUsed')))
+    required = set(_extension_list(gltf.get('extensionsRequired')))
+    material_extensions = set()
+    primitive_extensions = set()
+
+    for material in gltf.get('materials') or []:
+        if isinstance(material, dict) and isinstance(material.get('extensions'), dict):
+            material_extensions.update(str(key) for key in material['extensions'].keys())
+    for mesh in gltf.get('meshes') or []:
+        if not isinstance(mesh, dict):
+            continue
+        for primitive in mesh.get('primitives') or []:
+            if isinstance(primitive, dict) and isinstance(primitive.get('extensions'), dict):
+                primitive_extensions.update(str(key) for key in primitive['extensions'].keys())
+
+    used.update(material_extensions)
+    used.update(primitive_extensions)
+    return {
+        'extensionsUsed': sorted(used),
+        'extensionsRequired': sorted(required),
+        'unsupportedRequired': sorted(required - _SUPPORTED_REQUIRED_EXTENSIONS),
+        'unsupportedOptional': sorted((used - required) - _SUPPORTED_OPTIONAL_EXTENSIONS),
+        'materialExtensions': sorted(material_extensions),
+        'primitiveExtensions': sorted(primitive_extensions),
+    }
+
+
+def _raise_unsupported_required_extensions(gltf, path):
+    diagnostics = audit_gltf_extensions(gltf)
+    unsupported = diagnostics['unsupportedRequired']
     if unsupported:
-        print(
-            f"[OpenXRViewer] glTF required extensions not fully supported for {path}: "
-            f"{', '.join(unsupported)}"
+        raise ValueError(
+            f"Unsupported required glTF extensions for {path}: {', '.join(unsupported)}. "
+            "Convert the asset or add decoder/material support before loading it."
         )
-    return unsupported
+    return diagnostics
 
 
 _DTYPE_MAP = {5120: np.int8, 5121: np.uint8, 5122: np.int16,
@@ -275,6 +318,279 @@ def apply_gltf_sampler_to_texture(texture, sampler):
     # ModernGL exposes repeat/clamp booleans; mirrored repeat is approximated as repeat.
     texture.repeat_x = wrap_s != 33071
     texture.repeat_y = wrap_t != 33071
+
+
+def _is_foliage_material_name(material_name):
+    material_name_l = str(material_name or '').lower()
+    return (
+        'plant' in material_name_l
+        or 'leaf' in material_name_l
+        or 'leaves' in material_name_l
+        or 'foliage' in material_name_l
+        or 'grass' in material_name_l
+        or 'bush' in material_name_l
+        or 'tree' in material_name_l
+    )
+
+
+def _default_gltf_material_fields():
+    return {
+        'tex_id': -1,
+        'base_color': np.array([1.0, 1.0, 1.0], dtype=np.float32),
+        'base_sampler': _DEFAULT_GLTF_SAMPLER,
+        'base_texcoord': 0,
+        'base_alpha': 1.0,
+        'roughness_factor': 1.0,
+        'metallic_factor': 1.0,
+        'emissive_factor': np.array([0.0, 0.0, 0.0], dtype=np.float32),
+        'normal_tex_id': -1,
+        'normal_sampler': _DEFAULT_GLTF_SAMPLER,
+        'normal_texcoord': 0,
+        'normal_scale': 1.0,
+        'occlusion_tex_id': -1,
+        'occlusion_sampler': _DEFAULT_GLTF_SAMPLER,
+        'occlusion_texcoord': 0,
+        'occlusion_strength': 1.0,
+        'unlit': False,
+        'alpha_mode': 'OPAQUE',
+        'alpha_cutoff': 0.5,
+        'mr_tex_id': -1,
+        'mr_sampler': _DEFAULT_GLTF_SAMPLER,
+        'mr_texcoord': 0,
+        'emissive_tex_id': -1,
+        'emissive_sampler': _DEFAULT_GLTF_SAMPLER,
+        'emissive_texcoord': 0,
+        'double_sided': False,
+        'tex_offset': np.array([0.0, 0.0], dtype=np.float32),
+        'tex_scale': np.array([1.0, 1.0], dtype=np.float32),
+        'tex_rotation': 0.0,
+        'foliage_mode': False,
+    }
+
+
+def _material_contract_from_fields(fields):
+    texture_slots = {}
+    for binding in GLTF_MATERIAL_TEXTURE_BINDINGS:
+        image_id = int(fields.get(binding.source_tex_field, -1))
+        if image_id < 0:
+            continue
+        transform = TextureTransform()
+        if binding.role == 'base':
+            transform = TextureTransform(
+                offset=tuple(float(v) for v in np.asarray(fields.get('tex_offset', (0.0, 0.0)), dtype=np.float32)[:2]),
+                scale=tuple(float(v) for v in np.asarray(fields.get('tex_scale', (1.0, 1.0)), dtype=np.float32)[:2]),
+                rotation=float(fields.get('tex_rotation', 0.0) or 0.0),
+            )
+        texture_slots[binding.role] = TextureBinding(
+            image_id=image_id,
+            sampler=tuple(int(v) for v in fields.get(binding.source_sampler_field, _DEFAULT_GLTF_SAMPLER)),
+            texcoord=_safe_texcoord(fields.get(f'{binding.role}_texcoord'), 0),
+            transform=transform,
+            color_space=binding.color_space,
+        )
+    return GltfMaterial(
+        base_color=tuple(float(v) for v in np.asarray(fields.get('base_color', (1.0, 1.0, 1.0)), dtype=np.float32)[:3]),
+        base_alpha=float(fields.get('base_alpha', 1.0)),
+        alpha_mode=fields.get('alpha_mode', 'OPAQUE'),
+        alpha_cutoff=float(fields.get('alpha_cutoff', 0.5)),
+        double_sided=bool(fields.get('double_sided', False)),
+        unlit=bool(fields.get('unlit', False)),
+        texture_slots=texture_slots,
+        roughness=float(fields.get('roughness_factor', 1.0)),
+        metallic=float(fields.get('metallic_factor', 1.0)),
+        normal_scale=float(fields.get('normal_scale', 1.0)),
+        occlusion_strength=float(fields.get('occlusion_strength', 1.0)),
+        emissive_factor=tuple(float(v) for v in np.asarray(fields.get('emissive_factor', (0.0, 0.0, 0.0)), dtype=np.float32)[:3]),
+    )
+
+
+def _set_texture_transform(fields, tex_info, texcoord_key):
+    tx_ext = _texture_transform(tex_info)
+    if not tx_ext:
+        return
+    if 'texCoord' in tx_ext:
+        fields[texcoord_key] = _safe_texcoord(tx_ext.get('texCoord'), fields[texcoord_key])
+    if texcoord_key != 'base_texcoord':
+        return
+    if isinstance(tx_ext.get('offset'), (list, tuple)) and len(tx_ext['offset']) >= 2:
+        fields['tex_offset'] = np.array([
+            _safe_float(tx_ext['offset'][0], 0.0),
+            _safe_float(tx_ext['offset'][1], 0.0),
+        ], dtype=np.float32)
+    if isinstance(tx_ext.get('scale'), (list, tuple)) and len(tx_ext['scale']) >= 2:
+        fields['tex_scale'] = np.array([
+            _safe_float(tx_ext['scale'][0], 1.0),
+            _safe_float(tx_ext['scale'][1], 1.0),
+        ], dtype=np.float32)
+    if 'rotation' in tx_ext:
+        fields['tex_rotation'] = _safe_float(tx_ext.get('rotation'), 0.0)
+
+
+def parse_gltf_material(
+    gltf,
+    material_index,
+    *,
+    tex_img_map,
+    tex_sampler_map,
+    all_textures,
+    uv_min=None,
+    uv_max=None,
+    spec_gloss_mr_cache=None,
+    log_writer=None,
+):
+    """Parse a glTF material into renderer-facing primitive fields."""
+    fields = _default_gltf_material_fields()
+    materials = gltf.get('materials', [])
+    if not isinstance(material_index, int) or material_index < 0 or material_index >= len(materials):
+        fields['material_contract'] = _material_contract_from_fields(fields)
+        return fields
+
+    mat = materials[material_index]
+    if not isinstance(mat, dict):
+        mat = {}
+    mat_name = mat.get('name', f'material_{material_index}')
+    pbr = mat.get('pbrMetallicRoughness', {})
+    pbr = pbr if isinstance(pbr, dict) else {}
+    ext = mat.get('extensions', {})
+    ext = ext if isinstance(ext, dict) else {}
+    sg = ext.get('KHR_materials_pbrSpecularGlossiness')
+    sg = sg if isinstance(sg, dict) else None
+
+    bt = pbr.get('baseColorTexture')
+    tex_index = _texture_index(bt)
+    if tex_index is None and sg:
+        tex_index = _texture_index(sg.get('diffuseTexture'))
+    if tex_index is not None:
+        tid = _texture_image_id(tex_img_map, all_textures, tex_index)
+        if tid >= 0:
+            fields['tex_id'] = tid
+            fields['base_sampler'] = _texture_sampler(tex_sampler_map, tex_index)
+            if isinstance(bt, dict):
+                fields['base_texcoord'] = _safe_texcoord(bt.get('texCoord'), 0)
+    if isinstance(bt, dict):
+        _set_texture_transform(fields, bt, 'base_texcoord')
+
+    bcf = pbr.get('baseColorFactor')
+    if bcf is not None:
+        base_rgba = _clamp_vec(bcf, 4, default=1.0, lo=0.0, hi=1.0)
+        fields['base_color'] = base_rgba[:3]
+        fields['base_alpha'] = float(base_rgba[3])
+    rf = pbr.get('roughnessFactor')
+    if rf is not None:
+        fields['roughness_factor'] = _clamp_float(rf, 0.0, 1.0, fields['roughness_factor'])
+    mf = pbr.get('metallicFactor')
+    if mf is not None:
+        fields['metallic_factor'] = _clamp_float(mf, 0.0, 1.0, fields['metallic_factor'])
+
+    mrt = pbr.get('metallicRoughnessTexture')
+    mrt_index = _texture_index(mrt)
+    if mrt_index is not None:
+        mr_tid = _texture_image_id(tex_img_map, all_textures, mrt_index)
+        if mr_tid >= 0:
+            fields['mr_tex_id'] = mr_tid
+            fields['mr_sampler'] = _texture_sampler(tex_sampler_map, mrt_index)
+            fields['mr_texcoord'] = _safe_texcoord(mrt.get('texCoord'), 0)
+            _set_texture_transform(fields, mrt, 'mr_texcoord')
+
+    if sg and 'diffuseFactor' in sg and bcf is None:
+        diffuse_rgba = _clamp_vec(sg['diffuseFactor'], 4, default=1.0, lo=0.0, hi=1.0)
+        fields['base_color'] = diffuse_rgba[:3]
+        fields['base_alpha'] = float(diffuse_rgba[3])
+    if sg and mf is None:
+        fields['metallic_factor'] = 0.0
+    glossiness_factor = _clamp_float(sg.get('glossinessFactor', 1.0), 0.0, 1.0, 1.0) if sg else 1.0
+    if sg and rf is None:
+        fields['roughness_factor'] = 1.0 - glossiness_factor
+    if sg:
+        sgt = sg.get('specularGlossinessTexture')
+        sgt_index = _texture_index(sgt)
+        if sgt_index is not None:
+            converted_mr_id = _append_spec_gloss_mr_texture(
+                all_textures,
+                tex_img_map,
+                sgt_index,
+                glossiness_factor,
+                spec_gloss_mr_cache if spec_gloss_mr_cache is not None else {},
+            )
+            if converted_mr_id >= 0:
+                fields['mr_tex_id'] = converted_mr_id
+                fields['mr_sampler'] = _texture_sampler(tex_sampler_map, sgt_index)
+                fields['mr_texcoord'] = _safe_texcoord(sgt.get('texCoord'), 0)
+                fields['roughness_factor'] = 1.0
+                _set_texture_transform(fields, sgt, 'mr_texcoord')
+
+    material_name_l = str(mat_name or '').lower()
+    if 'chair' in material_name_l or 'seat' in material_name_l or 'cushion' in material_name_l:
+        fields['metallic_factor'] = 0.0
+
+    nt = mat.get('normalTexture')
+    nt_index = _texture_index(nt)
+    if nt_index is not None:
+        n_tid = _texture_image_id(tex_img_map, all_textures, nt_index)
+        if n_tid >= 0:
+            fields['normal_tex_id'] = n_tid
+            fields['normal_sampler'] = _texture_sampler(tex_sampler_map, nt_index)
+            fields['normal_texcoord'] = _safe_texcoord(nt.get('texCoord'), 0)
+            _set_texture_transform(fields, nt, 'normal_texcoord')
+        ns = nt.get('scale')
+        if ns is not None:
+            fields['normal_scale'] = _safe_nonnegative_float(ns, fields['normal_scale'])
+
+    ot = mat.get('occlusionTexture')
+    ot_index = _texture_index(ot)
+    if ot_index is not None:
+        o_tid = _texture_image_id(tex_img_map, all_textures, ot_index)
+        if o_tid >= 0:
+            fields['occlusion_tex_id'] = o_tid
+            fields['occlusion_sampler'] = _texture_sampler(tex_sampler_map, ot_index)
+            fields['occlusion_texcoord'] = _safe_texcoord(ot.get('texCoord'), 0)
+            _set_texture_transform(fields, ot, 'occlusion_texcoord')
+        os_ = ot.get('strength')
+        if os_ is not None:
+            fields['occlusion_strength'] = _clamp_float(os_, 0.0, 1.0, fields['occlusion_strength'])
+
+    fields['unlit'] = 'KHR_materials_unlit' in ext
+    alpha_mode = mat.get('alphaMode', 'OPAQUE')
+    fields['alpha_mode'] = alpha_mode if alpha_mode in ('OPAQUE', 'MASK', 'BLEND') else 'OPAQUE'
+    fields['alpha_cutoff'] = _clamp_float(mat.get('alphaCutoff'), 0.0, 1.0, 0.5)
+
+    fields['double_sided'] = bool(mat.get('doubleSided', False))
+    fields['foliage_mode'] = _is_foliage_material_name(mat_name)
+    if not fields['double_sided'] and fields['alpha_mode'] == 'OPAQUE' and fields['foliage_mode']:
+        fields['double_sided'] = True
+    if fields['tex_id'] >= 0 and fields['foliage_mode'] and uv_min is not None and uv_max is not None:
+        mag_filter, min_filter, wrap_s, wrap_t = fields['base_sampler']
+        if uv_min[0] < -0.05 or uv_max[0] > 1.05:
+            wrap_s = 10497
+        if uv_min[1] < -0.05 or uv_max[1] > 1.05:
+            wrap_t = 10497
+        fields['base_sampler'] = (mag_filter, min_filter, wrap_s, wrap_t)
+
+    ef = mat.get('emissiveFactor')
+    if ef is not None:
+        fields['emissive_factor'] = _clamp_vec(ef, 3, default=0.0, lo=0.0, hi=1.0)
+        es_ext = ext.get('KHR_materials_emissive_strength')
+        if es_ext and 'emissiveStrength' in es_ext:
+            fields['emissive_factor'] = fields['emissive_factor'] * _safe_nonnegative_float(es_ext['emissiveStrength'], 1.0)
+    et = mat.get('emissiveTexture')
+    et_index = _texture_index(et)
+    if et_index is not None:
+        e_tid = _texture_image_id(tex_img_map, all_textures, et_index)
+        if e_tid >= 0:
+            fields['emissive_tex_id'] = e_tid
+            fields['emissive_sampler'] = _texture_sampler(tex_sampler_map, et_index)
+            fields['emissive_texcoord'] = _safe_texcoord(et.get('texCoord'), 0)
+            _set_texture_transform(fields, et, 'emissive_texcoord')
+
+    if log_writer is not None and material_index < 300:
+        emissive_info = f" emissive={fields['emissive_factor'].tolist()}" if fields['emissive_factor'].any() else ''
+        log_writer.write(f"[MAT] {material_index}: {mat_name}  "
+                         f"bcf={bcf}  rough={rf}  "
+                         f"tex_index={tex_index}  tex_id={fields['tex_id']}"
+                         f"{emissive_info}  "
+                         f"ext={list(ext.keys())}\n")
+    fields['material_contract'] = _material_contract_from_fields(fields)
+    return fields
 
 
 def _get_accessor(gltf, bin_data, acc_idx):
@@ -533,15 +849,18 @@ def load_glb_model(path):
     """Load a glTF/GLB model, apply node transformations.
     Returns:
         primitives: list of dict with keys:
-            vertices (N, 8 float32: pos xyz, normal xyz, uv)
+            vertices (N, 10 float32: position3, normal3, uv0, uv1)
+            tangent (N, 4 float32: tangent xyz, bitangent sign)
             indices (M, uint32)
-            tex_id (int, index into textures)
+            material_contract (GltfMaterial)
+            gltf_primitive (GltfPrimitive)
+            render_pass (opaque, mask, transparent, or sky)
         textures: list of numpy RGBA uint8 arrays
     """
     _mat_log = open(os.devnull, 'w', encoding='utf-8')
     _mat_log.write(f"=== Material debug for: {path} ===\n")
     gltf, bin_data = _load_gltf_document(path)
-    _warn_unsupported_required_extensions(gltf, path)
+    _raise_unsupported_required_extensions(gltf, path)
     base_dir = os.path.dirname(os.path.abspath(path))
 
     # World matrices for all nodes
@@ -849,296 +1168,32 @@ def load_glb_model(path):
             if indices.size == 0 or int(indices.max()) >= pos.shape[0]:
                 indices = np.arange(pos.shape[0], dtype=np.uint32)
 
-            # Texture ID, base color, and roughness from material
-            tex_id = -1
-            base_color = np.array([1.0, 1.0, 1.0], dtype=np.float32)
-            base_alpha = 1.0
-            roughness_factor = 1.0
-            metallic_factor = 1.0
-            mr_tex_id = -1
-            mr_sampler = _DEFAULT_GLTF_SAMPLER
-            normal_tex_id = -1
-            normal_sampler = _DEFAULT_GLTF_SAMPLER
-            normal_scale = 1.0
-            occlusion_tex_id = -1
-            occlusion_sampler = _DEFAULT_GLTF_SAMPLER
-            occlusion_strength = 1.0
-            emissive_factor = np.array([0.0, 0.0, 0.0], dtype=np.float32)
-            emissive_tex_id = -1
-            emissive_sampler = _DEFAULT_GLTF_SAMPLER
-            base_sampler = _DEFAULT_GLTF_SAMPLER
-            base_texcoord = 0
-            normal_texcoord = 0
-            occlusion_texcoord = 0
-            mr_texcoord = 0
-            emissive_texcoord = 0
-            unlit = False
-            double_sided = False
-            foliage_mode = False
-            alpha_mode = 'OPAQUE'
-            alpha_cutoff = 0.5
-            tex_offset = np.array([0.0, 0.0], dtype=np.float32)
-            tex_scale = np.array([1.0, 1.0], dtype=np.float32)
-            tex_rotation = 0.0
-            mat_idx = prim.get('material')
-            if isinstance(mat_idx, int) and 0 <= mat_idx < len(gltf.get('materials', [])):
-                mat = gltf['materials'][mat_idx]
-                if not isinstance(mat, dict):
-                    mat = {}
-                mat_name = mat.get('name', f'material_{mat_idx}')
-                pbr = mat.get('pbrMetallicRoughness', {})
-                pbr = pbr if isinstance(pbr, dict) else {}
-                ext = mat.get('extensions', {})
-                ext = ext if isinstance(ext, dict) else {}
-                sg = ext.get('KHR_materials_pbrSpecularGlossiness')
-                sg = sg if isinstance(sg, dict) else None
-
-                # --- Texture extraction ---
-                # 1) Standard pbrMetallicRoughness.baseColorTexture
-                bt = pbr.get('baseColorTexture')
-                tex_index = _texture_index(bt)
-                # 2) KHR_materials_pbrSpecularGlossiness.diffuseTexture
-                if tex_index is None and sg:
-                    dt = sg.get('diffuseTexture')
-                    tex_index = _texture_index(dt)
-
-                if tex_index is not None:
-                    tid = _texture_image_id(tex_img_map, all_textures, tex_index)
-                    if tid >= 0:
-                        tex_id = tid
-                        base_sampler = _texture_sampler(tex_sampler_map, tex_index)
-                        if isinstance(bt, dict):
-                            base_texcoord = _safe_texcoord(bt.get('texCoord'), 0)
-
-                # KHR_texture_transform on baseColorTexture
-                if isinstance(bt, dict):
-                    tx_ext = _texture_transform(bt)
-                    if tx_ext:
-                        if 'texCoord' in tx_ext:
-                            base_texcoord = _safe_texcoord(tx_ext.get('texCoord'), base_texcoord)
-                        if isinstance(tx_ext.get('offset'), (list, tuple)) and len(tx_ext['offset']) >= 2:
-                            tex_offset = np.array([
-                                _safe_float(tx_ext['offset'][0], 0.0),
-                                _safe_float(tx_ext['offset'][1], 0.0),
-                            ], dtype=np.float32)
-                        if isinstance(tx_ext.get('scale'), (list, tuple)) and len(tx_ext['scale']) >= 2:
-                            tex_scale = np.array([
-                                _safe_float(tx_ext['scale'][0], 1.0),
-                                _safe_float(tx_ext['scale'][1], 1.0),
-                            ], dtype=np.float32)
-                        if 'rotation' in tx_ext:
-                            tex_rotation = _safe_float(tx_ext.get('rotation'), 0.0)
-
-                bcf = pbr.get('baseColorFactor')
-                if bcf is not None:
-                    base_rgba = _clamp_vec(bcf, 4, default=1.0, lo=0.0, hi=1.0)
-                    base_color = base_rgba[:3]
-                    base_alpha = float(base_rgba[3])
-                rf = pbr.get('roughnessFactor')
-                if rf is not None:
-                    roughness_factor = _clamp_float(rf, 0.0, 1.0, roughness_factor)
-                mf = pbr.get('metallicFactor')
-                metallic_factor = _clamp_float(mf, 0.0, 1.0, metallic_factor) if mf is not None else metallic_factor
-
-                # metallicRoughnessTexture (glTF spec: B=metallic, G=roughness)
-                mrt = pbr.get('metallicRoughnessTexture')
-                mrt_index = _texture_index(mrt)
-                if mrt_index is not None:
-                    mr_tid = _texture_image_id(tex_img_map, all_textures, mrt_index)
-                    if mr_tid >= 0:
-                        mr_tex_id = mr_tid
-                        mr_sampler = _texture_sampler(tex_sampler_map, mrt_index)
-                        mr_texcoord = _safe_texcoord(mrt.get('texCoord'), 0)
-                        tx_ext = _texture_transform(mrt)
-                        if tx_ext and 'texCoord' in tx_ext:
-                            mr_texcoord = _safe_texcoord(tx_ext.get('texCoord'), mr_texcoord)
-
-                # SpecGloss diffuseFactor (color, applies regardless of texture)
-                if sg and 'diffuseFactor' in sg:
-                    if bcf is None:
-                        diffuse_rgba = _clamp_vec(sg['diffuseFactor'], 4, default=1.0, lo=0.0, hi=1.0)
-                        base_color = diffuse_rgba[:3]
-                        base_alpha = float(diffuse_rgba[3])
-                if sg and mf is None:
-                    metallic_factor = 0.0
-                glossiness_factor = _clamp_float(sg.get('glossinessFactor', 1.0), 0.0, 1.0, 1.0) if sg else 1.0
-                if sg and rf is None:
-                    roughness_factor = 1.0 - glossiness_factor
-                if sg:
-                    sgt = sg.get('specularGlossinessTexture')
-                    sgt_index = _texture_index(sgt)
-                    if sgt_index is not None:
-                        converted_mr_id = _append_spec_gloss_mr_texture(
-                            all_textures, tex_img_map, sgt_index, glossiness_factor, spec_gloss_mr_cache
-                        )
-                        if converted_mr_id >= 0:
-                            mr_tex_id = converted_mr_id
-                            mr_sampler = _texture_sampler(tex_sampler_map, sgt_index)
-                            mr_texcoord = _safe_texcoord(sgt.get('texCoord'), 0)
-                            roughness_factor = 1.0
-                            tx_ext = _texture_transform(sgt)
-                            if tx_ext and 'texCoord' in tx_ext:
-                                mr_texcoord = _safe_texcoord(tx_ext.get('texCoord'), mr_texcoord)
-
-                material_name_l = mat_name.lower()
-                if (
-                    'chair' in material_name_l
-                    or 'seat' in material_name_l
-                    or 'cushion' in material_name_l
-                ):
-                    metallic_factor = 0.0
-                # Normal texture
-                nt = mat.get('normalTexture')
-                nt_index = _texture_index(nt)
-                if nt_index is not None:
-                    n_tid = _texture_image_id(tex_img_map, all_textures, nt_index)
-                    if n_tid >= 0:
-                        normal_tex_id = n_tid
-                        normal_sampler = _texture_sampler(tex_sampler_map, nt_index)
-                        normal_texcoord = _safe_texcoord(nt.get('texCoord'), 0)
-                        tx_ext = _texture_transform(nt)
-                        if tx_ext and 'texCoord' in tx_ext:
-                            normal_texcoord = _safe_texcoord(tx_ext.get('texCoord'), normal_texcoord)
-                    ns = nt.get('scale')
-                    if ns is not None:
-                        normal_scale = _safe_nonnegative_float(ns, normal_scale)
-
-                # Occlusion texture
-                ot = mat.get('occlusionTexture')
-                ot_index = _texture_index(ot)
-                if ot_index is not None:
-                    o_tid = _texture_image_id(tex_img_map, all_textures, ot_index)
-                    if o_tid >= 0:
-                        occlusion_tex_id = o_tid
-                        occlusion_sampler = _texture_sampler(tex_sampler_map, ot_index)
-                        occlusion_texcoord = _safe_texcoord(ot.get('texCoord'), 0)
-                        tx_ext = _texture_transform(ot)
-                        if tx_ext and 'texCoord' in tx_ext:
-                            occlusion_texcoord = _safe_texcoord(tx_ext.get('texCoord'), occlusion_texcoord)
-                    os_ = ot.get('strength')
-                    if os_ is not None:
-                        occlusion_strength = _clamp_float(os_, 0.0, 1.0, occlusion_strength)
-
-                # KHR_materials_unlit is signaled by extension presence.
-                # The extension object is usually {}, so bool(ext.get(...))
-                # incorrectly treats valid unlit materials as lit.
-                unlit = 'KHR_materials_unlit' in ext
-
-                # alphaMode + alphaCutoff (glTF spec 3.9.4)
-                alpha_mode = mat.get('alphaMode', 'OPAQUE')
-                if alpha_mode not in ('OPAQUE', 'MASK', 'BLEND'):
-                    alpha_mode = 'OPAQUE'
-                alpha_cutoff = _clamp_float(mat.get('alphaCutoff'), 0.0, 1.0, 0.5)
-
-                # doubleSided (glTF spec 3.9.4)
-                double_sided = bool(mat.get('doubleSided', False))
-                # Some exported foliage cards are authored as single-sided opaque
-                # quads, which looks acceptable in preview but collapses in PBR.
-                if not double_sided and alpha_mode == 'OPAQUE' and (
-                    'plant' in material_name_l
-                    or 'leaf' in material_name_l
-                    or 'leaves' in material_name_l
-                    or 'foliage' in material_name_l
-                    or 'grass' in material_name_l
-                    or 'bush' in material_name_l
-                    or 'tree' in material_name_l
-                ):
-                    double_sided = True
-                if tex_id >= 0 and (
-                    'plant' in material_name_l
-                    or 'leaf' in material_name_l
-                    or 'leaves' in material_name_l
-                    or 'foliage' in material_name_l
-                    or 'grass' in material_name_l
-                    or 'bush' in material_name_l
-                    or 'tree' in material_name_l
-                ):
-                    mag_filter, min_filter, wrap_s, wrap_t = base_sampler
-                    if uv_min[0] < -0.05 or uv_max[0] > 1.05:
-                        wrap_s = 10497
-                    if uv_min[1] < -0.05 or uv_max[1] > 1.05:
-                        wrap_t = 10497
-                    base_sampler = (mag_filter, min_filter, wrap_s, wrap_t)
-                foliage_mode = (
-                    'plant' in material_name_l
-                    or 'leaf' in material_name_l
-                    or 'leaves' in material_name_l
-                    or 'foliage' in material_name_l
-                    or 'grass' in material_name_l
-                    or 'bush' in material_name_l
-                    or 'tree' in material_name_l
-                )
-                # Emissive: emissiveFactor * KHR_materials_emissive_strength.
-                ef = mat.get('emissiveFactor')
-                if ef is not None:
-                    raw_ef = _clamp_vec(ef, 3, default=0.0, lo=0.0, hi=1.0)
-                    emissive_factor = raw_ef
-                    es_ext = ext.get('KHR_materials_emissive_strength')
-                    if es_ext and 'emissiveStrength' in es_ext:
-                        emissive_factor = emissive_factor * _safe_nonnegative_float(es_ext['emissiveStrength'], 1.0)
-                # emissiveTexture
-                et = mat.get('emissiveTexture')
-                et_index = _texture_index(et)
-                if et_index is not None:
-                    e_tid = _texture_image_id(tex_img_map, all_textures, et_index)
-                    if e_tid >= 0:
-                        emissive_tex_id = e_tid
-                        emissive_sampler = _texture_sampler(tex_sampler_map, et_index)
-                        emissive_texcoord = _safe_texcoord(et.get('texCoord'), 0)
-                        tx_ext = _texture_transform(et)
-                        if tx_ext and 'texCoord' in tx_ext:
-                            emissive_texcoord = _safe_texcoord(tx_ext.get('texCoord'), emissive_texcoord)
-                # Debug log
-                emissive_info = f' emissive={emissive_factor.tolist()}' if emissive_factor.any() else ''
-                if mat_idx < 300:
-                    _mat_log.write(f"[MAT] {mat_idx}: {mat_name}  "
-                          f"bcf={bcf}  rough={rf}  "
-                          f"tex_index={tex_index}  tex_id={tex_id}"
-                          f"{emissive_info}  "
-                          f"ext={list(ext.keys())}\n")
-
-            primitives.append({'vertices': vertices, 'indices': indices,
-                            'primitive_mode': _safe_int(prim.get('mode'), 4),
-                            'tex_id': tex_id, 'base_color': base_color,
-                            'base_sampler': base_sampler,
-                            'base_texcoord': base_texcoord,
-                            'base_alpha': base_alpha,
-                            'roughness_factor': roughness_factor,
-                            'metallic_factor': metallic_factor,
-                            'emissive_factor': emissive_factor,
-                            'normal_tex_id': normal_tex_id,
-                            'normal_sampler': normal_sampler,
-                            'normal_texcoord': normal_texcoord,
-                            'normal_scale': normal_scale,
-                            'occlusion_tex_id': occlusion_tex_id,
-                            'occlusion_sampler': occlusion_sampler,
-                            'occlusion_texcoord': occlusion_texcoord,
-                            'occlusion_strength': occlusion_strength,
-                            'unlit': unlit,
-                            'alpha_mode': alpha_mode,
-                            'alpha_cutoff': alpha_cutoff,
-                            'mr_tex_id': mr_tex_id,
-                            'mr_sampler': mr_sampler,
-                            'mr_texcoord': mr_texcoord,
-                            'emissive_tex_id': emissive_tex_id,
-                            'emissive_sampler': emissive_sampler,
-                            'emissive_texcoord': emissive_texcoord,
-                            'double_sided': double_sided,
-                            'tex_offset': tex_offset,
-                            'tex_scale': tex_scale,
-                            'tex_rotation': tex_rotation,
-                            'foliage_mode': foliage_mode,
-                            'has_uv1': has_uv1,
-                            'tangent': tangent,
-                            'node_index': node_index,
-                            'node_name': node_name,
-                            'mesh_name': mesh_name,
-                            'press_anim': press_anim,
-                            'axis_anim': axis_anim,
-                            'anim_key': press_anim.get('semantic', '') if press_anim else '',
-                            'visible_key': visible_key,
-                            '_mesh_index': mi,
-                            '_world_matrix': world_mat})
+            material_fields = parse_gltf_material(
+                gltf,
+                prim.get('material'),
+                tex_img_map=tex_img_map,
+                tex_sampler_map=tex_sampler_map,
+                all_textures=all_textures,
+                uv_min=uv_min,
+                uv_max=uv_max,
+                spec_gloss_mr_cache=spec_gloss_mr_cache,
+                log_writer=_mat_log,
+            )
+            primitive_record = {'vertices': vertices, 'indices': indices,
+                                'primitive_mode': _safe_int(prim.get('mode'), 4),
+                                'has_uv1': has_uv1,
+                                'tangent': tangent,
+                                'node_index': node_index,
+                                'node_name': node_name,
+                                'mesh_name': mesh_name,
+                                'press_anim': press_anim,
+                                'axis_anim': axis_anim,
+                                'anim_key': press_anim.get('semantic', '') if press_anim else '',
+                                'visible_key': visible_key,
+                                '_mesh_index': mi,
+                                '_world_matrix': world_mat}
+            primitive_record.update(material_fields)
+            primitives.append(primitive_record)
 
     extra_instances = []
     for primitive in primitives:
@@ -1193,6 +1248,11 @@ def load_glb_model(path):
         primitives.extend(extra_instances)
         _mat_log.write(f"[INSTANCE] Added {len(extra_instances)} mesh node instances\n")
 
+    # Freeze the renderer-facing mesh/material/pass contract after all node
+    # instances have received their final world-space geometry.
+    for primitive in primitives:
+        attach_primitive_contract(primitive)
+
     # Extract KHR_lights_punctual
     lights = []
     try:
@@ -1229,3 +1289,66 @@ def load_glb_model(path):
     _mat_log.write("=== End ===\n")
     _mat_log.close()
     return primitives, all_textures, lights
+
+
+def summarize_gltf_scene(primitives, textures, lights, diagnostics=None):
+    alpha_modes = {}
+    render_passes = {}
+    vertex_widths = set()
+    scene_min = None
+    scene_max = None
+    for primitive in primitives:
+        material = primitive.get('material_contract') if isinstance(primitive, dict) else None
+        alpha_mode = str(material.alpha_mode if isinstance(material, GltfMaterial) else 'OPAQUE').upper()
+        render_pass = str(primitive.get('render_pass', '') or '')
+        alpha_modes[alpha_mode] = alpha_modes.get(alpha_mode, 0) + 1
+        if render_pass:
+            render_passes[render_pass] = render_passes.get(render_pass, 0) + 1
+        vertices = primitive.get('vertices')
+        if isinstance(vertices, np.ndarray) and vertices.ndim == 2:
+            vertex_widths.add(int(vertices.shape[1]))
+            if vertices.shape[0] and vertices.shape[1] >= 3:
+                mn = vertices[:, :3].min(axis=0).astype(np.float32)
+                mx = vertices[:, :3].max(axis=0).astype(np.float32)
+                scene_min = mn if scene_min is None else np.minimum(scene_min, mn)
+                scene_max = mx if scene_max is None else np.maximum(scene_max, mx)
+
+    summary = {
+        'primitive_count': len(primitives),
+        'texture_count': len(textures),
+        'light_count': len(lights),
+        'alpha_modes': dict(sorted(alpha_modes.items())),
+        'render_passes': dict(sorted(render_passes.items())),
+        'vertex_widths': sorted(vertex_widths),
+        'scene_bounds': None,
+        'diagnostics': diagnostics or {},
+    }
+    if scene_min is not None and scene_max is not None:
+        summary['scene_bounds'] = (scene_min, scene_max)
+    return summary
+
+
+def format_gltf_scene_summary(summary, *, label='glTF model'):
+    diagnostics = summary.get('diagnostics') or {}
+    alpha_modes = summary.get('alpha_modes') or {}
+    render_passes = summary.get('render_passes') or {}
+    unsupported_required = diagnostics.get('unsupportedRequired') or []
+    unsupported_optional = diagnostics.get('unsupportedOptional') or []
+    vertex_widths = summary.get('vertex_widths') or []
+    return (
+        f"{label}: primitives={summary.get('primitive_count', 0)} "
+        f"textures={summary.get('texture_count', 0)} "
+        f"lights={summary.get('light_count', 0)} "
+        f"vertex_widths={vertex_widths} "
+        f"alpha_modes={alpha_modes} "
+        f"render_passes={render_passes} "
+        f"unsupported_required={unsupported_required} "
+        f"unsupported_optional={unsupported_optional}"
+    )
+
+
+def diagnose_gltf_model(path):
+    gltf, _buffers = _load_gltf_document(path)
+    diagnostics = _raise_unsupported_required_extensions(gltf, path)
+    primitives, textures, lights = load_glb_model(path)
+    return summarize_gltf_scene(primitives, textures, lights, diagnostics)

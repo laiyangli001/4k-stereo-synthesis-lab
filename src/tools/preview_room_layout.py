@@ -27,7 +27,16 @@ warnings.filterwarnings(
 )
 
 from xr_viewer.gl_state import set_depth_mask  # noqa: E402
-from xr_viewer.implementation import load_glb_model  # noqa: E402
+from xr_viewer.gltf_contract import (  # noqa: E402
+    OPENGL_VERTEX_FORMAT,
+    render_pass_from_primitive,
+    validate_mesh_contract,
+)
+from xr_viewer.gltf_loader import (  # noqa: E402
+    format_gltf_scene_summary,
+    load_glb_model,
+    summarize_gltf_scene,
+)
 
 
 ENV_VERT = """
@@ -266,7 +275,9 @@ def _screen_vertices(screen):
 
 
 def _make_env_resources(ctx, prog, glb_path: Path):
-    prims_data, textures, _lights = load_glb_model(str(glb_path))
+    prims_data, textures, lights = load_glb_model(str(glb_path))
+    summary = summarize_gltf_scene(prims_data, textures, lights)
+    print("[Preview] " + format_gltf_scene_summary(summary, label=f"Active environment {glb_path}"))
     local_min = None
     local_max = None
     tex_cache = {}
@@ -282,7 +293,8 @@ def _make_env_resources(ctx, prog, glb_path: Path):
 
     prims = []
     for pd in prims_data:
-        vertices = pd["vertices"].astype("f4")
+        validate_mesh_contract(pd["vertices"], pd["tangent"], pd["indices"])
+        vertices = pd["vertices"].astype("f4", copy=False)
         if vertices.size:
             pos = vertices[:, :3]
             mn = pos.min(axis=0)
@@ -291,7 +303,11 @@ def _make_env_resources(ctx, prog, glb_path: Path):
             local_max = mx if local_max is None else np.maximum(local_max, mx)
         vbo = ctx.buffer(vertices.tobytes())
         ibo = ctx.buffer(pd["indices"].astype("u4").tobytes())
-        vao = ctx.vertex_array(prog, [(vbo, "3f 3f 2f 2f", "in_position", "in_normal", "in_uv", "in_uv1")], ibo)
+        vao = ctx.vertex_array(
+            prog,
+            [(vbo, OPENGL_VERTEX_FORMAT, "in_position", "in_normal", "in_uv", "in_uv1")],
+            ibo,
+        )
         prims.append({
             "vao": vao,
             "tex_id": int(pd.get("tex_id", -1)),
@@ -299,6 +315,7 @@ def _make_env_resources(ctx, prog, glb_path: Path):
             "base_alpha": float(pd.get("base_alpha", 1.0)),
             "alpha_mode": str(pd.get("alpha_mode", "OPAQUE") or "OPAQUE").upper(),
             "alpha_cutoff": float(pd.get("alpha_cutoff", 0.5)),
+            "render_pass": render_pass_from_primitive(pd),
         })
     return prims, tex_cache, local_min, local_max
 
@@ -581,15 +598,26 @@ def main():
             env_prog["u_alpha_cutoff"].value = float(prim.get("alpha_cutoff", 0.5))
             prim["vao"].render(moderngl.TRIANGLES)
 
-        opaque_prims = [prim for prim in env_prims if prim.get("alpha_mode") != "BLEND"]
-        blend_prims = [prim for prim in env_prims if prim.get("alpha_mode") == "BLEND"]
-        for prim in opaque_prims:
+        sky_prims = [prim for prim in env_prims if prim.get("render_pass") == "sky"]
+        solid_prims = [
+            prim for prim in env_prims
+            if prim.get("render_pass") in ("opaque", "mask")
+        ]
+        transparent_prims = [
+            prim for prim in env_prims if prim.get("render_pass") == "transparent"
+        ]
+        if sky_prims:
+            set_depth_mask(False)
+            for prim in sky_prims:
+                draw_env_prim(prim)
+            set_depth_mask(True)
+        for prim in solid_prims:
             draw_env_prim(prim)
-        if blend_prims:
+        if transparent_prims:
             ctx.enable(moderngl.BLEND)
             ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
             set_depth_mask(False)
-            for prim in blend_prims:
+            for prim in transparent_prims:
                 draw_env_prim(prim)
             set_depth_mask(True)
             ctx.disable(moderngl.BLEND)

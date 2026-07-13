@@ -3,7 +3,13 @@
 import moderngl
 
 from .implementation import *
+from .gltf_contract import (
+    OPENGL_VERTEX_FORMAT,
+    render_pass_from_primitive,
+    validate_mesh_contract,
+)
 from .material_contract import GLTF_MATERIAL_TEXTURE_BINDINGS
+from .gltf_loader import format_gltf_scene_summary, summarize_gltf_scene
 
 
 class EnvironmentModelMixin:
@@ -60,6 +66,7 @@ class EnvironmentModelMixin:
         to = prim.get('tex_offset')
         ts = prim.get('tex_scale')
         alpha_mode = prim.get('alpha_mode', 'OPAQUE')
+        render_pass = render_pass_from_primitive(prim)
         rs = {
             'bc': (float(bc[0]), float(bc[1]), float(bc[2])) if bc is not None else (1.0, 1.0, 1.0),
             'ba': float(prim.get('base_alpha', 1.0)),
@@ -70,7 +77,8 @@ class EnvironmentModelMixin:
             'foliage': 1 if prim.get('foliage_mode', False) else 0,
             'am': 0 if alpha_mode == 'OPAQUE' else (1 if alpha_mode == 'MASK' else 2),
             'ac': float(prim.get('alpha_cutoff', 0.5)),
-            'blend': alpha_mode == 'BLEND',
+            'render_pass': render_pass,
+            'blend': render_pass == 'transparent',
             'double_sided': bool(prim.get('double_sided', False)),
             'to': (float(to[0]), float(to[1])) if to is not None else (0.0, 0.0),
             'ts': (float(ts[0]), float(ts[1])) if ts is not None else (1.0, 1.0),
@@ -164,6 +172,7 @@ class EnvironmentModelMixin:
                 baked_lightmap = bool(self._env_profile.get('baked_lightmap', self._env_profile.get('baked', False)))
             baked_uv1_forced = 0
             for pd in prims_data:
+                validate_mesh_contract(pd['vertices'], pd['tangent'], pd['indices'])
                 if (
                     baked_lightmap
                     and pd.get('has_uv1', False)
@@ -177,7 +186,7 @@ class EnvironmentModelMixin:
                 ibo = self.ctx.buffer(pd['indices'].tobytes())
                 vao = self.ctx.vertex_array(
                     self._env_prog,
-                    [(vbo, '3f 3f 2f 2f', 'in_position', 'in_normal', 'in_uv', 'in_uv1'),
+                    [(vbo, OPENGL_VERTEX_FORMAT, 'in_position', 'in_normal', 'in_uv', 'in_uv1'),
                      (tan_vbo, '4f', 'in_tangent')],
                     ibo,
                 )
@@ -224,6 +233,8 @@ class EnvironmentModelMixin:
                     'indices': np.ascontiguousarray(pd['indices'], dtype=np.uint32),
                     'tex_key': tex_key,
                     'render_mode': gltf_primitive_mode_to_moderngl(pd.get('primitive_mode', 4)),
+                    'render_pass': render_pass_from_primitive(pd),
+                    'material_contract': pd.get('material_contract'),
                     'tri_count': len(pd['indices']) // 3,
                     'base_color': base_color,
                     'base_alpha': base_alpha,
@@ -297,6 +308,9 @@ class EnvironmentModelMixin:
                 print(f"[OpenXRViewer] Baked lightmap primitives: occlusion={occ_count} uv1={occ_uv1}")
             if baked_uv1_forced:
                 print(f"[OpenXRViewer] Baked lightmap forced occlusion texCoord=1 on {baked_uv1_forced} primitives")
+            summary = summarize_gltf_scene(prims_data, textures, env_lights)
+            self._env_model_summary = summary
+            print("[OpenXRViewer] " + format_gltf_scene_summary(summary, label=f"Active environment {path}"))
         except Exception as exc:
             print(f"[OpenXRViewer] Failed to create environment model resources: {exc}")
             self._release_env_model_resources()
@@ -320,6 +334,7 @@ class EnvironmentModelMixin:
                 pass
         self._env_model_tex_cache = {}
         self._scene_lights = []
+        self._env_model_summary = None
         self._env_model_visible = False
 
 

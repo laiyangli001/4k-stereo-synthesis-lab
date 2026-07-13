@@ -9,7 +9,13 @@ from PIL import Image
 
 from utils.cpu_warnings import describe_tensor, warn_cpu_fallback, warn_cpu_operation, warn_cpu_transfer
 from .controller_lighting import CONTROLLER_HEAD_LIGHT_COLOR, CONTROLLER_TOP_LIGHT_INTENSITY
+from .gltf_contract import (
+    D3D11_VERTEX_OFFSETS_BYTES,
+    D3D11_VERTEX_STRIDE_BYTES,
+    render_pass_from_primitive,
+)
 from .material_contract import GLTF_MATERIAL_TEXTURE_BINDINGS
+from .gltf_loader import format_gltf_scene_summary
 from .laser_geometry import build_laser_beam_vertices
 from .laser_params import CURSOR_RING_INNER_RATIO, LASER_BASE_HALF_WIDTH_M, LASER_MAX_LENGTH_M, LASER_TIP_HALF_WIDTH_M
 
@@ -1139,11 +1145,12 @@ class D3D11NativeRenderer:
             _check_hr(create_ps(_ptr_value(self.device), _blob_ptr(ps_blob), _blob_size(ps_blob), None, ctypes.byref(self.controller_pixel_shader)), "CreatePixelShader(controller)")
 
             names = [b"POSITION", b"NORMAL", b"TEXCOORD"]
+            position_offset, normal_offset, uv0_offset, uv1_offset = D3D11_VERTEX_OFFSETS_BYTES
             layout = (D3D11InputElementDesc * 4)(
-                D3D11InputElementDesc(names[0], 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0),
-                D3D11InputElementDesc(names[1], 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0),
-                D3D11InputElementDesc(names[2], 0, DXGI_FORMAT_R32G32_FLOAT, 0, 24, D3D11_INPUT_PER_VERTEX_DATA, 0),
-                D3D11InputElementDesc(names[2], 1, DXGI_FORMAT_R32G32_FLOAT, 0, 32, D3D11_INPUT_PER_VERTEX_DATA, 0),
+                D3D11InputElementDesc(names[0], 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, position_offset, D3D11_INPUT_PER_VERTEX_DATA, 0),
+                D3D11InputElementDesc(names[1], 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, normal_offset, D3D11_INPUT_PER_VERTEX_DATA, 0),
+                D3D11InputElementDesc(names[2], 0, DXGI_FORMAT_R32G32_FLOAT, 0, uv0_offset, D3D11_INPUT_PER_VERTEX_DATA, 0),
+                D3D11InputElementDesc(names[2], 1, DXGI_FORMAT_R32G32_FLOAT, 0, uv1_offset, D3D11_INPUT_PER_VERTEX_DATA, 0),
             )
             create_layout = self._device_call(
                 11, ctypes.c_long, ctypes.POINTER(D3D11InputElementDesc), ctypes.c_uint,
@@ -1940,15 +1947,18 @@ class D3D11NativeRenderer:
         for _dist, grip_mat, prims, press_map in controllers:
             base_model = self._controller_model_base(viewer, grip_mat)
             sorted_prims = sorted(prims, key=lambda p: int(p.get("tri_count", 0) or 0), reverse=True)
-            opaque_prims = []
-            blend_prims = []
+            solid_prims = []
+            sky_prims = []
+            transparent_prims = []
             for prim in sorted_prims:
-                mat = prim.get("material") or {}
-                if not diag_opaque_unlit and int(mat.get("alpha_mode_id", 0)) == 2:
-                    blend_prims.append(prim)
+                render_pass = "opaque" if diag_opaque_unlit else render_pass_from_primitive(prim)
+                if render_pass == "transparent":
+                    transparent_prims.append(prim)
+                elif render_pass == "sky":
+                    sky_prims.append(prim)
                 else:
-                    opaque_prims.append(prim)
-            if len(blend_prims) > 1:
+                    solid_prims.append(prim)
+            if len(transparent_prims) > 1:
                 def _blend_sort_key(prim):
                     center = prim.get("sort_center_local")
                     if center is None:
@@ -1957,8 +1967,8 @@ class D3D11NativeRenderer:
                     delta = world[:3] - eye_pos
                     return float(np.dot(delta, delta))
 
-                blend_prims.sort(key=_blend_sort_key, reverse=True)
-            for prim in opaque_prims + blend_prims:
+                transparent_prims.sort(key=_blend_sort_key, reverse=True)
+            for prim in sky_prims + solid_prims + transparent_prims:
                 visible_key = prim.get("visible_key", "")
                 if visible_key and float(press_map.get(visible_key, 0.0) or 0.0) <= 0.001:
                     continue
@@ -2085,9 +2095,12 @@ class D3D11NativeRenderer:
                 constants[124:128] = (float(fill_color1[0]), float(fill_color1[1]), float(fill_color1[2]), 0.0)
                 self._update_subresource(self.controller_constant_buffer, constants.ctypes.data, constants.nbytes)
 
-                alpha_mode = 0 if diag_opaque_unlit else int(mat.get("alpha_mode_id", 0))
-                if alpha_mode == 2:
+                render_pass = "opaque" if diag_opaque_unlit else render_pass_from_primitive(prim)
+                if render_pass == "transparent":
                     self._set_blend_alpha()
+                    self._set_depth_read_only()
+                elif render_pass == "sky":
+                    self._set_blend_disabled()
                     self._set_depth_read_only()
                 else:
                     self._set_blend_disabled()
@@ -2107,7 +2120,7 @@ class D3D11NativeRenderer:
                     srv_values[binding.d3d11_srv_slot] = _ptr_value(material_srvs[binding.role] or 0)
                 srv_arr = (ctypes.c_void_p * 7)(*srv_values)
                 self._context_call(8, None, ctypes.c_uint, ctypes.c_uint, ctypes.POINTER(ctypes.c_void_p))(_ptr_value(self.context), 0, 7, srv_arr)
-                stride = ctypes.c_uint(40)
+                stride = ctypes.c_uint(D3D11_VERTEX_STRIDE_BYTES)
                 offset = ctypes.c_uint(0)
                 vb_arr = (ctypes.c_void_p * 1)(_ptr_value(vb))
                 self._context_call(18, None, ctypes.c_uint, ctypes.c_uint, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_uint), ctypes.POINTER(ctypes.c_uint))(
@@ -2143,6 +2156,10 @@ class D3D11NativeRenderer:
                     flush=True,
                 )
             return
+        summary = getattr(viewer, "_env_model_summary", None)
+        if summary and not getattr(self, "_d3d11_environment_summary_logged", False):
+            self._d3d11_environment_summary_logged = True
+            print("[OpenXRViewer] D3D11 " + format_gltf_scene_summary(summary, label="Active environment"), flush=True)
         try:
             model_fn = getattr(viewer, "_env_model_mat4", None) or getattr(viewer, "_build_env_model_mat4")
             model = np.asarray(model_fn(), dtype=np.float32)

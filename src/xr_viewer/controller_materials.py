@@ -3,11 +3,9 @@ import os
 
 import numpy as np
 
-from .gltf_loader import gltf_texture_cache_key, normalize_gltf_sampler
-from .material_contract import GLTF_MATERIAL_TEXTURE_BINDINGS, GLTF_TEXTURE_FIELDS
-
-
-_TEXTURE_FIELDS = GLTF_TEXTURE_FIELDS
+from .gltf_contract import GltfMaterial, TextureBinding, TextureTransform
+from .gltf_loader import normalize_gltf_sampler
+from .material_contract import GLTF_MATERIAL_TEXTURE_BINDINGS
 
 
 def load_controller_common_config(controllers_root):
@@ -43,25 +41,59 @@ def alpha_mode_id(alpha_mode):
     return {"OPAQUE": 0, "MASK": 1, "BLEND": 2}.get(str(alpha_mode or "OPAQUE").upper(), 0)
 
 
+def _require_material_contract(pd):
+    material = pd.get("material_contract") if isinstance(pd, dict) else None
+    if not isinstance(material, GltfMaterial):
+        raise ValueError("controller primitive missing glTF material_contract")
+    return material
+
+
+def _texture_binding(material, role):
+    binding = material.texture_slots.get(role) if material.texture_slots else None
+    if binding is None:
+        return None
+    if not isinstance(binding, TextureBinding):
+        raise ValueError(f"controller material_contract texture slot {role!r} is invalid")
+    return binding
+
+
+def _texture_transform(binding):
+    if binding is None:
+        return TextureTransform()
+    return binding.transform if isinstance(binding.transform, TextureTransform) else TextureTransform()
+
+
+def _normalize_contract_sampler(sampler):
+    try:
+        values = tuple(int(item) for item in sampler)
+    except (TypeError, ValueError):
+        values = ()
+    if len(values) == 4:
+        return values
+    return normalize_gltf_sampler(sampler)
+
+
 def collect_controller_texture_requests(prims_data):
     requests = set()
     for pd in prims_data:
-        for _name, tex_field, sampler_field in _TEXTURE_FIELDS:
-            tid = int(pd.get(tex_field, -1))
-            if tid >= 0:
-                requests.add((tid, normalize_gltf_sampler(pd.get(sampler_field))))
+        material = _require_material_contract(pd)
+        for binding in material.texture_slots.values():
+            if not isinstance(binding, TextureBinding):
+                raise ValueError("controller material_contract texture slot is invalid")
+            if binding.image_id >= 0:
+                requests.add((int(binding.image_id), _normalize_contract_sampler(binding.sampler)))
     return requests
 
 
-def controller_texture_key(prefix, pd, tex_field, sampler_field):
-    tid = int(pd.get(tex_field, -1))
-    if tid < 0:
+def controller_texture_key(prefix, binding):
+    if binding is None or binding.image_id < 0:
         return None
-    return gltf_texture_cache_key(prefix, tid, pd.get(sampler_field))
+    mag_filter, min_filter, wrap_s, wrap_t = _normalize_contract_sampler(binding.sampler)
+    return f"{prefix}:{int(binding.image_id)}:{mag_filter}:{min_filter}:{wrap_s}:{wrap_t}"
 
 
 def prepare_controller_material(pd, prefix, config):
-    defaults = config.get("defaults", {}) if isinstance(config, dict) else {}
+    material_contract = _require_material_contract(pd)
     pbr = config.get("pbr", {}) if isinstance(config, dict) else {}
     diagnostics = config.get("diagnostics", {}) if isinstance(config, dict) else {}
     brand = str(prefix).split("/", 1)[0]
@@ -69,52 +101,43 @@ def prepare_controller_material(pd, prefix, config):
     brand_defaults = overrides.get(brand, {}) if isinstance(overrides, dict) else {}
     if not isinstance(brand_defaults, dict):
         brand_defaults = {}
-    base_color = _vec(
-        pd.get("base_color", defaults.get("baseColorFactor", (1.0, 1.0, 1.0))),
-        3,
-        defaults.get("baseColorFactor", (1.0, 1.0, 1.0)),
-    )
-    emissive = _vec(
-        pd.get("emissive_factor", defaults.get("emissiveFactor", (0.0, 0.0, 0.0))),
-        3,
-        defaults.get("emissiveFactor", (0.0, 0.0, 0.0)),
-    )
-    alpha_mode = str(pd.get("alpha_mode", defaults.get("alphaMode", "OPAQUE")) or "OPAQUE").upper()
+    texture_slots = {
+        binding.role: _texture_binding(material_contract, binding.role)
+        for binding in GLTF_MATERIAL_TEXTURE_BINDINGS
+    }
+    base_binding = texture_slots["base"]
+    base_transform = _texture_transform(base_binding)
+    alpha_mode = str(material_contract.alpha_mode or "OPAQUE").upper()
     if alpha_mode not in ("OPAQUE", "MASK", "BLEND"):
         alpha_mode = "OPAQUE"
     alpha_mode = str(brand_defaults.get("alphaMode", alpha_mode)).upper()
     if alpha_mode not in ("OPAQUE", "MASK", "BLEND"):
         alpha_mode = "OPAQUE"
     material = {
-        "base_color": base_color,
-        "base_alpha": float(pd.get("base_alpha", defaults.get("baseAlpha", 1.0)) or 1.0),
-        "roughness": float(brand_defaults.get("roughnessFactor", pd.get("roughness_factor", defaults.get("roughnessFactor", 1.0))) or 1.0),
-        "metallic": float(brand_defaults.get("metallicFactor", pd.get("metallic_factor", defaults.get("metallicFactor", 0.0))) or 0.0),
-        "normal_scale": float(pd.get("normal_scale", defaults.get("normalScale", 1.0)) or 1.0),
-        "occlusion_strength": float(pd.get("occlusion_strength", defaults.get("occlusionStrength", 1.0)) or 1.0),
-        "emissive_factor": emissive,
+        "base_color": _vec(material_contract.base_color, 3, (1.0, 1.0, 1.0)),
+        "base_alpha": float(material_contract.base_alpha),
+        "roughness": float(brand_defaults.get("roughnessFactor", material_contract.roughness)),
+        "metallic": float(brand_defaults.get("metallicFactor", material_contract.metallic)),
+        "normal_scale": float(material_contract.normal_scale),
+        "occlusion_strength": float(material_contract.occlusion_strength),
+        "emissive_factor": _vec(material_contract.emissive_factor, 3, (0.0, 0.0, 0.0)),
         "alpha_mode": alpha_mode,
         "alpha_mode_id": alpha_mode_id(alpha_mode),
-        "alpha_cutoff": float(pd.get("alpha_cutoff", defaults.get("alphaCutoff", 0.5)) or 0.5),
-        "double_sided": bool(brand_defaults.get("doubleSided", pd.get("double_sided", defaults.get("doubleSided", False)))),
-        "unlit": bool(pd.get("unlit", False)),
-        "tex_offset": _vec(pd.get("tex_offset", defaults.get("texOffset", (0.0, 0.0))), 2, defaults.get("texOffset", (0.0, 0.0))),
-        "tex_scale": _vec(pd.get("tex_scale", defaults.get("texScale", (1.0, 1.0))), 2, defaults.get("texScale", (1.0, 1.0))),
-        "tex_rotation": float(pd.get("tex_rotation", defaults.get("texRotation", 0.0)) or 0.0),
-        "base_texcoord": int(pd.get("base_texcoord", defaults.get("baseTexcoord", 0)) or 0),
-        "normal_texcoord": int(pd.get("normal_texcoord", defaults.get("normalTexcoord", 0)) or 0),
-        "occlusion_texcoord": int(pd.get("occlusion_texcoord", defaults.get("occlusionTexcoord", 0)) or 0),
-        "mr_texcoord": int(pd.get("mr_texcoord", defaults.get("metallicRoughnessTexcoord", 0)) or 0),
-        "emissive_texcoord": int(pd.get("emissive_texcoord", defaults.get("emissiveTexcoord", 0)) or 0),
+        "alpha_cutoff": float(material_contract.alpha_cutoff),
+        "double_sided": bool(brand_defaults.get("doubleSided", material_contract.double_sided)),
+        "unlit": bool(material_contract.unlit),
+        "tex_offset": _vec(base_transform.offset, 2, (0.0, 0.0)),
+        "tex_scale": _vec(base_transform.scale, 2, (1.0, 1.0)),
+        "tex_rotation": float(base_transform.rotation),
+        "base_texcoord": int(base_binding.texcoord) if base_binding is not None else 0,
+        "normal_texcoord": int(texture_slots["normal"].texcoord) if texture_slots["normal"] is not None else 0,
+        "occlusion_texcoord": int(texture_slots["occlusion"].texcoord) if texture_slots["occlusion"] is not None else 0,
+        "mr_texcoord": int(texture_slots["mr"].texcoord) if texture_slots["mr"] is not None else 0,
+        "emissive_texcoord": int(texture_slots["emissive"].texcoord) if texture_slots["emissive"] is not None else 0,
         "material_mode": str(pbr.get("mode", "environment_pbr") or "environment_pbr"),
         "use_environment_pbr": bool(pbr.get("useEnvironmentPbr", True)),
         "material_diag": str(diagnostics.get("materialMode", "") if isinstance(diagnostics, dict) else "").strip().lower(),
     }
     for binding in GLTF_MATERIAL_TEXTURE_BINDINGS:
-        material[binding.material_key] = controller_texture_key(
-            prefix,
-            pd,
-            binding.source_tex_field,
-            binding.source_sampler_field,
-        )
+        material[binding.material_key] = controller_texture_key(prefix, texture_slots[binding.role])
     return material
