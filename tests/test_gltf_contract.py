@@ -1,3 +1,4 @@
+import ast
 import json
 from pathlib import Path
 
@@ -7,11 +8,15 @@ import pytest
 import xr_viewer.gltf as gltf_package
 import xr_viewer.gltf_contract as legacy_gltf_contract
 import xr_viewer.gltf_loader as legacy_gltf_loader
+from xr_viewer.gltf import accessors as gltf_accessors_module
 from xr_viewer.gltf import contract as gltf_contract_module
 from xr_viewer.gltf import color_management as gltf_color_management_module
+from xr_viewer.gltf import document as gltf_document_module
 from xr_viewer.gltf import loader as gltf_loader_module
 from xr_viewer.gltf import materials as gltf_materials_module
+from xr_viewer.gltf import primitives as gltf_primitives_module
 from xr_viewer.gltf import render_plan as gltf_render_plan_module
+from xr_viewer.gltf import scene as gltf_scene_module
 from xr_viewer.gltf import validation as gltf_validation_module
 from xr_viewer.controller_materials import (
     collect_controller_texture_requests,
@@ -95,6 +100,25 @@ def test_gltf_package_reexports_stable_loader_contract_and_render_plan_api():
 
     assert isinstance(scene, gltf_package.GltfScene)
     assert sum(len(indices) for indices in scene.render_plan.values()) == len(scene.primitives)
+
+
+def test_gltf_loader_is_split_into_compliance_modules():
+    legacy_source = (SRC / "xr_viewer" / "gltf_loader.py").read_text(encoding="utf-8")
+    package_loader_source = (SRC / "xr_viewer" / "gltf" / "loader.py").read_text(encoding="utf-8")
+    legacy_tree = ast.parse(legacy_source)
+
+    assert not [node.name for node in legacy_tree.body if isinstance(node, ast.FunctionDef)]
+    assert "from .gltf.document import" in legacy_source
+    assert "from .gltf.accessors import" in legacy_source
+    assert "from .gltf.scene import" in legacy_source
+    assert "from .gltf.primitives import" in legacy_source
+    assert "from ..gltf_loader import" not in package_loader_source
+    assert gltf_document_module._load_gltf_document is legacy_gltf_loader._load_gltf_document
+    assert gltf_accessors_module._get_accessor is legacy_gltf_loader._get_accessor
+    assert gltf_scene_module.load_gltf_scene is load_gltf_scene
+    assert gltf_primitives_module.load_glb_model is load_glb_model
+    assert gltf_loader_module.load_glb_model is gltf_primitives_module.load_glb_model
+    assert gltf_loader_module.load_gltf_scene is gltf_scene_module.load_gltf_scene
 
 
 def test_gltf_color_management_policy_matches_material_texture_roles():

@@ -6,15 +6,14 @@ from .materials import (
     normalize_gltf_sampler,
     parse_gltf_material,
 )
-from .validation import audit_gltf_extensions, raise_unsupported_required_extensions
-from ..gltf_loader import (
+from .primitives import gltf_primitive_mode_to_moderngl, load_glb_model
+from .scene import (
     diagnose_gltf_model,
     format_gltf_scene_summary,
-    gltf_primitive_mode_to_moderngl,
-    load_glb_model,
     load_gltf_scene,
     summarize_gltf_scene,
 )
+from .validation import audit_gltf_extensions, raise_unsupported_required_extensions
 
 __all__ = [
     "apply_gltf_sampler_to_texture",
