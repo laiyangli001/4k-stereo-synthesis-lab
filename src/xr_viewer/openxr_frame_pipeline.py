@@ -30,8 +30,25 @@ class OpenXRFramePipeline:
             angle_left=-0.785, angle_right=0.785,
             angle_up=0.785,   angle_down=-0.785,
         )
-        self.default_proj = _fov_to_proj_mat4(self.default_fov)
-        self.default_proj_d3d = _fov_to_proj_mat4_d3d(self.default_fov)
+        self._projection_clip_key = None
+        self.default_proj = None
+        self.default_proj_d3d = None
+        self._refresh_default_projection()
+
+    def _projection_clip_planes(self):
+        viewer = self.viewer
+        near = max(0.01, float(getattr(viewer, '_xr_projection_near', 0.05) or 0.05))
+        far = max(near + 1.0, float(getattr(viewer, '_xr_projection_far', 100.0) or 100.0))
+        return near, far
+
+    def _refresh_default_projection(self):
+        near, far = self._projection_clip_planes()
+        key = (near, far)
+        if self._projection_clip_key == key:
+            return
+        self._projection_clip_key = key
+        self.default_proj = _fov_to_proj_mat4(self.default_fov, near=near, far=far)
+        self.default_proj_d3d = _fov_to_proj_mat4_d3d(self.default_fov, near=near, far=far)
 
     def seed_first_frame(self, *, first_rgb=None, first_depth=None, first_runtime_result=None, first_frame_ts=None):
         viewer = self.viewer
@@ -148,6 +165,7 @@ class OpenXRFramePipeline:
 
         screen_frame_uploaded = False
         if frame_state.should_render:
+            self._refresh_default_projection()
             screen_frame_uploaded, view_pose_adjusted, rendered_projection = self.renderer.render_frame(
                 composition_layers=composition_layers,
                 display_time=frame_state.predicted_display_time,

@@ -5,9 +5,9 @@
   },
   "glb": "environment.glb",
   "model_position": [
-    4.6294,
-    0.8431,
-    0.0
+    4629.4438,
+    843.0854,
+    -0.0001
   ],
   "model_rotation_deg": [
     0.0,
@@ -15,15 +15,17 @@
     0.0
   ],
   "model_scale": [
-    0.001,
-    0.001,
-    0.001
+    1,
+    1,
+    1
   ],
   "env_exposure": 0.5,
   "env_gamma": 2.2,
   "env_emissive_strength": 10.0,
   "env_khr_light_scale": 1.0,
   "xr_render_scale": 1.0,
+  "xr_projection_near": 0.1,
+  "xr_projection_far": 20000.0,
   "screen_quality_filter": false,
   "screen_quality_sharpness": 0.35,
   "screen_quality_oversample": 1.0,
@@ -72,42 +74,47 @@
       ]
     }
   ],
-  "view_pose": {
-    "x": 0.0,
-    "y": 0.9,
-    "z": 0.0,
-    "angle": 0.0
-  },
   "view_pose_index": 1,
   "view_poses": [
     {
-      "name": "Center",
-      "x": 0.1203,
-      "y": 5.8948,
-      "z": -0.4771,
+      "name": "Bridge Approach",
+      "x": 0.0,
+      "y": 110.0,
+      "z": -650.0,
       "angle": 0.0
     },
     {
       "name": "Model Center",
       "x": 0.0,
-      "y": 0.9,
-      "z": 0.0,
-      "angle": 0.0
+      "y": 900.0,
+      "z": -950.0,
+      "angle": 0.0,
+      "rotation_deg": [
+        0.0,
+        -8.0,
+        0.0
+      ]
     },
     {
-      "name": "Back Row",
-      "x": 0.1238,
-      "y": 7.4712,
-      "z": 0.1714,
-      "angle": 0.0
+      "name": "Wide Overview",
+      "x": 0.0,
+      "y": 1550.0,
+      "z": -3600.0,
+      "angle": 0.0,
+      "rotation_deg": [
+        0.0,
+        -18.0,
+        0.0
+      ]
     }
   ],
   "screen": {
-    "width": 5.0,
+    "allow_controller_move": true,
+    "width": 800.0,
     "position": [
-      0.0795,
-      1.5424,
-      -5.8942
+      0.0,
+      900.0,
+      -300.0
     ],
     "rotation_deg": [
       0.0,
@@ -115,6 +122,7 @@
       0.0
     ],
     "curved": false,
-    "allow_curve": true
+    "allow_curve": true,
+    "name": "Preview Screen"
   }
 }

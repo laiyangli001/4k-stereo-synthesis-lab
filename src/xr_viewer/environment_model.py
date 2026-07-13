@@ -4,6 +4,7 @@ import moderngl
 
 from .implementation import *
 from .gltf import (
+    GltfMaterial,
     OPENGL_VERTEX_FORMAT,
     format_gltf_scene_summary,
     render_pass_from_primitive,
@@ -275,7 +276,7 @@ class EnvironmentModelMixin:
                         gltf_texture_cache_key(_prefix, tid, pd.get(binding.source_sampler_field))
                         if tid >= 0 else None
                     )
-                prim['material'] = {
+                prim['render_material'] = {
                     **material_texture_keys,
                     'base_color': tuple(float(x) for x in base_color[:3]), 'base_alpha': base_alpha,
                     'roughness': float(pd.get('roughness_factor', 1.0)), 'metallic': float(pd.get('metallic_factor', 0.0)),
@@ -294,7 +295,7 @@ class EnvironmentModelMixin:
                 prim['d3d_tex_images'] = {
                     key: np.ascontiguousarray(textures[int(tid)], dtype=np.uint8)
                     for key, tid in (
-                        (prim['material'][binding.material_key], pd.get(binding.source_tex_field, -1))
+                        (prim['render_material'][binding.material_key], pd.get(binding.source_tex_field, -1))
                         for binding in GLTF_MATERIAL_TEXTURE_BINDINGS
                     )
                     if key and isinstance(tid, (int, np.integer)) and 0 <= int(tid) < len(textures) and textures[int(tid)] is not None
@@ -357,6 +358,14 @@ class EnvironmentModelMixin:
         faces.append((np.array([[-W,H,-D, 0,-1,0, 0,0], [-W,H,D, 0,-1,0, 1,0], [W,H,D, 0,-1,0, 1,1], [W,H,-D, 0,-1,0, 0,1]], dtype='f4'),
                       np.array([0,1,2, 0,2,3], dtype='u4'), (0.35, 0.35, 0.40)))
         for verts, idx, color in faces:
+            material_contract = GltfMaterial(
+                base_color=tuple(float(x) for x in color),
+                base_alpha=1.0,
+                alpha_mode='OPAQUE',
+                roughness=1.0,
+                metallic=0.0,
+                double_sided=False,
+            )
             verts = np.hstack([verts, verts[:, 6:8]]).astype('f4')
             vbo = self.ctx.buffer(verts.tobytes())
             # Dummy tangent: (1,0,0,1) -room faces have no normal map anyway
@@ -374,6 +383,7 @@ class EnvironmentModelMixin:
                 'vertices': np.ascontiguousarray(verts, dtype=np.float32),
                 'indices': np.ascontiguousarray(idx, dtype=np.uint32),
                 'tex_key': None, 'tri_count': 2, 'color': color,
+                'material_contract': material_contract,
                 'base_color': np.array(color, dtype=np.float32),
                 'base_alpha': 1.0,
                 'roughness_factor': 1.0,
@@ -398,7 +408,7 @@ class EnvironmentModelMixin:
                 'tex_offset': np.array([0.0, 0.0], dtype=np.float32),
                 'tex_scale': np.array([1.0, 1.0], dtype=np.float32),
                 'tex_rotation': 0.0,
-                'material': {
+                'render_material': {
                     'base_key': None, 'normal_key': None, 'occlusion_key': None, 'mr_key': None, 'emissive_key': None,
                     'base_color': tuple(float(x) for x in color), 'base_alpha': 1.0, 'roughness': 1.0, 'metallic': 0.0,
                     'alpha_mode_id': 0.0, 'alpha_cutoff': 0.5, 'unlit': False, 'double_sided': False,
@@ -511,8 +521,11 @@ class EnvironmentModelMixin:
         views = getattr(self, '_last_located_views', None)
         if views:
             self._apply_profile_view_pose_to_xr_space(views)
-        if not self._environment_screen_locked():
+        has_screen_profile = isinstance(getattr(self, '_screen_profile', None), dict) and bool(self._screen_profile)
+        has_view_pose = self._view_pose_has_explicit_layout()
+        if not has_view_pose:
             self._reset_xr_space_to_identity()
+        if not has_screen_profile:
             if not self._restore_screen_state():
                 self._reset_screen_to_default(show_border=True)
         self._persist_runtime_settings()

@@ -1,5 +1,7 @@
 # Desktop2Stereo OpenXR viewer: environment profile and runtime settings helpers.
 
+import json
+
 from .implementation import *
 from .constants import _BG_COLORS
 from .background_bake import BackgroundBakeService
@@ -137,6 +139,8 @@ class EnvironmentProfileMixin:
         self._env_texture_anisotropy = float(base['texture_anisotropy'])
         self._env_perf_log = bool(base.get('perf_log', False))
         self._xr_render_scale = float(base['xr_render_scale'])
+        self._xr_projection_near = float(base.get('xr_projection_near', getattr(self, '_xr_projection_near', 0.05)))
+        self._xr_projection_far = float(base.get('xr_projection_far', getattr(self, '_xr_projection_far', 100.0)))
         self._screen_light_intensity = float(base.get('screen_light_intensity', self._screen_light_intensity))
         self._controller_hdr_lighting = bool(base.get('controller_hdr_lighting', True))
         self._panorama_background_path = None
@@ -264,6 +268,16 @@ class EnvironmentProfileMixin:
                 self._xr_render_scale = max(0.5, min(2.0, float(profile['xr_render_scale'])))
             except (TypeError, ValueError):
                 pass
+        if 'xr_projection_near' in profile:
+            try:
+                self._xr_projection_near = max(0.01, float(profile['xr_projection_near']))
+            except (TypeError, ValueError):
+                pass
+        if 'xr_projection_far' in profile:
+            try:
+                self._xr_projection_far = max(float(self._xr_projection_near) + 1.0, float(profile['xr_projection_far']))
+            except (TypeError, ValueError):
+                pass
         quality_filter = profile.get('screen_quality_filter', profile.get('xr_screen_quality_filter'))
         if quality_filter is not None:
             self._screen_quality_filter = bool(quality_filter)
@@ -362,7 +376,8 @@ class EnvironmentProfileMixin:
         print(
             f"[OpenXRViewer] Environment: {self._environment_model} ({self._env_model_path}) "
             f"quality={self._env_render_quality} shading={self._env_shading_mode} "
-            f"xr_scale={self._xr_render_scale:.2f}{baked_label}"
+            f"xr_scale={self._xr_render_scale:.2f} "
+            f"xr_far={float(getattr(self, '_xr_projection_far', 100.0)):.1f}m{baked_label}"
         )
 
 

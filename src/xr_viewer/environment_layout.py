@@ -8,7 +8,57 @@ class EnvironmentLayoutMixin:
 
     def _environment_screen_locked(self):
         screen = getattr(self, '_screen_profile', {}) or {}
-        return isinstance(screen, dict) and bool(screen)
+        if not isinstance(screen, dict) or not screen:
+            return False
+        return not self._profile_bool(
+            screen,
+            ('allow_controller_move', 'controller_movable', 'unlock_controller_move'),
+            False,
+        )
+
+
+    def _view_pose_has_explicit_layout(self, view=None):
+        if view is None:
+            view = getattr(self, '_view_pose_profile', {}) or {}
+        if not isinstance(view, dict) or not view:
+            return False
+        pos_keys = ('position', 'camera_position', 'viewer_position')
+        rot_deg_keys = ('rotation_deg', 'camera_rotation_deg', 'viewer_rotation_deg')
+        rot_rad_keys = ('rotation', 'camera_rotation', 'viewer_rotation')
+        return (
+            any(key in view for key in pos_keys)
+            or all(key in view for key in ('x', 'y', 'z'))
+            or any(key in view for key in rot_deg_keys + rot_rad_keys)
+            or 'angle' in view
+            or bool(view.get('auto_center_on_screen', False))
+        )
+
+
+    def _profile_view_position(self, view, default):
+        for key in ('position', 'camera_position', 'viewer_position'):
+            value = view.get(key)
+            if isinstance(value, (list, tuple)) and len(value) >= 3:
+                try:
+                    return [float(value[0]), float(value[1]), float(value[2])]
+                except (TypeError, ValueError):
+                    pass
+        if all(key in view for key in ('x', 'y', 'z')):
+            try:
+                return [float(view['x']), float(view['y']), float(view['z'])]
+            except (TypeError, ValueError):
+                pass
+        return list(default)
+
+
+    def _profile_view_rotation_rad(self, view, deg_keys, rad_keys, default):
+        if any(key in view for key in deg_keys + rad_keys):
+            return self._profile_rotation_rad(view, deg_keys, rad_keys, default)
+        if 'angle' in view:
+            try:
+                return [math.radians(float(view.get('angle', 0.0))), 0.0, 0.0]
+            except (TypeError, ValueError):
+                pass
+        return list(default)
 
 
     def _head_model_mat4_from_views(self, views):
@@ -58,8 +108,8 @@ class EnvironmentLayoutMixin:
         pos_keys = ('position', 'camera_position', 'viewer_position')
         rot_deg_keys = ('rotation_deg', 'camera_rotation_deg', 'viewer_rotation_deg')
         rot_rad_keys = ('rotation', 'camera_rotation', 'viewer_rotation')
-        has_pos = any(key in view for key in pos_keys)
-        has_rot = any(key in view for key in rot_deg_keys + rot_rad_keys)
+        has_pos = any(key in view for key in pos_keys) or all(key in view for key in ('x', 'y', 'z'))
+        has_rot = any(key in view for key in rot_deg_keys + rot_rad_keys) or 'angle' in view
         auto_center = bool(view.get('auto_center_on_screen', False))
         if not (has_pos or has_rot or auto_center):
             return False
@@ -75,16 +125,16 @@ class EnvironmentLayoutMixin:
         if auto_center:
             auto_pos = self._auto_view_position_from_screen(view, has_rot, rot_deg_keys, rot_rad_keys)
             if auto_pos is None and has_pos:
-                auto_pos = self._profile_vec3(view, pos_keys, raw_head[:3, 3].tolist())
+                auto_pos = self._profile_view_position(view, raw_head[:3, 3].tolist())
             if auto_pos is not None:
                 desired_head[:3, 3] = np.array(auto_pos, dtype=np.float32)
         elif has_pos:
             desired_head[:3, 3] = np.array(
-                self._profile_vec3(view, pos_keys, raw_head[:3, 3].tolist()),
+                self._profile_view_position(view, raw_head[:3, 3].tolist()),
                 dtype=np.float32,
             )
         if has_rot:
-            rot = self._profile_rotation_rad(view, rot_deg_keys, rot_rad_keys, [0.0, 0.0, 0.0])
+            rot = self._profile_view_rotation_rad(view, rot_deg_keys, rot_rad_keys, [0.0, 0.0, 0.0])
             desired_head[:3, :3] = euler_to_mat4(*rot)[:3, :3]
 
         try:

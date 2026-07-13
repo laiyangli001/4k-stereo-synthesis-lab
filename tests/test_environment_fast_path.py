@@ -5,6 +5,33 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 
 
+def test_environment_profiles_imports_json_for_profile_io():
+    source = (SRC / "xr_viewer" / "environment_profiles.py").read_text(encoding="utf-8")
+
+    assert "import json" in source
+    assert "json.load" in source
+    assert "json.dump" in source
+
+
+def test_environment_primitives_drop_legacy_material_dict_key():
+    source = (SRC / "xr_viewer" / "environment_model.py").read_text(encoding="utf-8")
+    d3d_source = (SRC / "xr_viewer" / "d3d11_native_renderer.py").read_text(encoding="utf-8")
+    generate_default_room = source.split("def _generate_default_room", 1)[1].split("def _init_dark_room", 1)[0]
+    load_env_model = source.split("def _load_env_model", 1)[1].split("def _release_env_model_resources", 1)[0]
+    draw_environment = d3d_source.split("def _draw_environment_model", 1)[1].split("def _draw_lasers", 1)[0]
+
+    assert "GltfMaterial" in source
+    assert "material_contract = GltfMaterial(" in generate_default_room
+    assert "'material_contract': material_contract" in generate_default_room
+    assert "'render_material':" in generate_default_room
+    assert "prim['render_material'] =" in load_env_model
+    assert "prim['material']" not in load_env_model
+    assert "'material':" not in generate_default_room
+    assert 'prim.get("render_material")' in draw_environment
+    assert 'prim.get("material")' not in draw_environment
+    assert "render_pass_from_primitive(prim)" in source
+
+
 def _make_default_viewer(monkeypatch):
     monkeypatch.chdir(SRC)
     from xr_viewer.environment import OpenXRViewer
@@ -114,6 +141,114 @@ def test_default_screen_state_persistence_is_disabled(monkeypatch):
     assert viewer._persist_screen_state() is None
     assert viewer.screen_width == 2.4
     assert viewer.screen_distance == 2.0
+
+
+def test_environment_screen_profile_can_unlock_controller_move(monkeypatch):
+    viewer = _make_default_viewer(monkeypatch)
+
+    viewer._screen_profile = {}
+    assert not viewer._environment_screen_locked()
+
+    viewer._screen_profile = {"width": 2.4}
+    assert viewer._environment_screen_locked()
+
+    viewer._screen_profile = {"width": 2.4, "allow_controller_move": True}
+    assert not viewer._environment_screen_locked()
+
+    viewer._screen_profile = {"width": 2.4, "controller_movable": "true"}
+    assert not viewer._environment_screen_locked()
+
+    viewer._screen_profile = {"width": 2.4, "unlock_controller_move": "1"}
+    assert not viewer._environment_screen_locked()
+
+
+def test_artemis_allows_controller_screen_move_for_large_scene():
+    import json
+
+    profile_path = SRC / "xr_viewer" / "environments" / "Artemis" / "profile.json"
+    profile = json.loads(profile_path.read_text(encoding="utf-8"))
+
+    assert profile["screen"]["allow_controller_move"] is True
+
+
+def test_artemis_large_scene_uses_active_view_pose_and_long_xr_far_plane():
+    import json
+
+    profile_path = SRC / "xr_viewer" / "environments" / "Artemis" / "profile.json"
+    profile = json.loads(profile_path.read_text(encoding="utf-8"))
+
+    assert "view_pose" not in profile
+    assert profile["view_pose_index"] == 1
+    assert profile["view_poses"][1]["y"] == 900.0
+    assert profile["xr_projection_near"] == 0.1
+    assert profile["xr_projection_far"] >= 20000.0
+
+
+def test_openxr_projection_clip_planes_are_profile_configurable():
+    impl = (SRC / "xr_viewer" / "implementation.py").read_text(encoding="utf-8")
+    profiles = (SRC / "xr_viewer" / "environment_profiles.py").read_text(encoding="utf-8")
+    pipeline = (SRC / "xr_viewer" / "openxr_frame_pipeline.py").read_text(encoding="utf-8")
+    presenter = (SRC / "xr_viewer" / "projection_layer_presenter.py").read_text(encoding="utf-8")
+
+    assert "self._xr_projection_near = max(0.01" in impl
+    assert "self._xr_projection_far = max(self._xr_projection_near + 1.0" in impl
+    assert "profile['xr_projection_far']" in profiles
+    assert "self._refresh_default_projection()" in pipeline
+    assert "_fov_to_proj_mat4(self.default_fov, near=near, far=far)" in pipeline
+    assert "_fov_to_proj_mat4_d3d(self.default_fov, near=near, far=far)" in pipeline
+    assert "_fov_to_proj_mat4(view.fov, near=near, far=far)" in presenter
+    assert "_fov_to_proj_mat4_d3d(view.fov, near=near, far=far)" in presenter
+
+
+def test_environment_readme_documents_controller_move_unlock():
+    source = (SRC / "xr_viewer" / "environments" / "README.md").read_text(encoding="utf-8")
+
+    assert "allow_controller_move" in source
+    assert "by default" in source
+    assert "controller grip move/resize controls" in source
+
+
+def test_profile_view_pose_accepts_xyz_position_alias(monkeypatch):
+    import math
+
+    viewer = _make_default_viewer(monkeypatch)
+
+    assert viewer._view_pose_has_explicit_layout({"x": 1.0, "y": 2.0, "z": 3.0})
+    assert viewer._profile_view_position({"x": 1.0, "y": 2.0, "z": 3.0}, [0.0, 0.0, 0.0]) == [1.0, 2.0, 3.0]
+    assert viewer._profile_view_position(
+        {"position": [4.0, 5.0, 6.0], "x": 1.0, "y": 2.0, "z": 3.0},
+        [0.0, 0.0, 0.0],
+    ) == [4.0, 5.0, 6.0]
+    assert viewer._profile_view_rotation_rad(
+        {"angle": 90.0},
+        ("rotation_deg",),
+        ("rotation",),
+        [0.0, 0.0, 0.0],
+    ) == [math.radians(90.0), 0.0, 0.0]
+
+
+def test_environment_switch_does_not_reset_profile_view_pose_for_movable_screen():
+    source = (SRC / "xr_viewer" / "environment_model.py").read_text(encoding="utf-8")
+    switch_func = source.split("def _switch_environment_model", 1)[1]
+
+    assert "has_screen_profile =" in switch_func
+    assert "has_view_pose = self._view_pose_has_explicit_layout()" in switch_func
+    assert "if not has_view_pose:\n            self._reset_xr_space_to_identity()" in switch_func
+    assert "if not has_screen_profile:\n            if not self._restore_screen_state():" in switch_func
+    assert "if not self._environment_screen_locked():\n            self._reset_xr_space_to_identity()" not in switch_func
+
+
+def test_left_grip_screen_drag_uses_cursor_uv_and_delta_limit():
+    source = (SRC / "xr_viewer" / "implementation.py").read_text(encoding="utf-8")
+    drag_loop = source.split("# Per-controller laser requirement", 1)[1].split("# Keyboard grip-to-move", 1)[0]
+
+    assert "cursor_uv = self._cursor_uv_l if is_left else self._cursor_uv_r" in drag_loop
+    assert "hit_world = self._screen_uv_to_world(float(cursor_uv[0]), float(cursor_uv[1]))" in drag_loop
+    assert "delta_len = math.hypot(delta_x, delta_y)" in drag_loop
+    assert "max_speed = max(1.0, min(80.0, float(self.screen_width) * 0.75))" in drag_loop
+    assert "max_delta = max_speed * max(float(dt), 1.0 / 120.0)" in drag_loop
+    assert "self.screen_pan_x += float(np.dot(delta, right_axis))" not in drag_loop
+    assert "self.screen_pan_y += float(np.dot(delta, up_axis))" not in drag_loop
 
 
 def test_default_glow_off_uses_blank_fast_path(monkeypatch):

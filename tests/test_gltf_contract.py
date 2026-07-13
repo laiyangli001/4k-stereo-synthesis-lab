@@ -132,6 +132,43 @@ def test_preview_room_layout_uses_active_uv1_attribute_for_base_texcoord():
     assert 'env_prog["u_base_texcoord"].value' in source
 
 
+def test_preview_room_layout_mouse_pitch_persists_for_legacy_angle_profiles():
+    source = (SRC / "tools" / "preview_room_layout.py").read_text(encoding="utf-8")
+    setter = source.split("def _set_pose_rotation_deg", 1)[1].split("def _resolve_room_dir", 1)[0]
+
+    assert 'view["rotation_deg"] = rounded' in setter
+    assert 'view["angle"] = rounded[0]' in setter
+    assert 'if "angle" in view and "rotation_deg" not in view' not in setter
+
+
+def test_preview_room_layout_scales_navigation_speed_to_scene_extent():
+    source = (SRC / "tools" / "preview_room_layout.py").read_text(encoding="utf-8")
+    speed_fn = source.split("def _preview_motion_speeds", 1)[1].split("def main", 1)[0]
+
+    assert "max_extent / 50.0" in speed_fn
+    assert "min(80.0" in speed_fn
+    assert "_preview_motion_speeds(env_world_min, env_world_max)" in source
+    assert "Preview navigation: move_speed=" in source
+    assert "speed = 0.75" not in source.split("def main", 1)[1]
+    assert "size_speed = 0.8" not in source.split("def main", 1)[1]
+
+
+def test_preview_room_layout_ctrl_enables_one_meter_per_second_fine_mode():
+    source = (SRC / "tools" / "preview_room_layout.py").read_text(encoding="utf-8")
+    main_source = source.split("def main", 1)[1]
+
+    assert "PREVIEW_FINE_MOVE_SPEED_MPS = 1.0" in source
+    assert "Preview fine mode: hold Ctrl" in source
+    assert "def ctrl_down" in main_source
+    assert "glfw.KEY_LEFT_CONTROL" in main_source
+    assert "glfw.KEY_RIGHT_CONTROL" in main_source
+    assert "active_move_speed = PREVIEW_FINE_MOVE_SPEED_MPS if fine_mode else speed" in main_source
+    assert "active_size_speed = PREVIEW_FINE_MOVE_SPEED_MPS if fine_mode else size_speed" in main_source
+    assert "step = active_move_speed * dt" in main_source
+    assert "+ active_size_speed * dt" in main_source
+    assert "- active_size_speed * dt" in main_source
+
+
 def test_gltf_color_management_policy_matches_material_texture_roles():
     from xr_viewer.material_contract import GLTF_MATERIAL_TEXTURE_BINDINGS
 

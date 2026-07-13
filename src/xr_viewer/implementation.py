@@ -445,6 +445,8 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
         self._env_perf_accum_ms = 0.0
         self._env_perf_samples = 0
         self._xr_render_scale = max(0.5, min(2.0, float(kwargs.get('xr_render_scale', 1.0))))
+        self._xr_projection_near = max(0.01, float(kwargs.get('xr_projection_near', 0.05)))
+        self._xr_projection_far = max(self._xr_projection_near + 1.0, float(kwargs.get('xr_projection_far', 100.0)))
         self._screen_quality_filter = bool(kwargs.get('screen_quality_filter', False))
         self._screen_quality_sharpness = max(0.0, min(1.0, float(kwargs.get('screen_quality_sharpness', 0.35))))
         self._screen_quality_oversample = max(0.75, min(1.5, float(kwargs.get('screen_quality_oversample', 1.0))))
@@ -472,6 +474,8 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
             'texture_anisotropy': self._env_texture_anisotropy,
             'perf_log': self._env_perf_log,
             'xr_render_scale': self._xr_render_scale,
+            'xr_projection_near': self._xr_projection_near,
+            'xr_projection_far': self._xr_projection_far,
             'screen_quality_filter': self._screen_quality_filter,
             'screen_quality_sharpness': self._screen_quality_sharpness,
             'screen_quality_oversample': self._screen_quality_oversample,
@@ -3141,11 +3145,11 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
                 sy = math.sin(self.screen_yaw)
                 screen_normal = np.array([cp * sy, -sp, cp * cy], dtype=np.float64)
                 screen_center = self._screen_world_pos(cy, sy, cp, sp).astype(np.float64)
-                if self._screen_curved:
-                    cursor_uv = self._cursor_uv_l if is_left else self._cursor_uv_r
-                    if cursor_uv is None:
-                        continue
+                cursor_uv = self._cursor_uv_l if is_left else self._cursor_uv_r
+                if cursor_uv is not None:
                     hit_world = self._screen_uv_to_world(float(cursor_uv[0]), float(cursor_uv[1]))
+                elif self._screen_curved:
+                    continue
                 else:
                     denom = np.dot(screen_normal, ray_dir)
                     if abs(denom) < 1e-6:
@@ -3170,8 +3174,17 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
                         # follows the laser.  The delta in screen X/Y ->pan_x/pan_y.
                         anchor_world = screen_center + right_axis * saved_local[0] + up_axis * saved_local[1]
                         delta = hit_world - anchor_world
-                        self.screen_pan_x += float(np.dot(delta, right_axis))
-                        self.screen_pan_y += float(np.dot(delta, up_axis))
+                        delta_x = float(np.dot(delta, right_axis))
+                        delta_y = float(np.dot(delta, up_axis))
+                        delta_len = math.hypot(delta_x, delta_y)
+                        max_speed = max(1.0, min(80.0, float(self.screen_width) * 0.75))
+                        max_delta = max_speed * max(float(dt), 1.0 / 120.0)
+                        if delta_len > max_delta and delta_len > 1e-6:
+                            scale = max_delta / delta_len
+                            delta_x *= scale
+                            delta_y *= scale
+                        self.screen_pan_x += delta_x
+                        self.screen_pan_y += delta_y
                         # Left grip: snap 90 deg when wrist roll exceeds 45 deg threshold
                         if self._grip_l_ref_mat is not None and not self._grip_l_snapped:
                             R_cur = self._grip_mat_l[:3, :3].astype(np.float64)

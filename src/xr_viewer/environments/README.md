@@ -40,6 +40,15 @@ Localized label shown in the GUI dropdown. Falls back to the folder name if abse
 | `model_rotation_deg` / `rotation_deg` | [yaw, pitch, roll] | `[0, 0, 0]` | Rotation in **degrees**. Yaw = Y-axis, pitch = X-axis, roll = Z-axis. |
 | `model_scale` / `scale` | [x, y, z] | `[1, 1, 1]` | Non-uniform scale factors. |
 
+### XR Projection Clip Range
+
+Large environments can extend beyond the default 100m projection far plane. Set these fields when `view_poses`, screen placement, or model bounds are hundreds or thousands of metres from the viewer.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `xr_projection_near` | float | `0.05` | Near clip plane in metres. Increase slightly for kilometre-scale scenes to preserve depth precision. |
+| `xr_projection_far` | float | `100.0` | Far clip plane in metres. Artemis uses `20000.0` so the 9km model is not clipped in OpenXR. |
+
 ### Lighting
 
 | Key | Type | Default | Description |
@@ -95,7 +104,7 @@ Cycle through saved lighting configurations with **long-press Y** (left controll
 }
 ```
 
-When a `screen` section is present, the environment is **locked** — the virtual screen snaps to the configured position and the user cannot freely move it with controllers. This is ideal for rooms where the screen should align with a modelled TV, projector wall, or cinema screen in the GLB.
+When a `screen` section is present, the environment is **locked** by default — the virtual screen snaps to the configured position and the user cannot freely move it with controllers. This is ideal for rooms where the screen should align with a modelled TV, projector wall, or cinema screen in the GLB. Set `allow_controller_move: true` inside `screen` for large free-navigation scenes where the configured screen is only an initial placement.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
@@ -104,6 +113,7 @@ When a `screen` section is present, the environment is **locked** — the virtua
 | `rotation_deg` / `screen_rotation_deg` | [yaw, pitch, roll] | `[0, 0, 0]` | Screen orientation in **degrees**. |
 | `curve_axis` | string | `"none"` | Initial curve mode: `"horizontal"`, `"vertical"`, or `"none"`. Older `curved: true` profiles are still read as `"horizontal"`; `curved: false` is read as `"none"`. |
 | `allow_curve` | bool | `true` | Whether the user can toggle curved mode. |
+| `allow_controller_move` | bool | `false` | If `true`, this profile keeps the initial screen placement but does not lock controller grip move/resize controls. |
 
 ### Viewer Seating (View Poses)
 

@@ -1947,7 +1947,8 @@ class D3D11NativeRenderer:
         config_material_diag = ""
         for _dist, _grip_mat, prims, _press_map in controllers:
             for prim in prims:
-                config_material_diag = str((prim.get("material") or {}).get("material_diag", "") or "").strip().lower()
+                material = prim.get("render_material") if "render_material" in prim else prim.get("material")
+                config_material_diag = str((material or {}).get("material_diag", "") or "").strip().lower()
                 if config_material_diag:
                     break
             if config_material_diag:
@@ -2008,7 +2009,9 @@ class D3D11NativeRenderer:
                     continue
                 vb, ib, index_count, topology = res
                 mvp = (vp_mat @ model).astype(np.float32)
-                mat = prim.get("material") or {}
+                mat = prim.get("render_material") if "render_material" in prim else prim.get("material")
+                if not isinstance(mat, dict):
+                    mat = {}
                 material_srvs = {
                     binding.role: self._controller_texture_srv(mat.get(binding.material_key), tex_images)
                     for binding in GLTF_MATERIAL_TEXTURE_BINDINGS
@@ -2197,7 +2200,7 @@ class D3D11NativeRenderer:
             images.update(prim.get("d3d_tex_images", {}) or {})
             # Room geometry is viewed from the inside; keep controller back-face
             # rejection from hiding outward-wound interior surfaces.
-            material = prim.get("material")
+            material = prim.get("render_material")
             if isinstance(material, dict):
                 material["double_sided"] = True
         proxy = SimpleNamespace(

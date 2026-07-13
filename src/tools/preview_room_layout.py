@@ -18,6 +18,7 @@ import numpy as np
 
 APP_DIR = Path(__file__).resolve().parents[1]
 ENVIRONMENTS_DIR = APP_DIR / "xr_viewer" / "environments"
+PREVIEW_FINE_MOVE_SPEED_MPS = 1.0
 sys.path.insert(0, str(APP_DIR))
 os.chdir(APP_DIR)
 warnings.filterwarnings(
@@ -196,10 +197,9 @@ def _set_pose_position(view: dict, pos):
 
 def _set_pose_rotation_deg(view: dict, rot):
     rounded = [round(float(v), 3) for v in rot]
-    if "angle" in view and "rotation_deg" not in view:
+    view["rotation_deg"] = rounded
+    if "angle" in view:
         view["angle"] = rounded[0]
-    else:
-        view["rotation_deg"] = rounded
 
 
 def _resolve_room_dir(room: str) -> Path:
@@ -355,6 +355,24 @@ def _world_bounds_from_local(local_min, local_max, model):
     return world.min(axis=0), world.max(axis=0)
 
 
+def _preview_motion_speeds(env_world_min, env_world_max):
+    base_move_speed = 0.75
+    base_size_speed = 0.8
+    if env_world_min is None or env_world_max is None:
+        return base_move_speed, base_size_speed
+
+    bounds_size = np.asarray(env_world_max, dtype=np.float64) - np.asarray(env_world_min, dtype=np.float64)
+    if bounds_size.size == 0:
+        return base_move_speed, base_size_speed
+
+    max_extent = float(np.nanmax(np.abs(bounds_size)))
+    if not np.isfinite(max_extent) or max_extent <= 0.0:
+        return base_move_speed, base_size_speed
+
+    scene_scale = max(1.0, min(80.0, max_extent / 50.0))
+    return base_move_speed * scene_scale, base_size_speed * scene_scale
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("room", nargs="?", default="bedroom")
@@ -409,9 +427,8 @@ def main():
     view_rot = [math.radians(v) for v in view_rot_deg]
     preview_exposure = float(args.exposure if args.exposure is not None else profile.get("preview_exposure", 2.2))
     preview_gamma = float(args.gamma if args.gamma is not None else profile.get("preview_gamma", 2.2))
-    speed = 0.75
+    speed, size_speed = _preview_motion_speeds(env_world_min, env_world_max)
     rot_speed = 45.0
-    size_speed = 0.8
     saved_flash = 0.0
     edit_target = "SCREEN"
     tab_was_down = False
@@ -421,6 +438,8 @@ def main():
     print(f"Room: {args.room}")
     print(f"Profile: {profile_path}")
     print(f"Preview lighting: exposure={preview_exposure:.2f} gamma={preview_gamma:.2f}")
+    print(f"Preview navigation: move_speed={speed:.2f}m/s size_speed={size_speed:.2f}m/s")
+    print(f"Preview fine mode: hold Ctrl for {PREVIEW_FINE_MOVE_SPEED_MPS:.2f}m/s movement/size adjustment")
     print("Controls:")
     print("  Tab: switch edit target SCREEN/VIEW")
     print("  SCREEN: Arrow=screen X/Y, PageUp/PageDown=screen Z, +/-=width")
@@ -456,6 +475,9 @@ def main():
     def key_down(key):
         return glfw.get_key(window, key) in (glfw.PRESS, glfw.REPEAT)
 
+    def ctrl_down():
+        return key_down(glfw.KEY_LEFT_CONTROL) or key_down(glfw.KEY_RIGHT_CONTROL)
+
     last_time = glfw.get_time()
     while not glfw.window_should_close(window):
         now = glfw.get_time()
@@ -475,7 +497,10 @@ def main():
         changed_screen = False
         changed_view = False
 
-        step = speed * dt
+        fine_mode = ctrl_down()
+        active_move_speed = PREVIEW_FINE_MOVE_SPEED_MPS if fine_mode else speed
+        active_size_speed = PREVIEW_FINE_MOVE_SPEED_MPS if fine_mode else size_speed
+        step = active_move_speed * dt
         rstep = rot_speed * dt
 
         if edit_target == "SCREEN":
@@ -503,10 +528,10 @@ def main():
             if key_down(glfw.KEY_PAGE_DOWN):
                 pos[2] -= step; changed_screen = True
             if key_down(glfw.KEY_EQUAL) or key_down(glfw.KEY_KP_ADD):
-                screen["width"] = round(max(0.05, float(screen.get("width", 2.4)) + size_speed * dt), 4)
+                screen["width"] = round(max(0.05, float(screen.get("width", 2.4)) + active_size_speed * dt), 4)
                 changed_screen = True
             if key_down(glfw.KEY_MINUS) or key_down(glfw.KEY_KP_SUBTRACT):
-                screen["width"] = round(max(0.05, float(screen.get("width", 2.4)) - size_speed * dt), 4)
+                screen["width"] = round(max(0.05, float(screen.get("width", 2.4)) - active_size_speed * dt), 4)
                 changed_screen = True
             if key_down(glfw.KEY_Q):
                 rot[0] += rstep; changed_screen = True

@@ -26,6 +26,11 @@ class ProjectionLayerPresenter:
     def __init__(self, viewer):
         self.viewer = viewer
 
+    def _projection_clip_planes(self):
+        near = max(0.01, float(getattr(self.viewer, '_xr_projection_near', 0.05) or 0.05))
+        far = max(near + 1.0, float(getattr(self.viewer, '_xr_projection_far', 100.0) or 100.0))
+        return near, far
+
     def render_projection(self, *, enabled, views, default_fov, default_proj, default_proj_d3d, updated_quad_eyes=()):
         viewer = self.viewer
         if not enabled:
@@ -58,6 +63,7 @@ class ProjectionLayerPresenter:
     def render_d3d11_native(self, views, default_fov, default_proj_d3d):
         viewer = self.viewer
         renderer = viewer._d3d11_native_renderer
+        near, far = self._projection_clip_planes()
         if renderer is None or not getattr(renderer, "has_frame", False):
             viewer._breakdown_inc('openxr_projection_d3d11_no_frame')
             return []
@@ -77,7 +83,7 @@ class ProjectionLayerPresenter:
                 sc_w, sc_h = viewer._swapchain_sizes[eye_index]
                 view = views[eye_index] if views and views[eye_index] else None
                 view_mat = _pose_to_view_mat4(view.pose) if view else np.eye(4, dtype=np.float32)
-                proj_mat = _fov_to_proj_mat4_d3d(view.fov) if view else default_proj_d3d
+                proj_mat = _fov_to_proj_mat4_d3d(view.fov, near=near, far=far) if view else default_proj_d3d
                 mvp = proj_mat @ view_mat @ model
 
                 if viewer._runtime_direct_source:
@@ -136,6 +142,7 @@ class ProjectionLayerPresenter:
 
     def render_nv_dx_interop(self, views, default_fov, default_proj):
         viewer = self.viewer
+        near, far = self._projection_clip_planes()
         eye_layer_views = []
         for eye_index in range(2):
             swapchain = viewer._xr_swapchains[eye_index]
@@ -147,7 +154,7 @@ class ProjectionLayerPresenter:
                 sc_w, sc_h = viewer._swapchain_sizes[eye_index]
                 view = views[eye_index] if views and views[eye_index] else None
                 view_mat = _pose_to_view_mat4(view.pose) if view else np.eye(4, dtype=np.float32)
-                proj_mat = _fov_to_proj_mat4(view.fov) if view else default_proj
+                proj_mat = _fov_to_proj_mat4(view.fov, near=near, far=far) if view else default_proj
 
                 mgl_fbo, _raw_fbo = viewer._get_or_create_nv_interop_fbo(
                     eye_index, img_index, sc_image.texture, sc_w, sc_h,
@@ -176,6 +183,7 @@ class ProjectionLayerPresenter:
 
     def render_opengl(self, views, default_fov, default_proj, *, updated_quad_eyes=()):
         viewer = self.viewer
+        near, far = self._projection_clip_planes()
         eye_layer_views = []
         for eye_index in range(2):
             swapchain = viewer._xr_swapchains[eye_index]
@@ -187,7 +195,7 @@ class ProjectionLayerPresenter:
                 sc_w, sc_h = viewer._swapchain_sizes[eye_index]
                 view = views[eye_index] if views and views[eye_index] else None
                 view_mat = _pose_to_view_mat4(view.pose) if view else np.eye(4, dtype=np.float32)
-                proj_mat = _fov_to_proj_mat4(view.fov) if view else default_proj
+                proj_mat = _fov_to_proj_mat4(view.fov, near=near, far=far) if view else default_proj
 
                 raw_fbo, mgl_fbo = viewer._get_or_create_fbo(
                     eye_index, img_index, sc_image.image, sc_w, sc_h

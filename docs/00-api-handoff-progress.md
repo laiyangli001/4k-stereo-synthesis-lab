@@ -23,7 +23,7 @@ OpenXR projection-main stereo presentation, glTF 2.0 renderer compliance layer, 
 Latest pushed task commit:
 
 ```text
-c03f61a fix: improve OpenXR quad stereo diagnostics
+1fbcd64 fix: keep preview uv1 attribute active
 ```
 
 Canonical specs for current work:
@@ -55,7 +55,7 @@ Canonical specs for current work:
 - CUDA/GL image texture upload must remain image-texture-first. PBO is an acceptable GPU fallback, but it must be logged as fallback and must not hide the original image texture failure. Any CPU upload fallback in OpenXR, local viewer, stream/debug realtime display, or depth provider hot path must print a red console warning and record the reason.
 - OpenXR Quad layer is not a reliable VDXR main stereo display path. The latest logs prove runtime left/right eye tensors differ, OpenGL shared-array Quad swapchains are created, and Quad headers submit `eye0 array=0` / `eye1 array=1`; however the headset still shows no useful 3D. Projection layer remains the known-good OpenXR stereo path because it uses standard per-eye projection views. Current code should keep the main screen off the Quad path.
 - OpenXR Glow / screen-light sampling must follow `docs/20-openxr-gpu-glow-guide.md`: use GPU source texture, low-resolution glow texture, shader/compute sampling, or future D3D/Vulkan GPU passes. Do not reintroduce realtime `.cpu()`, `.numpy()`, `glReadPixels()`, or `tex.read()` as screen-light sampling sources.
-- glTF environment/controller rendering is not yet a complete glTF 2.0 renderer. `pygltflib` only parses the file structure; the project still needs a compliance adapter that emits a stable mesh/material/texture/render-pass contract for preview, OpenGL, and D3D11. Artemis exposed this with vertex-stride drift, alpha pass handling, and empty `KHR_materials_unlit` extension semantics.
+- glTF environment/controller rendering now has a shared compliance package, stable primitive/material/color/render-pass contracts, and OpenGL/D3D11/preview consumers for the current contract. Remaining risk is real-window/real-device validation: preview GUI smoke has not been re-run after the latest Artemis profile scale/navigation changes, and VDXR visual validation is still required for the D3D11 environment/controller paths.
 
 ## Future Work
 
@@ -73,10 +73,48 @@ Current task queue:
 8. Remove remaining compatibility redundancy after all consumers use the docs/01 contract: old snapshot/API aliases and debug-only fallback keys. Legacy parallax multiplier fields and historical render-scale numeric thresholds have been cleaned from the current runtime/config path and should now be guarded against regressions.
 9. Continue network_stream encoder transport work, especially RTMP / low-latency paths, without redefining stereo synthesis semantics.
 10. Keep `docs/02-desktop2stereo-engineering-design-specification.md` aligned to the `docs/01-Realtime-2d-to-3d-specification.md` eleven-step runtime flow.
-11. Implement `docs/38` glTF 2.0 renderer compliance layer: separate glTF parsing from backend upload, define shared primitive/material/texture/render-pass contracts, and make preview/OpenGL/D3D11 consume the same contract.
+11. Finish validation for the implemented `docs/38` glTF 2.0 renderer compliance layer: run real preview-window smoke, verify Artemis at ship scale, and validate OpenGL/D3D11 environment/controller rendering on target hardware.
 12. Continue `docs/36` phase 2: harden the OpenXR frame loop so the headset presenter keeps refreshing from the last good Projection screen frame when runtime/capture/effects are slow, without backpressuring capture/runtime.
 
 ## Current Status
+
+### 2026-07-14 glTF 2.0 Compliance Layer Implementation and Artemis Scale Follow-up
+
+Implemented locally in the current worktree:
+
+- Split the glTF loader into `src/xr_viewer/gltf/` modules: `document.py`, `accessors.py`, `scene.py`, `primitives.py`, `loader.py`, plus shared contract/color/render-plan helpers. `src/xr_viewer/gltf_loader.py` is now a compatibility facade rather than the implementation body.
+- Added shared `GltfMaterial`, `GltfScene`, texture binding/transform, render-pass classification, transparent sort policy, and color-management diagnostics. `baseColor` and `emissive` are sRGB roles; normal / metallic-roughness / occlusion remain linear data roles.
+- Removed the environment primitive legacy `material` dict fallback. Environment primitives now require `material_contract` and use `render_material` only for renderer-prepared API fields.
+- Fixed the environment profile loader regression where `profile.json` parsing failed with `name 'json' is not defined`.
+- Fixed procedural/default environment primitives so they also carry `material_contract` and do not reintroduce the legacy material dict key.
+- Kept preview, OpenGL, and D3D11 on the 10-float vertex contract including active `TEXCOORD_1`, so Artemis no longer depends on backend-specific stride guesses.
+- Made preview mouse-look persist pitch/roll for legacy `angle` profiles by writing `rotation_deg` while keeping `angle` as yaw compatibility.
+- Scaled Artemis as a ship-sized environment: source units are treated as centimeters, `model_scale` is `[0.1, 0.1, 0.1]`, producing about `925.89m x 180.0m x 655.48m` world bounds. `model_position` is the model local-origin translation used to horizontally center the transformed bounds and place the bottom near world `Y=0`; it is not the camera/view pose and not the model center.
+- Updated `preview_room_layout.py` navigation speed to scale with transformed world bounds. Small room profiles keep the previous base speed; a ~925m Artemis scene resolves to about `13.89m/s` movement and `14.81m/s` screen-size adjustment.
+
+Verification run during this pass:
+
+```powershell
+.\src\python3\python.exe -m py_compile src\xr_viewer\environment_model.py src\xr_viewer\environment_profiles.py src\xr_viewer\d3d11_native_renderer.py tests\test_environment_fast_path.py
+.\src\python3\python.exe -m pytest tests\test_environment_fast_path.py -q
+.\src\python3\python.exe -m py_compile src\tools\preview_room_layout.py tests\test_gltf_contract.py
+.\src\python3\python.exe -m pytest tests\test_gltf_contract.py::test_preview_room_layout_uses_active_uv1_attribute_for_base_texcoord tests\test_gltf_contract.py::test_preview_room_layout_mouse_pitch_persists_for_legacy_angle_profiles tests\test_gltf_contract.py::test_preview_room_layout_scales_navigation_speed_to_scene_extent
+```
+
+Result:
+
+```text
+py_compile passed
+tests/test_environment_fast_path.py: 79 passed, 2 skipped
+tests/test_gltf_contract.py preview focused tests: 3 passed
+Artemis computed world bounds at scale 0.1: size ~= [925.89m, 180.0m, 655.48m], center ~= [0.0m, 90.0m, 0.0m]
+```
+
+Remaining validation target:
+
+- Run the real `preview_room_layout.py Artemis` window smoke after the profile/scale/navigation updates and confirm mouse pitch, movement speed, screen placement, and save behavior in the actual GUI.
+- Re-run OpenXR D3D11/OpenGL environment smoke on target hardware to verify the deleted legacy material dict fallback does not hide any remaining backend consumer.
+- If a “geometric center” camera preset is desired for Artemis, add a separate view pose around `Y=90m`; keep the current ground-level pose semantics separate from `model_position`.
 
 ### 2026-07-13 glTF 2.0 Renderer Compliance Layer Plan
 
