@@ -9,6 +9,7 @@ import xr_viewer.gltf_contract as legacy_gltf_contract
 import xr_viewer.gltf_loader as legacy_gltf_loader
 from xr_viewer.gltf import contract as gltf_contract_module
 from xr_viewer.gltf import loader as gltf_loader_module
+from xr_viewer.gltf import materials as gltf_materials_module
 from xr_viewer.gltf import render_plan as gltf_render_plan_module
 from xr_viewer.gltf import validation as gltf_validation_module
 from xr_viewer.controller_materials import (
@@ -19,6 +20,7 @@ from xr_viewer.controller_materials import (
 from xr_viewer.gltf import (
     audit_gltf_extensions,
     diagnose_gltf_model,
+    gltf_texture_cache_key,
     load_glb_model,
     load_gltf_scene,
     parse_gltf_material,
@@ -54,6 +56,7 @@ def test_gltf_package_reexports_stable_loader_contract_and_render_plan_api():
     assert gltf_package.load_glb_model is load_glb_model
     assert gltf_package.load_gltf_scene is load_gltf_scene
     assert gltf_package.parse_gltf_material is parse_gltf_material
+    assert gltf_package.gltf_texture_cache_key is gltf_texture_cache_key
     assert gltf_package.summarize_gltf_scene is summarize_gltf_scene
     assert gltf_package.build_render_plan is build_render_plan
     assert gltf_package.TRANSPARENT_SORT_POLICY == TRANSPARENT_SORT_POLICY
@@ -61,6 +64,8 @@ def test_gltf_package_reexports_stable_loader_contract_and_render_plan_api():
     assert legacy_gltf_contract.GltfMaterial is GltfMaterial
     assert gltf_contract_module.validate_mesh_contract is validate_mesh_contract
     assert gltf_loader_module.audit_gltf_extensions is audit_gltf_extensions
+    assert gltf_materials_module.parse_gltf_material is parse_gltf_material
+    assert legacy_gltf_loader.parse_gltf_material is parse_gltf_material
     assert gltf_render_plan_module.sort_transparent_primitives is sort_transparent_primitives
     assert gltf_validation_module.audit_gltf_extensions is audit_gltf_extensions
 

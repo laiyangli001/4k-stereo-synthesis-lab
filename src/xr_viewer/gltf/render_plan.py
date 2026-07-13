@@ -1,6 +1,6 @@
 """Shared glTF render pass planning and transparent sorting helpers."""
 
-from ..gltf_contract import (
+from .contract import (
     RenderPass,
     RenderPlan,
     TRANSPARENT_SORT_POLICY,
