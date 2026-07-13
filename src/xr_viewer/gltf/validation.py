@@ -11,6 +11,12 @@ SUPPORTED_OPTIONAL_EXTENSIONS = SUPPORTED_REQUIRED_EXTENSIONS | {
     "KHR_materials_pbrSpecularGlossiness",
 }
 
+UNSUPPORTED_REQUIRED_EXTENSION_HINTS = {
+    "KHR_draco_mesh_compression": "Transcode the mesh to plain glTF geometry or add Draco decoder support.",
+    "EXT_meshopt_compression": "Transcode the mesh to plain glTF geometry or add Meshopt decoder support.",
+    "EXT_mesh_gpu_instancing": "Bake GPU instances into ordinary scene nodes before loading.",
+}
+
 
 def _extension_list(value):
     if not isinstance(value, list):
@@ -36,11 +42,20 @@ def audit_gltf_extensions(gltf):
 
     used.update(material_extensions)
     used.update(primitive_extensions)
+    unsupported_required = sorted(required - SUPPORTED_REQUIRED_EXTENSIONS)
+    unsupported_optional = sorted((used - required) - SUPPORTED_OPTIONAL_EXTENSIONS)
     return {
         "extensionsUsed": sorted(used),
         "extensionsRequired": sorted(required),
-        "unsupportedRequired": sorted(required - SUPPORTED_REQUIRED_EXTENSIONS),
-        "unsupportedOptional": sorted((used - required) - SUPPORTED_OPTIONAL_EXTENSIONS),
+        "unsupportedRequired": unsupported_required,
+        "unsupportedRequiredHints": {
+            extension: UNSUPPORTED_REQUIRED_EXTENSION_HINTS.get(
+                extension,
+                "Convert the asset or add renderer support before loading it.",
+            )
+            for extension in unsupported_required
+        },
+        "unsupportedOptional": unsupported_optional,
         "materialExtensions": sorted(material_extensions),
         "primitiveExtensions": sorted(primitive_extensions),
     }
@@ -50,9 +65,15 @@ def raise_unsupported_required_extensions(gltf, path):
     diagnostics = audit_gltf_extensions(gltf)
     unsupported = diagnostics["unsupportedRequired"]
     if unsupported:
+        hints = diagnostics.get("unsupportedRequiredHints") or {}
+        hint_text = " ".join(
+            f"{extension}: {hints.get(extension)}"
+            for extension in unsupported
+            if hints.get(extension)
+        )
         raise ValueError(
             f"Unsupported required glTF extensions for {path}: {', '.join(unsupported)}. "
-            "Convert the asset or add decoder/material support before loading it."
+            f"{hint_text or 'Convert the asset or add decoder/material support before loading it.'}"
         )
     return diagnostics
 
@@ -60,6 +81,7 @@ def raise_unsupported_required_extensions(gltf, path):
 __all__ = [
     "SUPPORTED_OPTIONAL_EXTENSIONS",
     "SUPPORTED_REQUIRED_EXTENSIONS",
+    "UNSUPPORTED_REQUIRED_EXTENSION_HINTS",
     "audit_gltf_extensions",
     "raise_unsupported_required_extensions",
 ]

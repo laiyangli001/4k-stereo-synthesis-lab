@@ -26,6 +26,7 @@ from xr_viewer.controller_materials import (
 from xr_viewer.gltf import (
     audit_gltf_extensions,
     diagnose_gltf_model,
+    format_gltf_scene_summary,
     gltf_texture_cache_key,
     load_glb_model,
     load_gltf_scene,
@@ -261,6 +262,7 @@ def test_audit_gltf_extensions_reports_required_optional_and_nested_extensions()
 
     assert diagnostics["extensionsRequired"] == ["KHR_draco_mesh_compression", "KHR_materials_unlit"]
     assert diagnostics["unsupportedRequired"] == ["KHR_draco_mesh_compression"]
+    assert "Draco decoder" in diagnostics["unsupportedRequiredHints"]["KHR_draco_mesh_compression"]
     assert diagnostics["unsupportedOptional"] == [
         "EXT_meshopt_compression",
         "VENDOR_material",
@@ -268,6 +270,34 @@ def test_audit_gltf_extensions_reports_required_optional_and_nested_extensions()
     ]
     assert diagnostics["materialExtensions"] == ["KHR_texture_transform", "VENDOR_material"]
     assert diagnostics["primitiveExtensions"] == ["EXT_meshopt_compression"]
+
+
+@pytest.mark.parametrize(
+    ("extension", "expected_hint"),
+    [
+        ("KHR_draco_mesh_compression", "Draco decoder"),
+        ("EXT_meshopt_compression", "Meshopt decoder"),
+        ("EXT_mesh_gpu_instancing", "Bake GPU instances"),
+    ],
+)
+def test_known_unsupported_required_extensions_report_remediation_hints(extension, expected_hint):
+    diagnostics = audit_gltf_extensions(
+        {
+            "extensionsUsed": [extension],
+            "extensionsRequired": [extension],
+        }
+    )
+
+    assert diagnostics["unsupportedRequired"] == [extension]
+    assert expected_hint in diagnostics["unsupportedRequiredHints"][extension]
+    with pytest.raises(ValueError, match=expected_hint):
+        raise_unsupported_required_extensions(
+            {
+                "extensionsUsed": [extension],
+                "extensionsRequired": [extension],
+            },
+            "asset.gltf",
+        )
 
 
 def test_load_glb_model_fails_fast_on_unsupported_required_extension(tmp_path):
@@ -287,8 +317,32 @@ def test_load_glb_model_fails_fast_on_unsupported_required_extension(tmp_path):
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="KHR_draco_mesh_compression"):
+    with pytest.raises(ValueError, match="Draco decoder"):
         load_glb_model(gltf_path)
+
+
+def test_format_gltf_scene_summary_reports_extension_diagnostics():
+    summary = {
+        "primitive_count": 0,
+        "texture_count": 0,
+        "light_count": 0,
+        "alpha_modes": {},
+        "render_passes": {},
+        "vertex_widths": [],
+        "diagnostics": {
+            "unsupportedRequired": ["KHR_draco_mesh_compression"],
+            "unsupportedOptional": ["VENDOR_optional"],
+            "materialExtensions": ["KHR_texture_transform"],
+            "primitiveExtensions": ["EXT_meshopt_compression"],
+        },
+    }
+
+    text = format_gltf_scene_summary(summary, label="Synthetic")
+
+    assert "unsupported_required=['KHR_draco_mesh_compression']" in text
+    assert "unsupported_optional=['VENDOR_optional']" in text
+    assert "material_extensions=['KHR_texture_transform']" in text
+    assert "primitive_extensions=['EXT_meshopt_compression']" in text
 
 
 def test_build_render_plan_groups_primitive_indices_by_pass():

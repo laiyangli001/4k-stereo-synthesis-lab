@@ -203,6 +203,8 @@ def format_gltf_scene_summary(summary, *, label='glTF model'):
     render_passes = summary.get('render_passes') or {}
     unsupported_required = diagnostics.get('unsupportedRequired') or []
     unsupported_optional = diagnostics.get('unsupportedOptional') or []
+    material_extensions = diagnostics.get('materialExtensions') or []
+    primitive_extensions = diagnostics.get('primitiveExtensions') or []
     vertex_widths = summary.get('vertex_widths') or []
     return (
         f"{label}: primitives={summary.get('primitive_count', 0)} "
@@ -212,7 +214,9 @@ def format_gltf_scene_summary(summary, *, label='glTF model'):
         f"alpha_modes={alpha_modes} "
         f"render_passes={render_passes} "
         f"unsupported_required={unsupported_required} "
-        f"unsupported_optional={unsupported_optional}"
+        f"unsupported_optional={unsupported_optional} "
+        f"material_extensions={material_extensions} "
+        f"primitive_extensions={primitive_extensions}"
     )
 
 
