@@ -404,20 +404,66 @@ def test_summarize_gltf_scene_reports_counts_passes_and_bounds():
     assert summary["scene_bounds"][1] == pytest.approx((2.0, 3.0, 4.0))
 
 
-def test_bedroom_diagnostics_smoke_matches_stable_contract():
-    scene = load_gltf_scene(SRC / "xr_viewer" / "environments" / "Bedroom" / "environment.glb")
-    summary = diagnose_gltf_model(SRC / "xr_viewer" / "environments" / "Bedroom" / "environment.glb")
+@pytest.mark.parametrize(
+    ("name", "relative_path", "expected"),
+    [
+        (
+            "Artemis",
+            Path("xr_viewer/environments/Artemis/environment.glb"),
+            {
+                "primitive_count": 44,
+                "texture_count": 19,
+                "light_count": 4,
+                "alpha_modes": {"BLEND": 28, "OPAQUE": 16},
+                "render_passes": {"opaque": 16, "transparent": 28},
+                "extensionsRequired": ["KHR_materials_unlit"],
+                "materialExtensions": ["KHR_materials_unlit"],
+                "primitiveExtensions": [],
+            },
+        ),
+        (
+            "Bedroom",
+            Path("xr_viewer/environments/Bedroom/environment.glb"),
+            {
+                "primitive_count": 414,
+                "texture_count": 137,
+                "light_count": 2,
+                "alpha_modes": {"BLEND": 2, "MASK": 2, "OPAQUE": 410},
+                "render_passes": {"mask": 2, "opaque": 410, "transparent": 2},
+                "extensionsRequired": ["KHR_materials_unlit"],
+                "materialExtensions": [
+                    "KHR_materials_emissive_strength",
+                    "KHR_materials_pbrSpecularGlossiness",
+                    "KHR_materials_unlit",
+                ],
+                "primitiveExtensions": [],
+            },
+        ),
+    ],
+)
+def test_real_environment_models_match_stable_gltf_contract(name, relative_path, expected):
+    path = SRC / relative_path
+    scene = load_gltf_scene(path)
+    summary = diagnose_gltf_model(path)
 
-    assert isinstance(scene, GltfScene)
-    assert len(scene.primitives) > 0
-    assert len(scene.textures) > 0
+    assert isinstance(scene, GltfScene), name
+    assert len(scene.primitives) == expected["primitive_count"]
+    assert len(scene.textures) == expected["texture_count"]
+    assert len(scene.lights) == expected["light_count"]
     assert scene.diagnostics["unsupportedRequired"] == []
     assert scene.diagnostics["colorManagement"] == DEFAULT_GLTF_COLOR_POLICY_DIAGNOSTICS
     assert sum(len(indices) for indices in scene.render_plan.values()) == len(scene.primitives)
-    assert summary["primitive_count"] > 0
-    assert summary["texture_count"] > 0
+    assert summary["primitive_count"] == expected["primitive_count"]
+    assert summary["texture_count"] == expected["texture_count"]
+    assert summary["light_count"] == expected["light_count"]
+    assert summary["alpha_modes"] == expected["alpha_modes"]
+    assert summary["render_passes"] == expected["render_passes"]
     assert summary["vertex_widths"] == [10]
+    assert summary["diagnostics"]["extensionsRequired"] == expected["extensionsRequired"]
     assert summary["diagnostics"]["unsupportedRequired"] == []
+    assert summary["diagnostics"]["unsupportedOptional"] == []
+    assert summary["diagnostics"]["materialExtensions"] == expected["materialExtensions"]
+    assert summary["diagnostics"]["primitiveExtensions"] == expected["primitiveExtensions"]
     assert summary["diagnostics"]["colorManagement"] == DEFAULT_GLTF_COLOR_POLICY_DIAGNOSTICS
     assert summary["render_plan"] == scene.render_plan
     assert sum(summary["render_passes"].values()) == summary["primitive_count"]
