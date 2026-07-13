@@ -34,6 +34,7 @@ Desktop2Stereo 的核心目标是把桌面、窗口、图片或视频源转换�
 8. 所有输出路径必须可 debug、可定位、可回归测试。
 9. OpenXR 主画面立体呈现以 projection layer 为可靠路径；Quad layer 在 VDXR 下只作为实验、诊断或 overlay 路径，背景、Glow、墙面反射仍是软实时路径，不得阻塞 screen submit。
 10. OpenXR 启动时必须先完成 runtime preparation / TensorRT build，再启动 capture_loop，避免 WindowsCaptureCUDA 与 TensorRT/PyTorch CUDA 初始化或 engine build 并发触发 CUDA stream/capture 冲突。
+11. OpenXR / local preview 的 glTF 资源渲染以 glTF 2.0 renderer compliance layer 为目标：parser、合规适配、backend upload/render 明确分层，controller 与 environment 共享同一 mesh/material/texture/render-pass contract。
 ```
 
 ## 当前代码模块地图
@@ -50,7 +51,7 @@ Desktop2Stereo 的核心目标是把桌面、窗口、图片或视频源转换�
 | Runtime pipeline | `src/stereo_runtime/runtime.py`, `pipeline.py` | 每帧 depth、synthesis、OpenXR result、timing、debug_info |
 | Output packing | `src/stereo_runtime/output.py`, `output_triton.py`, `output_convert.py` | SBS/TAB/anaglyph/interleaved/leia/depth_map 打包与 numpy 转换 |
 | Local viewer | `src/viewer/viewer.py`, `viewer_runtime.py`, `gl_texture_uploader.py` | GLFW/ModernGL 本地显示、SBS/TAB/Anaglyph/Interleaved/Leia、OpenGL 路径共享 GPU tensor -> GL texture upload 后端 |
-| OpenXR viewer | `src/xr_viewer/*.py` | OpenXR session、swapchain、Windows 默认 D3D11 native / OpenGL forced-or-auto fallback render、controller/environment、runtime eye 上传；主画面 3D 以 projection layer 为可靠路径，Quad layer 保留为实验/诊断/overlay；controller glTF 材质语义由 OpenGL/D3D11 共享准备，D3D11 native 负责 API 绑定、颜色空间和 swapchain 呈现 |
+| OpenXR viewer | `src/xr_viewer/*.py` | OpenXR session、swapchain、Windows 默认 D3D11 native / OpenGL forced-or-auto fallback render、controller/environment、runtime eye 上传；主画面 3D 以 projection layer 为可靠路径，Quad layer 保留为实验/诊断/overlay；glTF 资源目标是共享 renderer compliance layer，controller/environment 共用 mesh/material/texture/render-pass contract，OpenGL/D3D11 只负责 API 绑定、颜色空间和 swapchain 呈现 |
 | Streaming | `src/streaming/*.py` | MJPEG legacy streaming、RTMP config/legacy hooks |
 | Bench/test tools | `scripts/tools/*`, `tests/*` | 4K benchmark、visual regression、provider/runtime/OpenXR tests |
 
@@ -870,6 +871,42 @@ OpenGL backend 保留为本地 viewer / OpenXR fallback；两套 backend 只在�
 Keyboard hover/held key highlight 属于 keyboard texture 内容，只在 hover/held key index 变化时刷新；cursor 位置变化不得触发整张 keyboard texture 每帧重建。
 ```
 
+### OpenXR glTF 2.0 renderer compliance layer
+
+`docs/38-gltf-2-renderer-compliance-layer-plan.md` 是当前 glTF 渲染层实施计划。工程边界如下：
+
+```text
+glTF 2.0 asset
+-> pygltflib parser
+-> glTF compliance adapter
+-> stable primitive/material/texture/render-pass contract
+-> OpenGL backend / D3D11 backend / preview backend
+```
+
+分层规则：
+
+```text
+1. parser 层只负责读取 glTF/GLB 文档、buffers、accessors、images、samplers、materials、nodes 和 extensions。
+2. compliance adapter 负责把 glTF 语义转换为项目内部稳定 contract，包括 vertex layout、index format、material alpha、texture color role、sampler wrap/filter、doubleSided、extension support 和 render pass。
+3. backend upload 层只创建 API 对象：OpenGL texture/buffer/VAO、D3D11 buffer/SRV/sampler/state、preview ModernGL resource。
+4. backend render 层只消费 render plan，不重新解释 glTF JSON。
+5. preview_room_layout.py、OpenXR OpenGL 和 OpenXR D3D11 必须使用同一 primitive/material contract；不得各自猜 stride、alphaMode、texture role 或 extension 语义。
+```
+
+当前必须锁住的合规点：
+
+```text
+POSITION / NORMAL / TEXCOORD_0 / TEXCOORD_1 contract 明确，vertex stride 由 contract 给出。
+indices 支持 UNSIGNED_BYTE / UNSIGNED_SHORT / UNSIGNED_INT。
+accessor byteOffset、bufferView byteOffset/stride、sparse accessor、GLB BIN、external .bin 和 data URI 均由 parser/adapter 层处理。
+baseColor / emissive texture 按 sRGB；normal / metallic-roughness / occlusion 按 linear data。
+alphaMode=OPAQUE/MASK/BLEND 进入明确 render pass；BLEND 不得混入 opaque pass。
+KHR_materials_unlit 以 extension presence 判定，空对象 `{}` 仍表示启用。
+extensionsRequired 中不支持的必需扩展必须 fail fast，不允许静默显示错误模型。
+```
+
+该层不是 controller 专用。Controller model、environment GLB、preview tool 都必须逐步收敛到同一 contract。Controller profile 只保留品牌覆盖参数、手柄材质例外、按键动画、模型偏移/旋转等 profile 级差异；房间/环境光照和通用 glTF 材质语义不应散落在每个 controller profile 内。
+
 ### OpenXR controller glTF material contract
 
 Controller glTF/GLB 加载分为共享语义准备和后端 API 绑定两层。共享层负责解释模型和材质字段，OpenGL / D3D11 只负责创建各自 API 的 texture、sampler、constant buffer、shader resource view 和 render state。
@@ -1363,7 +1400,8 @@ openxr_async_ok / openxr_async_missing / openxr_async_failed 日志字段
 | OpenXR direct uniforms | 已输出规范 `shader_uniforms`，字段以 `max_disparity_px`、`depth_strength`、`depth_response`、`convergence`、`dynamic_convergence_strength`、layer pop、`render_size`、`screen_roll` 为主；OpenGL 与 D3D11 RGB+D direct 调用层均按 `max_disparity_px / render_width` 派生每眼 shader offset，并使用同一 `depth_strength` 放大实际视差位移，不再消费 IPD / Stereo Scale / Max Shift Ratio 旧强度链；D3D11 native direct shader 已补核心 DIBR 质量语义 | VDXR 实机验证后再决定是否补完整视觉 polish；OpenXR 头显屏幕几何不得反向修改 convergence/parallax 参数 |
 | OpenXR headset screen presets / OSD | 已新增 `XR Headset Model` 设置和 `src/utils/xr_headset_presets.py`，按推荐距离 + 60° 水平视角自动计算屏幕尺寸；`_screen_view_distance()` 统一用户可见距离；preset OSD 显示 5 秒且不被 live distance 刷新；Y 恢复同一 preset 会重新显示 OSD；右手柄保留 sphere-orbit 并自动朝向头部；头显屏幕预设只影响 presentation geometry | 后续如增加水平视角 GUI slider，只应调整统一 FOV 参数或显式设置，不应回到每个预设手工维护宽高；屏幕几何仍不得替代 `Convergence`、`Dynamic Convergence Strength`、`Parallax Budget`、`Depth Separation` 或 FG/MG/BG Pop |
 | OpenXR main screen presentation | VDXR 实机验证证明 runtime left/right 有差异，D2S 也提交了 Quad `eye0 array=0` / `eye1 array=1`，但 Quad overlay 仍无有效 3D；projection layer 是当前可靠主画面 3D 路径。当前代码已把 D3D11 native runtime-eye / RGB+depth 主虚拟屏幕接回 projection-layer stereo rendering，并把成功的两眼 projection render 计入 `openxr_projection_screen_present` / `screen_proj`；D3D11 projection 主屏的 model matrix 已统一走 shared screen pose helper，OpenXR 公共 frame input 仍在渲染前复用现有 controller/raycast/screen-adjust/hot-parameter 状态；实机已验证 laser/controller 命中与可见屏幕一致，左右手柄拖动、距离/大小/旋转调节、Depth Strength / 2D-3D 热切换均能作用到 D3D11 projection 主屏；virtual keyboard / OSD 使用共享 overlay Quad presenter 和独立 overlay Quad swapchains，在 Projection 主屏之后合成，低频上传小 RGBA UI 纹理；keyboard/OSD 这类功能内容必须走 `overlay_textures.py` 共享 builder，OpenGL 以既有验证逻辑为准写入 OpenXR GL Quad texture，D3D11 写入 D3D11 Quad texture，backend 只负责上传/Quad layer 提交；Quad layer 仍仅保留为可选实验、诊断或 overlay，不作为主画面完成判据 | 下一轮按 `docs/36` phase 2 验证 OpenXR presenter 硬实时：runtime/capture/effects 慢时复用 last-good Projection screen frame，同时保持 controller/head pose refresh 和 `xrEndFrame` 不被阻塞 |
-| OpenXR controller materials / laser | Controller glTF material 字段已抽到共享准备层，OpenGL/D3D11 分别只做 API 绑定；D3D11 controller 已覆盖 base/normal/MR/occlusion/emissive、alpha/doubleSided、texcoord/transform、CCW front face 和 WRAP sampler，HP/Index 透明纹理问题已由实机视觉确认修复；controller light policy 已收敛为 screen light/reflection、head/top light、HDR environment 和 ambient，不消费环境 profile 的 punctual/fill lights；laser 宽度由 `laser_params.py` 共享，手柄端 6 mm、远端 2 mm，OpenGL/D3D11 均用 crossed tapered quads 近似彩色光柱 | 继续实机比较多个 controller model、HDR 房间和非 HDR 房间；`diagnostics.materialMode` 只作为临时定位手段，不能成为默认材质模式；不要宣称完整 glTF 2.0 合规，后续缺项继续补到共享字段层 |
+| OpenXR glTF renderer compliance | 当前已把部分 controller glTF material 字段抽到共享准备层，OpenGL/D3D11 分别只做 API 绑定；Artemis 调试暴露出旧 loader/preview/backend contract 漂移：vertex stride、alpha pass、empty unlit extension 等都必须进入统一 compliance layer；`docs/38` 已把目标定义为 parser 与 backend 分离、共享 primitive/material/texture/render-pass contract | 下一阶段按 `docs/38` 拆出合规适配层，让 environment、controller、preview、OpenGL、D3D11 共用同一 contract；增加 synthetic glTF fixtures 和 Artemis smoke test；不再以单模型补丁替代 glTF 2.0 语义实现 |
+| OpenXR controller materials / laser | Controller glTF material 字段已抽到共享准备层，OpenGL/D3D11 分别只做 API 绑定；D3D11 controller 已覆盖 base/normal/MR/occlusion/emissive、alpha/doubleSided、texcoord/transform、CCW front face 和 WRAP sampler，HP/Index 透明纹理问题已由实机视觉确认修复；controller light policy 已收敛为 screen light/reflection、head/top light、HDR environment 和 ambient，不消费环境 profile 的 punctual/fill lights；laser 宽度由 `laser_params.py` 共享，手柄端 6 mm、远端 2 mm，OpenGL/D3D11 均用 crossed tapered quads 近似彩色光柱 | 继续实机比较多个 controller model、HDR 房间和非 HDR 房间；`diagnostics.materialMode` 只作为临时定位手段，不能成为默认材质模式；controller 例外只能落在 profile 覆盖层，通用 glTF 语义必须回到 compliance layer |
 | GPU texture upload / color space | 已抽出 OpenGL 共享 uploader：`GlTensorPboUploader` 统一 GPU tensor -> GL PBO -> GL texture，覆盖 CUDA/HIP/ROCm 可共用路径；`CudaGlTextureUploader` 负责 CUDA RGBA image texture copy 与 PBO fallback；CPU fallback 红色告警；算法内部应保持 GPU tensor，只有进入显示/编码边界才上传到 D3D11/GL/Metal 等资源；glow 实时采样只允许走 GPU source texture；Windows OpenXR 默认 D3D11 native，OpenGL 仅作为本地 viewer 和显式 forced/auto fallback；D3D11 desktop/screen intermediate color texture 使用 UNORM，避免 sRGB 自动 decode 后写 UNORM RTV 导致画面偏暗；glTF base/emissive 是 sRGB 语义，normal/MR/occlusion 是 linear data；GLB parse/decode/initial upload 可用 CPU，每帧 draw 必须采样 GPU texture/SRV | 继续 VDXR 真机验证 D3D11 projection/upload 和颜色亮度；继续验证 CUDA/GL fallback 日志 |
 | Realtime no-sync scalar policy | 动态会聚、motion sampler、OpenXR shader uniform staging、runtime-eye tensor diagnostics 已按 no-sync 原则处理；实时相关文件检查不再包含 `.item()` | 后续新增 realtime CUDA 标量路径必须优先传 tensor；CPU-only 消费者只能异步 staging 并使用上一帧 ready 值，不能阻塞当前帧 |
 | Depth provider GPU timing / zero-copy | TensorRT native 已记录真实 CUDA event timing；MIGraphX 构建已导入 ROCm7 FP8-first/FP16 fallback/force-FP32 skip 规则；TensorRT ORT CPU staging 已作为下一优化目标记录 | TensorRT ORT / ONNX Runtime realtime provider 仍需移除 CPU numpy input/output 往返，保持 iobinding output 在 GPU 并直接返回 CUDA tensor |
@@ -1440,18 +1478,19 @@ Capture -> timestamped frame window -> high quality synthesis -> delayed present
 
 1. 完成 GUI live hot-save 到 `RuntimeSettingsSnapshot` 的直接发送路径，把 settings.yaml polling 降为持久化同步路径。
 2. 收敛 Windows OpenXR 主路径到 D3D11 native：projection-layer 主画面和 RGB+D 核心 shader parity 已接入，继续做 VDXR 实机验收和必要 polish。
-3. 继续 OpenXR controller parity：保持 OpenGL/D3D11 共享 controller glTF material semantics，实机验证 D3D11 color-space、HDR environment、screen reflection、laser 光柱和多个 controller model。
-4. OpenGL 作为本地 viewer 和兼容 fallback：继续验证 `GlTensorPboUploader` / `CudaGlTextureUploader` 的 image/PBO/CPU fallback 日志，不再把 OpenGL uploader 当作 D3D11 方案。
-5. 移除 TensorRT ORT / ONNX Runtime depth provider 的 CPU numpy 往返，实现真正 GPU zero-copy input/output。
-6. 做 CUDA/ROCm capture zero-copy 硬件验证，只有实测无 CPU 中转后才允许把 metadata 标为 `zero_copy=True`。
-7. 做 runtime scheduling/backpressure 回归验证：CUDA 默认同步、latest-frame overwrite/drop、非 CUDA 后端无误触发。
-8. 清理兼容冗余：旧 snapshot/API 字段、debug-only 兼容字段；legacy parallax 乘数字段和 render-scale 数值/短写别名已清理，后续只需防回归。
-9. 接入 DirectMLDepthProvider 作为 Windows 非 CUDA/ROCm/XPU GPU 的短期 ONNX Runtime 兜底，并明确该阶段不是捕获零拷贝。
-10. 验证 Windows D3D11 texture -> D3D12 resource -> DirectML IoBinding 的原生零 CPU 回读链路。
-11. 在真实 Apple Silicon Mac 上验证 ScreenCaptureKit -> Metal preprocess -> CoreML Distill Depth 的 macOS 零 CPU 回读原型。
-12. 增加可选高画质缓冲输出骨架，默认关闭，先支持固定延迟、本地/OpenXR 共用 presentation scheduler，禁止实时帧落盘。
-13. 继续 `docs/36` phase 2：证明 D3D11 native projection-layer 主画面在慢 runtime、慢 capture、慢/失败 effect worker 下复用 last-good frame，不阻塞 controller/head pose refresh、projection screen present 和 `xrEndFrame`。Quad layer 只保留为可选实验/诊断，不再作为完成判据。
-14. 继续完善 network_stream 的 encoder transport contract，尤其是 RTMP/低延迟编码路径，但保持其只消费 packed synthesis 输出。
+3. 实施 `docs/38` glTF 2.0 renderer compliance layer：拆出 parser / compliance adapter / backend upload-render 分层，让 environment、controller、preview、OpenGL、D3D11 共用同一 primitive/material/texture/render-pass contract。
+4. 继续 OpenXR controller parity：在 compliance layer 上保留 controller profile 覆盖、按键动画、模型偏移/旋转和手柄材质例外，实机验证 D3D11 color-space、HDR environment、screen reflection、laser 光柱和多个 controller model。
+5. OpenGL 作为本地 viewer 和兼容 fallback：继续验证 `GlTensorPboUploader` / `CudaGlTextureUploader` 的 image/PBO/CPU fallback 日志，不再把 OpenGL uploader 当作 D3D11 方案。
+6. 移除 TensorRT ORT / ONNX Runtime depth provider 的 CPU numpy 往返，实现真正 GPU zero-copy input/output。
+7. 做 CUDA/ROCm capture zero-copy 硬件验证，只有实测无 CPU 中转后才允许把 metadata 标为 `zero_copy=True`。
+8. 做 runtime scheduling/backpressure 回归验证：CUDA 默认同步、latest-frame overwrite/drop、非 CUDA 后端无误触发。
+9. 清理兼容冗余：旧 snapshot/API 字段、debug-only 兼容字段；legacy parallax 乘数字段和 render-scale 数值/短写别名已清理，后续只需防回归。
+10. 接入 DirectMLDepthProvider 作为 Windows 非 CUDA/ROCm/XPU GPU 的短期 ONNX Runtime 兜底，并明确该阶段不是捕获零拷贝。
+11. 验证 Windows D3D11 texture -> D3D12 resource -> DirectML IoBinding 的原生零 CPU 回读链路。
+12. 在真实 Apple Silicon Mac 上验证 ScreenCaptureKit -> Metal preprocess -> CoreML Distill Depth 的 macOS 零 CPU 回读原型。
+13. 增加可选高画质缓冲输出骨架，默认关闭，先支持固定延迟、本地/OpenXR 共用 presentation scheduler，禁止实时帧落盘。
+14. 继续 `docs/36` phase 2：证明 D3D11 native projection-layer 主画面在慢 runtime、慢 capture、慢/失败 effect worker 下复用 last-good frame，不阻塞 controller/head pose refresh、projection screen present 和 `xrEndFrame`。Quad layer 只保留为可选实验/诊断，不再作为完成判据。
+15. 继续完善 network_stream 的 encoder transport contract，尤其是 RTMP/低延迟编码路径，但保持其只消费 packed synthesis 输出。
 
 ## 结论
 

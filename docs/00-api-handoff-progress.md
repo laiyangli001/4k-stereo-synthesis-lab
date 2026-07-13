@@ -17,7 +17,7 @@ https://github.com/laiyangli001/4k-stereo-synthesis-lab
 Current focus:
 
 ```text
-OpenXR projection-main stereo presentation, Traditional/Cinema runtime output contracts, GUI/runtime progress visibility, render-size defaults, and real-device presentation/runtime handoff follow-ups
+OpenXR projection-main stereo presentation, glTF 2.0 renderer compliance layer, Traditional/Cinema runtime output contracts, GUI/runtime progress visibility, render-size defaults, and real-device presentation/runtime handoff follow-ups
 ```
 
 Latest pushed task commit:
@@ -32,6 +32,7 @@ Canonical specs for current work:
 - `docs/02-desktop2stereo-engineering-design-specification.md` - engineering implementation, migration, compatibility cleanup, and compliance status.
 - `docs/35-OpenXR_Asynchronous_Decoupled_Rendering_Architecture_Report.md` - target OpenXR asynchronous decoupled rendering architecture.
 - `docs/36-OpenXR_Asynchronous_Decoupled_Rendering_Implementation_Plan.md` - implementation plan for the OpenXR asynchronous refactor; use it as the current plan for projection-layer main-screen presentation, optional Quad diagnostics/overlays, panorama background, GPU Glow, and wall reflection work.
+- `docs/38-gltf-2-renderer-compliance-layer-plan.md` - current plan for the OpenXR/local glTF 2.0 renderer compliance layer: parser separation, stable mesh/material/texture contracts, render-pass classification, and OpenGL/D3D11 parity.
 - `prompts/codex-refactor-prompt.md`
 - This file: `docs/00-api-handoff-progress.md`
 
@@ -54,6 +55,7 @@ Canonical specs for current work:
 - CUDA/GL image texture upload must remain image-texture-first. PBO is an acceptable GPU fallback, but it must be logged as fallback and must not hide the original image texture failure. Any CPU upload fallback in OpenXR, local viewer, stream/debug realtime display, or depth provider hot path must print a red console warning and record the reason.
 - OpenXR Quad layer is not a reliable VDXR main stereo display path. The latest logs prove runtime left/right eye tensors differ, OpenGL shared-array Quad swapchains are created, and Quad headers submit `eye0 array=0` / `eye1 array=1`; however the headset still shows no useful 3D. Projection layer remains the known-good OpenXR stereo path because it uses standard per-eye projection views. Current code should keep the main screen off the Quad path.
 - OpenXR Glow / screen-light sampling must follow `docs/20-openxr-gpu-glow-guide.md`: use GPU source texture, low-resolution glow texture, shader/compute sampling, or future D3D/Vulkan GPU passes. Do not reintroduce realtime `.cpu()`, `.numpy()`, `glReadPixels()`, or `tex.read()` as screen-light sampling sources.
+- glTF environment/controller rendering is not yet a complete glTF 2.0 renderer. `pygltflib` only parses the file structure; the project still needs a compliance adapter that emits a stable mesh/material/texture/render-pass contract for preview, OpenGL, and D3D11. Artemis exposed this with vertex-stride drift, alpha pass handling, and empty `KHR_materials_unlit` extension semantics.
 
 ## Future Work
 
@@ -71,9 +73,36 @@ Current task queue:
 8. Remove remaining compatibility redundancy after all consumers use the docs/01 contract: old snapshot/API aliases and debug-only fallback keys. Legacy parallax multiplier fields and historical render-scale numeric thresholds have been cleaned from the current runtime/config path and should now be guarded against regressions.
 9. Continue network_stream encoder transport work, especially RTMP / low-latency paths, without redefining stereo synthesis semantics.
 10. Keep `docs/02-desktop2stereo-engineering-design-specification.md` aligned to the `docs/01-Realtime-2d-to-3d-specification.md` eleven-step runtime flow.
-11. Continue `docs/36` phase 2: harden the OpenXR frame loop so the headset presenter keeps refreshing from the last good Projection screen frame when runtime/capture/effects are slow, without backpressuring capture/runtime.
+11. Implement `docs/38` glTF 2.0 renderer compliance layer: separate glTF parsing from backend upload, define shared primitive/material/texture/render-pass contracts, and make preview/OpenGL/D3D11 consume the same contract.
+12. Continue `docs/36` phase 2: harden the OpenXR frame loop so the headset presenter keeps refreshing from the last good Projection screen frame when runtime/capture/effects are slow, without backpressuring capture/runtime.
 
 ## Current Status
+
+### 2026-07-13 glTF 2.0 Renderer Compliance Layer Plan
+
+Current engineering target has shifted from single-model fixes to a glTF 2.0 renderer compliance layer. The plan is documented in `docs/38-gltf-2-renderer-compliance-layer-plan.md` and indexed from `docs/README.md`.
+
+Scope captured by the plan:
+
+- Keep `pygltflib` as the glTF 2.0 structure parser, but do not treat it as a renderer.
+- Add a compliance adapter between parsed glTF and backend upload.
+- Define one shared mesh/material/texture/render-pass contract for preview, OpenGL, and D3D11.
+- Treat opaque, mask, transparent, and sky/background rendering as explicit passes.
+- Keep color-space, alpha, texture role, sampler, and `extensionsRequired` behavior explicit.
+- Use Artemis and synthetic glTF fixtures as regression inputs so future valid glTF models do not require model-specific patches.
+
+Recent local findings that motivated the plan:
+
+- Artemis displayed as radial planes in `preview_room_layout.py` when the preview VAO read the loader's 10-float vertex contract as an 8-float stride.
+- `alphaMode=BLEND` must be routed through a transparent pass rather than drawn as opaque geometry.
+- `KHR_materials_unlit: {}` is a valid enabled extension object and must not be interpreted as false.
+
+Verification for this documentation pass:
+
+```text
+Created docs/38-gltf-2-renderer-compliance-layer-plan.md
+Updated docs/README.md index
+```
 
 ### 2026-07-08 Projection Main Path, Output Modes, Progress Logs, and Render Align Default
 
