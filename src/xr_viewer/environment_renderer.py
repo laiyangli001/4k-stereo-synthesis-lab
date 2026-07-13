@@ -4,7 +4,7 @@ import moderngl
 
 from .implementation import *
 from .gl_state import get_depth_mask, set_depth_mask
-from .gltf import sort_transparent_primitives
+from .gltf import DEFAULT_GLTF_COLOR_POLICY, sort_transparent_primitives
 
 
 def _view_mat_inv(view_mat):
@@ -91,7 +91,8 @@ def _read_radiance_hdr(path):
 
 def _hdr_to_ldr_u8(rgb):
     mapped = rgb / (1.0 + rgb)
-    mapped = np.power(np.clip(mapped, 0.0, 1.0), 1.0 / 2.2)
+    output_gamma = float(DEFAULT_GLTF_COLOR_POLICY.default_output_gamma)
+    mapped = np.power(np.clip(mapped, 0.0, 1.0), 1.0 / max(output_gamma, 0.001))
     return np.rint(mapped * 255.0).astype(np.uint8)
 
 

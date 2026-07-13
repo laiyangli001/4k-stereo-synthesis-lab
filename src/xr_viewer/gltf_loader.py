@@ -1074,9 +1074,17 @@ def load_glb_model(path):
     return primitives, all_textures, lights
 
 
+def _attach_color_management_diagnostics(diagnostics):
+    from .gltf.color_management import color_management_diagnostics
+
+    merged = dict(diagnostics or {})
+    merged['colorManagement'] = color_management_diagnostics()
+    return merged
+
+
 def load_gltf_scene(path):
     gltf, _buffers = _load_gltf_document(path)
-    diagnostics = _raise_unsupported_required_extensions(gltf, path)
+    diagnostics = _attach_color_management_diagnostics(_raise_unsupported_required_extensions(gltf, path))
     primitives, textures, lights = load_glb_model(path)
     return GltfScene(
         primitives=tuple(primitives),

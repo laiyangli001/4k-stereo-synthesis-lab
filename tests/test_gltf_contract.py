@@ -8,6 +8,7 @@ import xr_viewer.gltf as gltf_package
 import xr_viewer.gltf_contract as legacy_gltf_contract
 import xr_viewer.gltf_loader as legacy_gltf_loader
 from xr_viewer.gltf import contract as gltf_contract_module
+from xr_viewer.gltf import color_management as gltf_color_management_module
 from xr_viewer.gltf import loader as gltf_loader_module
 from xr_viewer.gltf import materials as gltf_materials_module
 from xr_viewer.gltf import render_plan as gltf_render_plan_module
@@ -29,10 +30,21 @@ from xr_viewer.gltf import (
 )
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
+DEFAULT_GLTF_COLOR_POLICY_DIAGNOSTICS = {
+    "colorTextureRoles": ["base", "emissive"],
+    "dataTextureRoles": ["normal", "occlusion", "mr"],
+    "shaderLinearSpace": "linear",
+    "srgbDecodeFunction": "gltfSrgbToLinear",
+    "toneMapping": "reinhard",
+    "outputEncodeFunction": "gltfLinearToOutput",
+    "defaultOutputGamma": 2.2,
+    "defaultExposure": 1.0,
+}
 
 from xr_viewer.gltf import (
     D3D11_VERTEX_OFFSETS_BYTES,
     D3D11_VERTEX_STRIDE_BYTES,
+    DEFAULT_GLTF_COLOR_POLICY,
     GltfMaterial,
     GltfScene,
     OPENGL_VERTEX_FORMAT,
@@ -43,6 +55,9 @@ from xr_viewer.gltf import (
     attach_primitive_contract,
     build_render_plan,
     classify_render_pass,
+    color_space_for_texture_role,
+    is_linear_texture_role,
+    is_srgb_texture_role,
     render_pass_from_primitive,
     sort_transparent_primitives,
     transparent_sort_key,
@@ -73,11 +88,49 @@ def test_gltf_package_reexports_stable_loader_contract_and_render_plan_api():
     assert gltf_package.raise_unsupported_required_extensions is raise_unsupported_required_extensions
     assert gltf_loader_module.raise_unsupported_required_extensions is raise_unsupported_required_extensions
     assert gltf_validation_module.raise_unsupported_required_extensions is raise_unsupported_required_extensions
+    assert gltf_package.DEFAULT_GLTF_COLOR_POLICY is DEFAULT_GLTF_COLOR_POLICY
+    assert gltf_color_management_module.DEFAULT_GLTF_COLOR_POLICY is DEFAULT_GLTF_COLOR_POLICY
 
     scene = gltf_package.load_gltf_scene(SRC / "xr_viewer" / "environments" / "Bedroom" / "environment.glb")
 
     assert isinstance(scene, gltf_package.GltfScene)
     assert sum(len(indices) for indices in scene.render_plan.values()) == len(scene.primitives)
+
+
+def test_gltf_color_management_policy_matches_material_texture_roles():
+    from xr_viewer.material_contract import GLTF_MATERIAL_TEXTURE_BINDINGS
+
+    policy = DEFAULT_GLTF_COLOR_POLICY
+
+    assert policy.color_texture_roles == ("base", "emissive")
+    assert policy.data_texture_roles == ("normal", "occlusion", "mr")
+    assert policy.shader_linear_space == "linear"
+    assert policy.srgb_decode_function == "gltfSrgbToLinear"
+    assert policy.tone_mapping == "reinhard"
+    assert policy.output_encode_function == "gltfLinearToOutput"
+    assert policy.default_output_gamma == pytest.approx(2.2)
+    assert policy.default_exposure == pytest.approx(1.0)
+    assert gltf_package.color_management_diagnostics() == DEFAULT_GLTF_COLOR_POLICY_DIAGNOSTICS
+    assert gltf_color_management_module.color_management_diagnostics() == DEFAULT_GLTF_COLOR_POLICY_DIAGNOSTICS
+    assert is_srgb_texture_role("base")
+    assert is_srgb_texture_role("emissive")
+    assert is_linear_texture_role("normal")
+    assert is_linear_texture_role("occlusion")
+    assert is_linear_texture_role("mr")
+
+    roles_by_space = {
+        binding.role: color_space_for_texture_role(binding.role)
+        for binding in GLTF_MATERIAL_TEXTURE_BINDINGS
+    }
+    assert roles_by_space == {
+        "base": "srgb",
+        "normal": "linear",
+        "occlusion": "linear",
+        "mr": "linear",
+        "emissive": "srgb",
+    }
+    with pytest.raises(KeyError, match="unknown glTF texture role"):
+        color_space_for_texture_role("clearcoat")
 
 
 def _primitive(**overrides):
@@ -281,11 +334,13 @@ def test_bedroom_diagnostics_smoke_matches_stable_contract():
     assert len(scene.primitives) > 0
     assert len(scene.textures) > 0
     assert scene.diagnostics["unsupportedRequired"] == []
+    assert scene.diagnostics["colorManagement"] == DEFAULT_GLTF_COLOR_POLICY_DIAGNOSTICS
     assert sum(len(indices) for indices in scene.render_plan.values()) == len(scene.primitives)
     assert summary["primitive_count"] > 0
     assert summary["texture_count"] > 0
     assert summary["vertex_widths"] == [10]
     assert summary["diagnostics"]["unsupportedRequired"] == []
+    assert summary["diagnostics"]["colorManagement"] == DEFAULT_GLTF_COLOR_POLICY_DIAGNOSTICS
     assert summary["render_plan"] == scene.render_plan
     assert sum(summary["render_passes"].values()) == summary["primitive_count"]
 

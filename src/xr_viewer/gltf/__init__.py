@@ -4,6 +4,14 @@ This package provides the stable import surface for renderer-facing glTF
 contracts while legacy modules continue to exist during incremental migration.
 """
 
+from .color_management import (
+    DEFAULT_GLTF_COLOR_POLICY,
+    GltfColorManagementPolicy,
+    color_management_diagnostics,
+    color_space_for_texture_role,
+    is_linear_texture_role,
+    is_srgb_texture_role,
+)
 from .contract import (
     ColorSpace,
     D3D11_VERTEX_OFFSETS_BYTES,
@@ -49,7 +57,9 @@ from .render_plan import (
 __all__ = [
     "ColorSpace",
     "D3D11_VERTEX_OFFSETS_BYTES",
+    "DEFAULT_GLTF_COLOR_POLICY",
     "D3D11_VERTEX_STRIDE_BYTES",
+    "GltfColorManagementPolicy",
     "GltfMaterial",
     "GltfPrimitive",
     "GltfScene",
@@ -68,12 +78,16 @@ __all__ = [
     "build_primitive_contract",
     "build_render_plan",
     "classify_render_pass",
+    "color_management_diagnostics",
+    "color_space_for_texture_role",
     "diagnose_gltf_model",
     "format_gltf_scene_summary",
     "gltf_primitive_mode_to_moderngl",
     "gltf_texture_cache_key",
     "load_glb_model",
     "load_gltf_scene",
+    "is_linear_texture_role",
+    "is_srgb_texture_role",
     "normalize_gltf_sampler",
     "parse_gltf_material",
     "primitive_sort_center",

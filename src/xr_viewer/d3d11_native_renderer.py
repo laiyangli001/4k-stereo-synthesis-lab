@@ -659,6 +659,7 @@ cbuffer ControllerParams : register(b0)
     float4 fillLightColor0;
     float4 fillLightPosRange1;
     float4 fillLightColor1;
+    float4 colorManagement;
 };
 
 #define roughness materialParams.x
@@ -666,7 +667,7 @@ cbuffer ControllerParams : register(b0)
 #define useTexture materialParams.z
 #define alphaMode materialParams.w
 #define useEnv cameraPosUseEnv.w
-#define envIntensity lightParams.x
+#define envExposure lightParams.x
 #define alphaCutoff lightParams.y
 #define unlit lightParams.z
 #define doubleSided lightParams.w
@@ -686,6 +687,7 @@ cbuffer ControllerParams : register(b0)
 #define emissiveTexcoord texCoordParams2.y
 #define useMR texCoordParams2.z
 #define useEmissive texCoordParams2.w
+#define outputGamma colorManagement.x
 
 struct VSIn {
     float3 pos : POSITION;
@@ -763,9 +765,10 @@ float3 gltfToneMap(float3 linearColor)
     return linearColor / (linearColor + float3(1.0, 1.0, 1.0));
 }
 
-float3 gltfLinearToOutput(float3 linearColor)
+float3 gltfLinearToOutput(float3 linearColor, float gamma)
 {
-    return pow(saturate(gltfToneMap(linearColor)), float3(1.0 / 2.2, 1.0 / 2.2, 1.0 / 2.2));
+    float invGamma = 1.0 / max(gamma, 0.001);
+    return pow(saturate(gltfToneMap(linearColor)), float3(invGamma, invGamma, invGamma));
 }
 
 float3 fresnelSchlick(float cosTheta, float3 F0)
@@ -859,8 +862,8 @@ float4 ps_main(VSOut input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
         float3 envSpec = texEnv.SampleLevel(sampLinear, envSampleUv(r), 3.0).rgb;
         float3 envDiff = texEnv.SampleLevel(sampLinear, envSampleUv(n), 5.0).rgb;
         float viewFacing = smoothstep(-0.25, 0.65, dot(n, v));
-        color += baseColor * lerp(float3(0.32, 0.32, 0.32), envDiff, 0.36) * envIntensity
-            + envSpec * ((0.30 + metal * 0.25) * envIntensity * viewFacing * (1.0 - rough * 0.35));
+        color += baseColor * lerp(float3(0.32, 0.32, 0.32), envDiff, 0.36) * envExposure
+            + envSpec * ((0.30 + metal * 0.25) * envExposure * viewFacing * (1.0 - rough * 0.35));
     }
     if (screenLightEnabled > 0.5) {
         float3 screenTint = (
@@ -907,7 +910,7 @@ float4 ps_main(VSOut input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
     if (unlit > 0.5) {
         color = baseColor + emissive;
     }
-    return float4(gltfLinearToOutput(color), alphaMode > 1.5 ? alpha : 1.0);
+    return float4(gltfLinearToOutput(color, outputGamma), alphaMode > 1.5 ? alpha : 1.0);
 }
 """
 
@@ -1187,7 +1190,7 @@ class D3D11NativeRenderer:
         finally:
             _release(vs_blob)
             _release(ps_blob)
-        self.controller_constant_buffer = self._create_buffer(np.zeros(128, dtype=np.float32), D3D11_BIND_CONSTANT_BUFFER)
+        self.controller_constant_buffer = self._create_buffer(np.zeros(132, dtype=np.float32), D3D11_BIND_CONSTANT_BUFFER)
 
     def _init_laser_pipeline(self):
         vs_blob = _compile_shader(LASER_HLSL_SOURCE, "vs_main", "vs_5_0")
@@ -2018,7 +2021,7 @@ class D3D11NativeRenderer:
                 base_color = np.asarray(mat.get("base_color", (1.0, 1.0, 1.0)), dtype=np.float32)
                 if base_color.size < 3:
                     base_color = np.array((1.0, 1.0, 1.0), dtype=np.float32)
-                constants = np.zeros(128, dtype=np.float32)
+                constants = np.zeros(132, dtype=np.float32)
                 constants[0:16] = mvp.reshape(16)
                 constants[16:32] = model.reshape(16)
                 try:
@@ -2108,6 +2111,12 @@ class D3D11NativeRenderer:
                 constants[116:120] = (float(fill_color0[0]), float(fill_color0[1]), float(fill_color0[2]), 0.0)
                 constants[120:124] = (float(fill_pos1[0]), float(fill_pos1[1]), float(fill_pos1[2]), max(float(fill_range1), 0.001))
                 constants[124:128] = (float(fill_color1[0]), float(fill_color1[1]), float(fill_color1[2]), 0.0)
+                constants[128:132] = (
+                    float(getattr(viewer, "_env_gamma", 2.2) or 2.2),
+                    0.0,
+                    0.0,
+                    0.0,
+                )
                 self._update_subresource(self.controller_constant_buffer, constants.ctypes.data, constants.nbytes)
 
                 render_pass = "opaque" if diag_opaque_unlit else render_pass_from_primitive(prim)

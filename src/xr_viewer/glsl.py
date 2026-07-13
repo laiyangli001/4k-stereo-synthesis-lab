@@ -445,12 +445,30 @@ uniform int u_screen_light_enabled;
 uniform float u_env_intensity;
 uniform float u_screen_light_intensity;
 uniform float u_top_light_intensity;
+uniform float u_env_gamma;
 uniform vec3 u_camera_pos;     // Camera world coordinates (= headset position)
 uniform vec3 u_screen_light_pos;
 uniform vec3 u_screen_light_normal;
 uniform vec3 u_screen_light_right;
 uniform vec3 u_screen_light_up;
 uniform vec2 u_screen_light_half_size;
+
+vec3 gltfSrgbToLinear(vec3 c) {
+    c = clamp(c, 0.0, 1.0);
+    vec3 lo = c / 12.92;
+    vec3 hi = pow((c + vec3(0.055)) / 1.055, vec3(2.4));
+    return mix(lo, hi, step(vec3(0.04045), c));
+}
+
+vec3 gltfToneMap(vec3 linearColor) {
+    linearColor = max(linearColor, vec3(0.0));
+    return linearColor / (linearColor + vec3(1.0));
+}
+
+vec3 gltfLinearToOutput(vec3 linearColor, float gamma) {
+    float safeGamma = gamma > 0.0 ? gamma : 2.2;
+    return pow(clamp(gltfToneMap(linearColor), 0.0, 1.0), vec3(1.0 / safeGamma));
+}
 
 vec2 env_uv(vec3 dir) {
     dir = normalize(dir);
@@ -476,7 +494,7 @@ void main() {
 
     vec3 baseColor;
     if (u_use_texture == 1) {
-        baseColor = texture(u_tex, t_uv).rgb * u_base_color_factor;
+        baseColor = gltfSrgbToLinear(texture(u_tex, t_uv).rgb) * u_base_color_factor;
     } else {
         baseColor = u_base_color_factor;
     }
@@ -528,7 +546,7 @@ void main() {
         }
     }
 
-    fragColor = vec4(clamp(color, 0.0, 1.0), 1.0);
+    fragColor = vec4(gltfLinearToOutput(color, u_env_gamma), 1.0);
 }
 """
 
