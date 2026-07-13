@@ -4,7 +4,11 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from xr_viewer.controller_materials import collect_controller_texture_requests, prepare_controller_material
+from xr_viewer.controller_materials import (
+    collect_controller_texture_requests,
+    controller_texture_cache_key,
+    prepare_controller_material,
+)
 from xr_viewer.gltf_loader import (
     audit_gltf_extensions,
     diagnose_gltf_model,
@@ -230,14 +234,7 @@ def test_controller_material_uses_contract_without_legacy_dict_fallback():
             "normal": TextureBinding(image_id=8, sampler=(9729, 9987, 10497, 10497), texcoord=2),
         },
     )
-    primitive = _primitive(
-        material_contract=material_contract,
-        base_color=np.array([9.0, 9.0, 9.0], dtype=np.float32),
-        alpha_mode="BLEND",
-        double_sided=False,
-    )
-
-    material = prepare_controller_material(primitive, "QUEST/left", {"diagnostics": {"materialMode": "opaque_unlit"}})
+    material = prepare_controller_material(material_contract, "QUEST/left", {"diagnostics": {"materialMode": "opaque_unlit"}})
 
     assert material["base_color"] == pytest.approx((0.1, 0.2, 0.3))
     assert material["base_alpha"] == pytest.approx(0.4)
@@ -258,17 +255,18 @@ def test_controller_material_uses_contract_without_legacy_dict_fallback():
     assert material["normal_texcoord"] == 2
     assert material["base_key"] == "QUEST/left:7:9728:9984:33071:33648"
     assert material["normal_key"] == "QUEST/left:8:9729:9987:10497:10497"
-    assert collect_controller_texture_requests([primitive]) == {
+    assert collect_controller_texture_requests([material_contract]) == {
         (7, (9728, 9984, 33071, 33648)),
         (8, (9729, 9987, 10497, 10497)),
     }
+    assert controller_texture_cache_key("QUEST/left", 7, (9728, 9984, 33071, 33648)) == "QUEST/left:7:9728:9984:33071:33648"
 
 
 def test_controller_material_requires_contract():
-    with pytest.raises(ValueError, match="material_contract"):
+    with pytest.raises(ValueError, match="GltfMaterial"):
         prepare_controller_material(_primitive(), "QUEST/left", {})
 
-    with pytest.raises(ValueError, match="material_contract"):
+    with pytest.raises(ValueError, match="GltfMaterial"):
         collect_controller_texture_requests([_primitive()])
 
 

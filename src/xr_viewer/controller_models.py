@@ -7,13 +7,13 @@ import numpy as np
 
 from .controller_materials import (
     collect_controller_texture_requests,
+    controller_texture_cache_key,
     load_controller_common_config,
     prepare_controller_material,
 )
 from .gltf_loader import (
     apply_gltf_sampler_to_texture,
     gltf_primitive_mode_to_moderngl,
-    gltf_texture_cache_key,
     load_glb_model,
     normalize_gltf_sampler,
 )
@@ -52,10 +52,11 @@ class ControllerModelsMixin:
             prims_data, textures, _lights = load_glb_model(glb_path)
             _file_stem = os.path.splitext(os.path.basename(glb_path))[0]
             _prefix = f"{_dir_key}/{_file_stem}"
-            sampler_requests = collect_controller_texture_requests(prims_data)
+            material_contracts = [pd['material_contract'] for pd in prims_data]
+            sampler_requests = collect_controller_texture_requests(material_contracts)
             for tid, sampler in sampler_requests:
                 if tid < len(textures) and textures[tid] is not None:
-                    cache_key = gltf_texture_cache_key(_prefix, tid, sampler)
+                    cache_key = controller_texture_cache_key(_prefix, tid, sampler)
                     result['tex_images'][cache_key] = textures[tid]
                     if cache_key not in result['tex_cache']:
                         h, w = textures[tid].shape[:2]
@@ -79,27 +80,13 @@ class ControllerModelsMixin:
                      (tan_vbo, '4f', 'in_tangent')],
                     ibo,
                 )
+                material_contract = pd['material_contract']
                 target_list.append({
                     'vao': vao, 'vbo': vbo, 'tan_vbo': tan_vbo, 'ibo': ibo,
                     'vertices': vertices,
                     'indices': pd['indices'],
-                    'tex_key': (
-                        gltf_texture_cache_key(_prefix, pd['tex_id'], pd.get('base_sampler'))
-                        if pd['tex_id'] >= 0 else None
-                    ),
-                    'material': prepare_controller_material(pd, _prefix, common_config),
-                    'base_color': pd.get('base_color', np.array([1.0, 1.0, 1.0], dtype=np.float32)),
-                    'base_texcoord': pd.get('base_texcoord', 0),
-                    'roughness_factor': pd.get('roughness_factor', 1.0),
-                    'metallic_factor': pd.get('metallic_factor', 0.0),
-                    'base_alpha': pd.get('base_alpha', 1.0),
-                    'unlit': pd.get('unlit', False),
-                    'alpha_mode': pd.get('alpha_mode', 'OPAQUE'),
-                    'alpha_cutoff': pd.get('alpha_cutoff', 0.5),
-                    'double_sided': pd.get('double_sided', False),
-                    'tex_offset': pd.get('tex_offset', np.array([0.0, 0.0], dtype=np.float32)),
-                    'tex_scale': pd.get('tex_scale', np.array([1.0, 1.0], dtype=np.float32)),
-                    'tex_rotation': pd.get('tex_rotation', 0.0),
+                    'material_contract': material_contract,
+                    'material': prepare_controller_material(material_contract, _prefix, common_config),
                     'render_mode': gltf_primitive_mode_to_moderngl(pd.get('primitive_mode', 4)),
                     'primitive_mode': pd.get('primitive_mode', 4),
                     'tri_count': len(pd['indices']) // 3,

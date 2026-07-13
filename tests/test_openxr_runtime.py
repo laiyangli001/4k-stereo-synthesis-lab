@@ -204,10 +204,10 @@ def test_controller_material_preserves_gltf_double_sided_without_override():
     from xr_viewer.gltf_contract import GltfMaterial
 
     config = {"diagnostics": {"materialMode": "opaque_unlit"}}
-    pd = {"material_contract": GltfMaterial(metallic=0.5, roughness=0.55, alpha_mode="OPAQUE", double_sided=True)}
+    material_contract = GltfMaterial(metallic=0.5, roughness=0.55, alpha_mode="OPAQUE", double_sided=True)
 
-    vive = prepare_controller_material(pd, "VIVE/left", config)
-    pico = prepare_controller_material(pd, "PICO/left", config)
+    vive = prepare_controller_material(material_contract, "VIVE/left", config)
+    pico = prepare_controller_material(material_contract, "PICO/left", config)
     assert vive["metallic"] == 0.5
     assert vive["double_sided"]
     assert pico["metallic"] == 0.5
@@ -900,7 +900,7 @@ def test_shared_gltf_material_contract_drives_backend_texture_bindings():
     d3d11 = (SRC / "xr_viewer" / "d3d11_native_renderer.py").read_text(encoding="utf-8")
 
     assert "for binding in GLTF_MATERIAL_TEXTURE_BINDINGS" in controller_materials
-    assert "_require_material_contract" in controller_materials
+    assert "_require_gltf_material" in controller_materials
     assert "for binding in GLTF_MATERIAL_TEXTURE_BINDINGS" in environment_model
     assert "binding.opengl_texture_unit" in core_laser
     assert "binding.d3d11_srv_slot" in d3d11
@@ -915,6 +915,19 @@ def test_opengl_gltf_shader_linearizes_srgb_color_textures():
     assert "envSrgbToLinear(texture(u_normal_tex" not in env_frag
     assert "envSrgbToLinear(texture(u_mr_tex" not in env_frag
     assert "envSrgbToLinear(texture(u_occlusion_tex" not in env_frag
+
+
+def test_d3d11_controller_shader_linearizes_gltf_srgb_color_textures():
+    renderer = (SRC / "xr_viewer" / "d3d11_native_renderer.py").read_text(encoding="utf-8")
+    shader = renderer.split("CONTROLLER_HLSL_SOURCE", 1)[1].split("LASER_HLSL_SOURCE", 1)[0]
+
+    assert "float3 gltfSrgbToLinear(float3 c)" in shader
+    assert "float srgbChannelToLinear(float c)" in shader
+    assert "texel.rgb = gltfSrgbToLinear(texel.rgb);" in shader
+    assert "emissive *= gltfSrgbToLinear(texEmissive.Sample" in shader
+    assert "gltfSrgbToLinear(texNormal" not in shader
+    assert "gltfSrgbToLinear(texMR" not in shader
+    assert "gltfSrgbToLinear(texOcclusion" not in shader
 
 
 def test_quad_layer_rgba8_copy_linearizes_srgb_source():
@@ -3851,7 +3864,7 @@ def test_d3d11_projection_path_uses_native_renderer():
     assert "'vertices': vertices" in controller_models
     assert "'indices': pd['indices']" in controller_models
     assert "'material': prepare_controller_material" in controller_models
-    assert "collect_controller_texture_requests(prims_data)" in controller_models
+    assert "collect_controller_texture_requests(material_contracts)" in controller_models
     assert '"useEnvironmentPbr": true' in controller_common
     assert '"metallicRoughnessTexture": true' in controller_common
     assert '"emissiveTexture": true' in controller_common

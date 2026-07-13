@@ -41,10 +41,9 @@ def alpha_mode_id(alpha_mode):
     return {"OPAQUE": 0, "MASK": 1, "BLEND": 2}.get(str(alpha_mode or "OPAQUE").upper(), 0)
 
 
-def _require_material_contract(pd):
-    material = pd.get("material_contract") if isinstance(pd, dict) else None
+def _require_gltf_material(material):
     if not isinstance(material, GltfMaterial):
-        raise ValueError("controller primitive missing glTF material_contract")
+        raise ValueError("controller material must be a GltfMaterial")
     return material
 
 
@@ -73,27 +72,31 @@ def _normalize_contract_sampler(sampler):
     return normalize_gltf_sampler(sampler)
 
 
-def collect_controller_texture_requests(prims_data):
+def collect_controller_texture_requests(materials):
     requests = set()
-    for pd in prims_data:
-        material = _require_material_contract(pd)
+    for material in materials:
+        material = _require_gltf_material(material)
         for binding in material.texture_slots.values():
             if not isinstance(binding, TextureBinding):
-                raise ValueError("controller material_contract texture slot is invalid")
+                raise ValueError("controller material texture slot is invalid")
             if binding.image_id >= 0:
                 requests.add((int(binding.image_id), _normalize_contract_sampler(binding.sampler)))
     return requests
 
 
+def controller_texture_cache_key(prefix, image_id, sampler):
+    mag_filter, min_filter, wrap_s, wrap_t = _normalize_contract_sampler(sampler)
+    return f"{prefix}:{int(image_id)}:{mag_filter}:{min_filter}:{wrap_s}:{wrap_t}"
+
+
 def controller_texture_key(prefix, binding):
     if binding is None or binding.image_id < 0:
         return None
-    mag_filter, min_filter, wrap_s, wrap_t = _normalize_contract_sampler(binding.sampler)
-    return f"{prefix}:{int(binding.image_id)}:{mag_filter}:{min_filter}:{wrap_s}:{wrap_t}"
+    return controller_texture_cache_key(prefix, binding.image_id, binding.sampler)
 
 
-def prepare_controller_material(pd, prefix, config):
-    material_contract = _require_material_contract(pd)
+def prepare_controller_material(material_contract, prefix, config):
+    material_contract = _require_gltf_material(material_contract)
     pbr = config.get("pbr", {}) if isinstance(config, dict) else {}
     diagnostics = config.get("diagnostics", {}) if isinstance(config, dict) else {}
     brand = str(prefix).split("/", 1)[0]

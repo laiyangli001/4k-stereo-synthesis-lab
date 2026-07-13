@@ -745,6 +745,17 @@ float2 envSampleUv(float3 dir)
     return float2(frac(u), 1.0 - v);
 }
 
+float srgbChannelToLinear(float c)
+{
+    c = saturate(c);
+    return c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4);
+}
+
+float3 gltfSrgbToLinear(float3 c)
+{
+    return float3(srgbChannelToLinear(c.r), srgbChannelToLinear(c.g), srgbChannelToLinear(c.b));
+}
+
 float3 fresnelSchlick(float cosTheta, float3 F0)
 {
     return F0 + (1.0 - F0) * pow(saturate(1.0 - cosTheta), 5.0);
@@ -794,6 +805,7 @@ float4 ps_main(VSOut input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
 {
     float2 baseUv = transformedBaseUv(input);
     float4 texel = useTexture > 0.5 ? texBase.Sample(sampLinear, baseUv) : float4(1.0, 1.0, 1.0, 1.0);
+    texel.rgb = gltfSrgbToLinear(texel.rgb);
     float alpha = saturate(texel.a * baseColorAlpha.a);
     if (alphaMode > 0.5 && alphaMode < 1.5 && alpha < alphaCutoff) {
         discard;
@@ -877,7 +889,7 @@ float4 ps_main(VSOut input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
     }
     float3 emissive = emissiveFactorUse.xyz;
     if (useEmissive > 0.5) {
-        emissive *= texEmissive.Sample(sampLinear, uvForTexCoord(input, emissiveTexcoord)).rgb;
+        emissive *= gltfSrgbToLinear(texEmissive.Sample(sampLinear, uvForTexCoord(input, emissiveTexcoord)).rgb);
     }
     color += emissive;
     if (unlit > 0.5) {
