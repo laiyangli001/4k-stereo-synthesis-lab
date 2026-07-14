@@ -3028,8 +3028,9 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
         # -- Left grip: record rotation for wrist-roll tracking on press --
         grip_l_was = self._grip_l_prev
         self._grip_l_prev = grip_l
-        if grip_l and not grip_l_was and self._grip_mat_l is not None and not screen_locked:
+        if grip_l and not grip_l_was:
             self._screen_grab_local_l = None
+        if grip_l and not grip_l_was and self._grip_mat_l is not None and not screen_locked:
             self._grip_l_ref_mat = self._grip_mat_l[:3, :3].copy()
             # Snap screen_roll to nearest 0 or +/-90 on grip press
             _norm = ((self.screen_roll + math.pi) % (2 * math.pi)) - math.pi
@@ -3052,6 +3053,8 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
         # -- Right grip: record rotation for wrist-roll tracking on press --
         grip_r_was = self._grip_r_prev
         self._grip_r_prev = grip_r
+        if grip_r and not grip_r_was:
+            self._screen_grab_local_r = None
         if grip_r and not grip_r_was and self._grip_mat_r is not None and not screen_locked:
             self._grip_r_ref_mat = self._grip_mat_r[:3, :3].copy()
             self._grip_r_base_roll = self.screen_roll
@@ -3145,11 +3148,11 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
                 sy = math.sin(self.screen_yaw)
                 screen_normal = np.array([cp * sy, -sp, cp * cy], dtype=np.float64)
                 screen_center = self._screen_world_pos(cy, sy, cp, sp).astype(np.float64)
-                cursor_uv = self._cursor_uv_l if is_left else self._cursor_uv_r
-                if cursor_uv is not None:
+                if self._screen_curved:
+                    cursor_uv = self._cursor_uv_l if is_left else self._cursor_uv_r
+                    if cursor_uv is None:
+                        continue
                     hit_world = self._screen_uv_to_world(float(cursor_uv[0]), float(cursor_uv[1]))
-                elif self._screen_curved:
-                    continue
                 else:
                     denom = np.dot(screen_normal, ray_dir)
                     if abs(denom) < 1e-6:
@@ -3176,13 +3179,6 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
                         delta = hit_world - anchor_world
                         delta_x = float(np.dot(delta, right_axis))
                         delta_y = float(np.dot(delta, up_axis))
-                        delta_len = math.hypot(delta_x, delta_y)
-                        max_speed = max(1.0, min(80.0, float(self.screen_width) * 0.75))
-                        max_delta = max_speed * max(float(dt), 1.0 / 120.0)
-                        if delta_len > max_delta and delta_len > 1e-6:
-                            scale = max_delta / delta_len
-                            delta_x *= scale
-                            delta_y *= scale
                         self.screen_pan_x += delta_x
                         self.screen_pan_y += delta_y
                         # Left grip: snap 90 deg when wrist roll exceeds 45 deg threshold

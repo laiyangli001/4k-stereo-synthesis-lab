@@ -19,6 +19,13 @@
     1,
     1
   ],
+  "skybox": {
+    "nodes": [
+      "Model_Artemis__SkyBox"
+    ],
+    "force_opaque": true,
+    "double_sided": true
+  },
   "env_exposure": 0.5,
   "env_gamma": 2.2,
   "env_emissive_strength": 10.0,
@@ -85,13 +92,13 @@
     },
     {
       "name": "Model Center",
-      "x": 0.0,
-      "y": 900.0,
-      "z": -950.0,
-      "angle": 0.0,
+      "x": -24.4976,
+      "y": 900.7504,
+      "z": -960.7509,
+      "angle": 540.24,
       "rotation_deg": [
-        0.0,
-        -8.0,
+        540.24,
+        -1.4,
         0.0
       ]
     },
@@ -110,14 +117,14 @@
   ],
   "screen": {
     "allow_controller_move": true,
-    "width": 800.0,
+    "width": 90.5689,
     "position": [
-      0.0,
+      -24.9397,
       900.0,
-      -300.0
+      -903.2128
     ],
     "rotation_deg": [
-      0.0,
+      -179.148,
       0.0,
       0.0
     ],

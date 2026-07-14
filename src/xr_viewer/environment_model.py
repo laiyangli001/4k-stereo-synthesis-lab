@@ -6,6 +6,7 @@ from .implementation import *
 from .gltf import (
     GltfMaterial,
     OPENGL_VERTEX_FORMAT,
+    apply_skybox_profile,
     format_gltf_scene_summary,
     render_pass_from_primitive,
     summarize_gltf_scene,
@@ -136,6 +137,7 @@ class EnvironmentModelMixin:
         textures = []
         try:
             prims_data, textures, env_lights = load_glb_model(path)
+            apply_skybox_profile(prims_data, getattr(self, '_env_profile', {}))
             if env_lights:
                 self._scene_lights = env_lights
         except Exception as exc:

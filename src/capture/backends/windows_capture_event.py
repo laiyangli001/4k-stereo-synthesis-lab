@@ -10,6 +10,7 @@ from capture.types import FrameCopyMode, capture_frame_from_raw
 
 
 CAPTURE_CURSOR_DELAY_S = 0.2
+CAPTURE_GAP_LOG_LIMIT = 3
 _PENDING_CAPTURE_GAP_LOGS = []
 _PENDING_CAPTURE_GAP_LOCK = threading.Lock()
 _CAPTURE_GAP_DEFER_RELEASED = False
@@ -130,6 +131,7 @@ class WindowsCaptureEventRunner:
         self._fps_enqueue_seconds = 0.0
         self._fps_handler_seconds = 0.0
         self._last_frame_ts = 0.0
+        self._capture_gap_logs = 0
 
     @property
     def session(self):
@@ -191,6 +193,9 @@ class WindowsCaptureEventRunner:
         self._last_frame_ts = now
         if gap < 0.5:
             return
+        if self._capture_gap_logs >= CAPTURE_GAP_LOG_LIMIT:
+            return
+        self._capture_gap_logs += 1
         line = (
             f"[CaptureGap] tool={self.capture_tool} mode={self.config.capture_mode} "
             f"monitor={self.config.monitor_index} gap={gap:.2f}s kwargs={capture_kwargs}"

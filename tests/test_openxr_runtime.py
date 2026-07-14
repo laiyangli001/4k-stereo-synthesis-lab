@@ -969,7 +969,7 @@ def test_d3d11_controller_shader_linearizes_gltf_srgb_color_textures():
 def test_preview_room_layout_shader_uses_gltf_color_management():
     from xr_viewer.gltf import DEFAULT_GLTF_COLOR_POLICY
 
-    preview = (SRC / "tools" / "preview_room_layout.py").read_text(encoding="utf-8")
+    preview = (SRC / "xr_viewer" / "preview_room_layout.py").read_text(encoding="utf-8")
     env_frag = preview.split("ENV_FRAG", 1)[1].split("SCREEN_VERT", 1)[0]
     srgb_decode = DEFAULT_GLTF_COLOR_POLICY.srgb_decode_function
     output_encode = DEFAULT_GLTF_COLOR_POLICY.output_encode_function
@@ -3888,7 +3888,7 @@ def test_d3d11_projection_path_uses_native_renderer():
     assert "float t = frac(input.beamV - laserParams.x * 0.4);" in renderer
     assert 'names = [b"POSITION", b"TEXCOORD"]' in renderer
     assert "lerp(float3(0.0,0.4,1.0), float3(0.0,1.0,1.0)" in renderer
-    assert 'mat = prim.get("material") or {}' in renderer
+    assert 'mat = prim.get("render_material") if "render_material" in prim else prim.get("material")' in renderer
     assert "from .material_contract import GLTF_MATERIAL_TEXTURE_BINDINGS" in renderer
     assert "mat.get(binding.material_key)" in renderer
     assert "binding.d3d11_srv_slot" in renderer

@@ -1,5 +1,5 @@
 Capture Mode: Monitor
-Monitor Index: 3
+Monitor Index: 1
 Window Title: ''
 Show FPS: false
 Model List:
@@ -316,28 +316,28 @@ Depth Model: Distill-Any-Depth-Base
 Depth Strength: 0.25
 Depth Quick: Standard
 Depth Resolution: 518
-Anti-aliasing: 0
-Depth Antialias Strength: 0.0
+Anti-aliasing: 1
+Depth Antialias Strength: 1.0
 Depth Pop: 0.0
-Foreground Pop: 1.0
-Midground Pop: 1.0
-Background Pop: 1.0
-Depth Separation Preset: default
+Foreground Pop: 1.15
+Midground Pop: 1.05
+Background Pop: 1.05
+Depth Separation Preset: standard
 Convergence: 0.0
 Dynamic Convergence: false
 Dynamic Convergence Strength: 0.0
-Stereo Preset: traditional_fastest
-Stereo Quality: fast
+Stereo Preset: cinema
+Stereo Quality: quality_4k
 Parallax Budget Preset: standard
-Temporal: false
-Temporal Strength: 0.0
+Temporal: true
+Temporal Strength: 0.25
 Auto Scene Reset: true
 Scene Reset Threshold: 0.22
-Edge Dilation: 0
-Mask Feather Radius: 0
+Edge Dilation: 1
+Mask Feather Radius: 1
 Hole Fill Mode: balanced
-Hole Fill Radius: 0
-Hole Fill Strength: 0.0
+Hole Fill Radius: 1
+Hole Fill Strength: 0.6
 Edge Threshold: 0.04
 Cross Eyed: false
 Anaglyph Method: red_cyan
@@ -355,7 +355,7 @@ Computing Device: 0
 Language: CN
 Run Mode: OpenXR Link
 XR Headset Model: Pico 4 / 4 Ultra
-XR Preview Window: true
+XR Preview Window: false
 VSync: false
 Target FPS: 0
 Processing Resolution: Auto
@@ -384,4 +384,4 @@ Fix Viewer Aspect: false
 Stereo Output: 2
 Show Log Panel: true
 OpenVINO: null
-Synthetic View: fast
+Synthetic View: quality_4k

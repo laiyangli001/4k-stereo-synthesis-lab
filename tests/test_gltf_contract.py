@@ -58,6 +58,7 @@ from xr_viewer.gltf import (
     TextureBinding,
     TextureTransform,
     VERTEX_FLOAT_COUNT,
+    apply_skybox_profile,
     attach_primitive_contract,
     build_render_plan,
     classify_render_pass,
@@ -123,7 +124,7 @@ def test_gltf_loader_is_split_into_compliance_modules():
 
 
 def test_preview_room_layout_uses_active_uv1_attribute_for_base_texcoord():
-    source = (SRC / "tools" / "preview_room_layout.py").read_text(encoding="utf-8")
+    source = (SRC / "xr_viewer" / "preview_room_layout.py").read_text(encoding="utf-8")
 
     assert "in vec2 in_uv1;" in source
     assert "uniform int u_base_texcoord;" in source
@@ -133,7 +134,7 @@ def test_preview_room_layout_uses_active_uv1_attribute_for_base_texcoord():
 
 
 def test_preview_room_layout_mouse_pitch_persists_for_legacy_angle_profiles():
-    source = (SRC / "tools" / "preview_room_layout.py").read_text(encoding="utf-8")
+    source = (SRC / "xr_viewer" / "preview_room_layout.py").read_text(encoding="utf-8")
     setter = source.split("def _set_pose_rotation_deg", 1)[1].split("def _resolve_room_dir", 1)[0]
 
     assert 'view["rotation_deg"] = rounded' in setter
@@ -142,7 +143,7 @@ def test_preview_room_layout_mouse_pitch_persists_for_legacy_angle_profiles():
 
 
 def test_preview_room_layout_scales_navigation_speed_to_scene_extent():
-    source = (SRC / "tools" / "preview_room_layout.py").read_text(encoding="utf-8")
+    source = (SRC / "xr_viewer" / "preview_room_layout.py").read_text(encoding="utf-8")
     speed_fn = source.split("def _preview_motion_speeds", 1)[1].split("def main", 1)[0]
 
     assert "max_extent / 50.0" in speed_fn
@@ -154,7 +155,7 @@ def test_preview_room_layout_scales_navigation_speed_to_scene_extent():
 
 
 def test_preview_room_layout_ctrl_enables_one_meter_per_second_fine_mode():
-    source = (SRC / "tools" / "preview_room_layout.py").read_text(encoding="utf-8")
+    source = (SRC / "xr_viewer" / "preview_room_layout.py").read_text(encoding="utf-8")
     main_source = source.split("def main", 1)[1]
 
     assert "PREVIEW_FINE_MOVE_SPEED_MPS = 1.0" in source
@@ -274,11 +275,22 @@ def test_render_pass_classification_uses_material_alpha_mode(alpha_mode, expecte
     assert classify_render_pass(GltfMaterial(alpha_mode=alpha_mode)) == expected
 
 
-def test_render_pass_classification_promotes_named_sky_geometry():
+def test_render_pass_classification_requires_explicit_sky_flag():
     material = GltfMaterial(alpha_mode="OPAQUE")
 
-    assert classify_render_pass(material, mesh_name="SkyBox_Main") == "sky"
-    assert classify_render_pass(material, node_name="background_sky_dome") == "sky"
+    assert classify_render_pass(material, mesh_name="SkyBox_Main") == "opaque"
+    assert classify_render_pass(material, node_name="background_sky_dome") == "opaque"
+    assert classify_render_pass(material, sky_background=True) == "sky"
+
+
+def test_skybox_profile_marks_explicit_nodes_without_name_heuristics():
+    primitive = _primitive(material_contract=GltfMaterial(alpha_mode="MASK"))
+    primitive["node_name"] = "Model_Artemis__SkyBox"
+
+    assert apply_skybox_profile([primitive], {"skybox": {"nodes": [primitive["node_name"]]}}) == 1
+    assert primitive["render_pass"] == "sky"
+    assert primitive["alpha_mode"] == "OPAQUE"
+    assert primitive["double_sided"] is True
 
 
 def test_attach_primitive_contract_exposes_material_pass_and_bounds():
@@ -397,14 +409,14 @@ def test_build_render_plan_groups_primitive_indices_by_pass():
         _primitive(material_contract=GltfMaterial(alpha_mode="OPAQUE")),
         _primitive(material_contract=GltfMaterial(alpha_mode="BLEND")),
         _primitive(material_contract=GltfMaterial(alpha_mode="MASK")),
-        _primitive(material_contract=GltfMaterial(alpha_mode="OPAQUE"), mesh_name="SkyBox_Main"),
+            _primitive(material_contract=GltfMaterial(alpha_mode="OPAQUE"), mesh_name="SkyBox_Main"),
     ]
     for primitive in primitives:
         attach_primitive_contract(primitive)
 
     assert build_render_plan(primitives) == {
-        "sky": (3,),
-        "opaque": (0,),
+        "sky": (),
+        "opaque": (0, 3),
         "mask": (2,),
         "transparent": (1,),
     }
@@ -460,9 +472,9 @@ def test_summarize_gltf_scene_reports_counts_passes_and_bounds():
             {
                 "primitive_count": 44,
                 "texture_count": 19,
-                "light_count": 4,
-                "alpha_modes": {"BLEND": 28, "OPAQUE": 16},
-                "render_passes": {"opaque": 16, "transparent": 28},
+                    "light_count": 3,
+                    "alpha_modes": {"BLEND": 28, "MASK": 1, "OPAQUE": 15},
+                    "render_passes": {"mask": 1, "opaque": 15, "transparent": 28},
                 "extensionsRequired": ["KHR_materials_unlit"],
                 "materialExtensions": ["KHR_materials_unlit"],
                 "primitiveExtensions": [],

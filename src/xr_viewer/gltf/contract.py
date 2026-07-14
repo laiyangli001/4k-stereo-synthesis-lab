@@ -82,19 +82,28 @@ class GltfScene:
     diagnostics: Mapping[str, Any] = field(default_factory=dict)
 
 
-def _is_sky_background_name(*names: str) -> bool:
-    normalized = {
-        str(name or "").strip().lower().replace("-", "_").replace(" ", "_")
-        for name in names
-    }
-    return any(
-        name == "sky"
-        or name == "skybox"
-        or name.startswith("skybox_")
-        or name.startswith("sky_background")
-        or name.startswith("background_sky")
-        for name in normalized
-    )
+def apply_skybox_profile(primitives: Sequence[dict[str, Any]], profile: Mapping[str, Any]) -> int:
+    """Apply explicit environment skybox settings to matching glTF primitives."""
+    skybox = profile.get("skybox")
+    if not isinstance(skybox, Mapping):
+        return 0
+    nodes = {str(name) for name in skybox.get("nodes", ()) if isinstance(name, str) and name}
+    if not nodes:
+        return 0
+    force_opaque = bool(skybox.get("force_opaque", True))
+    double_sided = bool(skybox.get("double_sided", True))
+    matches = 0
+    for primitive in primitives:
+        if str(primitive.get("node_name") or "") not in nodes:
+            continue
+        primitive["sky_background"] = True
+        primitive["render_pass"] = "sky"
+        if force_opaque:
+            primitive["alpha_mode"] = "OPAQUE"
+        if double_sided:
+            primitive["double_sided"] = True
+        matches += 1
+    return matches
 
 
 def classify_render_pass(
@@ -104,7 +113,7 @@ def classify_render_pass(
     mesh_name: str = "",
     sky_background: bool = False,
 ) -> RenderPass:
-    if sky_background or _is_sky_background_name(node_name, mesh_name):
+    if sky_background:
         return "sky"
     if material.alpha_mode == "BLEND":
         return "transparent"
@@ -267,6 +276,7 @@ __all__ = [
     "TextureTransform",
     "VERTEX_FLOAT_COUNT",
     "attach_primitive_contract",
+    "apply_skybox_profile",
     "build_primitive_contract",
     "build_render_plan",
     "classify_render_pass",

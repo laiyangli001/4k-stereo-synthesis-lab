@@ -572,6 +572,7 @@ class EnvironmentRendererMixin:
                 self._env_prog['u_occlusion_strength'].value = 1.0
                 self._env_prog['u_baked_lightmap'].value = 0
 
+            sky_prims = []
             opaque_prims = []
             blend_prims = []
             for prim in self._env_model_prims:
@@ -579,18 +580,21 @@ class EnvironmentRendererMixin:
                 if rs is None:
                     self._prebake_prim_render_state(prim)
                     rs = prim.get('_rs', {})
-                if rs.get('blend', False):
+                if rs.get('render_pass') == 'sky':
+                    sky_prims.append(prim)
+                elif rs.get('blend', False):
                     blend_prims.append(prim)
                 else:
                     opaque_prims.append(prim)
 
             blend_prims = sort_transparent_primitives(blend_prims, cam_pos, model_mat)
 
-            for prim in opaque_prims + blend_prims:
+            for prim in sky_prims + opaque_prims + blend_prims:
                 rs = prim.get('_rs')
                 if rs is None:
                     continue
-                if rs['double_sided']:
+                is_sky = rs['render_pass'] == 'sky'
+                if is_sky or rs['double_sided']:
                     self.ctx.disable(moderngl.CULL_FACE)
                 else:
                     self.ctx.enable(moderngl.CULL_FACE)
@@ -602,11 +606,14 @@ class EnvironmentRendererMixin:
                 self._env_prog['u_emissive_factor'].value = rs['ef']
                 self._env_prog['u_unlit'].value = rs['unlit']
                 self._env_prog['u_foliage_mode'].value = rs['foliage']
-                self._env_prog['u_alpha_mode'].value = rs['am']
-                self._env_prog['u_double_sided'].value = 1 if rs['double_sided'] else 0
+                self._env_prog['u_alpha_mode'].value = 0 if is_sky else rs['am']
+                self._env_prog['u_double_sided'].value = 1 if is_sky or rs['double_sided'] else 0
                 self._env_prog['u_alpha_cutoff'].value = rs['ac']
 
-                if rs['blend']:
+                if is_sky:
+                    self.ctx.disable(moderngl.BLEND)
+                    set_depth_mask(False)
+                elif rs['blend']:
                     self.ctx.enable(moderngl.BLEND)
                     self.ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
                     set_depth_mask(False)

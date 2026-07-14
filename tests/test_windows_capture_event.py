@@ -226,6 +226,17 @@ def test_windows_capture_cuda_logs_callback_gap(capsys):
     assert "[CaptureGap] tool=WindowsCaptureCUDA mode=Monitor monitor=1 gap=0.60s" in capsys.readouterr().out
 
 
+def test_windows_capture_cuda_logs_at_most_three_callback_gaps(capsys):
+    runner = windows_capture_event.WindowsCaptureEventRunner(
+        CaptureConfig(capture_tool="WindowsCaptureCUDA", capture_mode="Monitor", monitor_index=1)
+    )
+
+    for now in (10.0, 10.8, 11.6, 12.4, 13.2):
+        runner._log_capture_gap(now, {"monitor_index": 1})
+
+    assert capsys.readouterr().out.count("[CaptureGap]") == 3
+
+
 def test_windows_capture_cuda_defers_gap_until_openxr_projection(monkeypatch, capsys):
     _reset_capture_gap_defer_state()
     monkeypatch.setenv("D2S_DEFER_CAPTURE_GAP_UNTIL_OPENXR_PROJECTION", "1")
