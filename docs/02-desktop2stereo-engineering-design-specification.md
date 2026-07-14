@@ -871,37 +871,44 @@ OpenGL backend 保留为本地 viewer / OpenXR fallback；两套 backend 只在�
 Keyboard hover/held key highlight 属于 keyboard texture 内容，只在 hover/held key index 变化时刷新；cursor 位置变化不得触发整张 keyboard texture 每帧重建。
 ```
 
-### OpenXR glTF 2.0 renderer compliance layer
+### OpenXR glTF 2.0 core renderer compliance layer
 
-`docs/38-gltf-2-renderer-compliance-layer-plan.md` 是当前 glTF 渲染层实施计划。工程边界如下：
+`docs/38-gltf-2-renderer-compliance-layer-plan.md` 是当前 glTF 渲染层实施计划。该计划的目标是完整 glTF 2.0 core renderer compliance；当前代码已经完成静态 mesh/material/render-pass 子集，但不能把这一子集称为完整 glTF 2.0 支持。
+
+工程边界如下：
 
 ```text
 glTF 2.0 asset
--> pygltflib parser
--> glTF compliance adapter
--> stable primitive/material/texture/render-pass contract
+-> parser / optional mature glTF runtime evaluation
+-> glTF core compliance adapter
+-> stable scene/node/primitive/material/texture/animation/skin/morph/camera contract
+-> runtime state update
 -> OpenGL backend / D3D11 backend / preview backend
 ```
 
 分层规则：
 
 ```text
-1. parser 层只负责读取 glTF/GLB 文档、buffers、accessors、images、samplers、materials、nodes 和 extensions。
-2. compliance adapter 负责把 glTF 语义转换为项目内部稳定 contract，包括 vertex layout、index format、material alpha、texture color role、sampler wrap/filter、doubleSided、extension support 和 render pass。
-3. backend upload 层只创建 API 对象：OpenGL texture/buffer/VAO、D3D11 buffer/SRV/sampler/state、preview ModernGL resource。
-4. backend render 层只消费 render plan，不重新解释 glTF JSON。
-5. preview_room_layout.py、OpenXR OpenGL 和 OpenXR D3D11 必须使用同一 primitive/material contract；不得各自猜 stride、alphaMode、texture role 或 extension 语义。
+1. parser 层负责读取 glTF/GLB 文档、buffers、bufferViews、accessors、images、samplers、materials、meshes、nodes、scenes、animations、skins、cameras 和 extensions。
+2. compliance adapter 负责把 glTF core 语义转换为项目内部稳定 contract，包括 vertex layout、index format、accessor normalized/sparse/stride、material alpha、texture color role、sampler wrap/filter、doubleSided、node hierarchy、animation channels/samplers、skin joints/inverseBindMatrices、morph target weights、camera projection、extension support 和 render pass。
+3. runtime update 层按 frame time 更新 animated node matrices、skin joint matrices、morph weights 和 active scene/camera 状态；静态模型可以缓存结果，但动态模型不得把 node transform 永久烘焙进唯一顶点缓冲后丢失动画。
+4. backend upload 层只创建 API 对象：OpenGL texture/buffer/VAO、D3D11 buffer/SRV/sampler/state、preview ModernGL resource。动态 node 应通过 per-primitive model matrix、joint matrix buffer 或 morph target buffer/texture 进入 draw，而不是改写 glTF 语义。
+5. backend render 层只消费 render plan 和 runtime state，不重新解释 glTF JSON。
+6. preview_room_layout.py、OpenXR OpenGL 和 OpenXR D3D11 必须使用同一 scene/primitive/material/runtime contract；不得各自猜 stride、alphaMode、texture role、animation semantics 或 extension 语义。
 ```
 
-当前必须锁住的合规点：
+当前必须锁住的 core 合规点：
 
 ```text
-POSITION / NORMAL / TEXCOORD_0 / TEXCOORD_1 contract 明确，vertex stride 由 contract 给出。
+POSITION / NORMAL / TANGENT / TEXCOORD_0 / TEXCOORD_1 / COLOR_0 / JOINTS_0 / WEIGHTS_0 contract 明确，vertex stride 由 accessor/bufferView contract 给出。
 indices 支持 UNSIGNED_BYTE / UNSIGNED_SHORT / UNSIGNED_INT。
-accessor byteOffset、bufferView byteOffset/stride、sparse accessor、GLB BIN、external .bin 和 data URI 均由 parser/adapter 层处理。
+accessor byteOffset、bufferView byteOffset/stride、normalized、sparse accessor、GLB BIN、external .bin 和 data URI 均由 parser/adapter 层处理。
+node hierarchy 支持 matrix 与 TRS；TRS animation 支持 translation / rotation / scale channel 和 LINEAR / STEP / CUBICSPLINE interpolation。
+skins 支持 joints、skeleton、inverseBindMatrices 和 per-frame joint matrices；morph targets 支持 target POSITION/NORMAL/TANGENT 与 mesh/node weights。
 baseColor / emissive texture 按 sRGB；normal / metallic-roughness / occlusion 按 linear data。
 alphaMode=OPAQUE/MASK/BLEND 进入明确 render pass；BLEND 不得混入 opaque pass。
 KHR_materials_unlit 以 extension presence 判定，空对象 `{}` 仍表示启用。
+cameras 和 multi-scene 属于 core；没有显式相机时允许使用 profile/viewer fallback，但不能误解析 asset camera。
 extensionsRequired 中不支持的必需扩展必须 fail fast，不允许静默显示错误模型。
 ```
 
@@ -911,12 +918,21 @@ extensionsRequired 中不支持的必需扩展必须 fail fast，不允许静默
 src/xr_viewer/gltf/document.py         -> glTF/GLB document、buffer 和 URI/data loading
 src/xr_viewer/gltf/accessors.py        -> accessor、bufferView、stride、component/type 解码
 src/xr_viewer/gltf/materials.py        -> GltfMaterial、texture binding、sampler/transform/material roles
-src/xr_viewer/gltf/primitives.py       -> load_glb_model compatibility primitive stream
-src/xr_viewer/gltf/scene.py            -> GltfScene、diagnostics、shared scene contract
+src/xr_viewer/gltf/primitives.py       -> load_glb_model compatibility primitive stream；当前仍偏静态烘焙，需要为 animated nodes 保留 local mesh + node matrix contract
+src/xr_viewer/gltf/scene.py            -> GltfScene、diagnostics、shared scene contract；当前 node matrices 是一次性静态计算
 src/xr_viewer/gltf/render_plan.py      -> render pass classification and transparent sorting
 src/xr_viewer/gltf/color_management.py -> sRGB/linear/tone-map/output gamma policy
 src/xr_viewer/gltf/loader.py           -> public package loader facade
 src/xr_viewer/gltf_loader.py           -> legacy compatibility facade only
+```
+
+新增/待补模块边界：
+
+```text
+src/xr_viewer/gltf/animation.py        -> glTF animation sampler/channel interpolation and per-frame node TRS output
+src/xr_viewer/gltf/skinning.py         -> skin joint palette construction and backend joint buffer contract
+src/xr_viewer/gltf/morph.py            -> morph target weight evaluation and backend morph input contract
+src/xr_viewer/gltf/cameras.py          -> glTF perspective/orthographic camera contract and viewer fallback policy
 ```
 
 实现规则：
@@ -927,10 +943,11 @@ Environment renderer-prepared fields use `render_material`; do not reintroduce t
 Controller backend code may still have renderer-prepared per-backend material objects, but glTF semantic fields must originate from GltfMaterial / shared material preparation.
 Render planning is explicit: sky, opaque, mask, and transparent are separate pass buckets; transparent primitives are sorted back-to-front with the shared policy before blend drawing.
 Color management policy is shared: shader work is linear, base/emissive textures are decoded from sRGB, output is tone-mapped and gamma encoded at the final shader boundary.
+Animated GLB support must use standard glTF animation data. Artemis satellite/spaceship motion is the current acceptance fixture: if Don McCurdy's viewer plays the exported GLB animation, our preview/OpenXR backends must eventually play the same node transform animation through the shared runtime state.
+Before expanding a homegrown renderer too far, evaluate mature glTF runtimes such as Filament `gltfio`; parser-only libraries are not enough because animation, skinning, morph targets, material variants, and validation behavior are renderer/runtime responsibilities.
 ```
 
 该层不是 controller 专用。Controller model、environment GLB、preview tool 都必须逐步收敛到同一 contract。Controller profile 只保留品牌覆盖参数、手柄材质例外、按键动画、模型偏移/旋转等 profile 级差异；房间/环境光照和通用 glTF 材质语义不应散落在每个 controller profile 内。
-
 ### Environment profile transform and preview layout contract
 
 Environment profile 的 model transform 使用 glTF/local mesh 坐标到 OpenXR/world 米制坐标的 TRS：
@@ -1443,7 +1460,7 @@ openxr_async_ok / openxr_async_missing / openxr_async_failed 日志字段
 | OpenXR direct uniforms | 已输出规范 `shader_uniforms`，字段以 `max_disparity_px`、`depth_strength`、`depth_response`、`convergence`、`dynamic_convergence_strength`、layer pop、`render_size`、`screen_roll` 为主；OpenGL 与 D3D11 RGB+D direct 调用层均按 `max_disparity_px / render_width` 派生每眼 shader offset，并使用同一 `depth_strength` 放大实际视差位移，不再消费 IPD / Stereo Scale / Max Shift Ratio 旧强度链；D3D11 native direct shader 已补核心 DIBR 质量语义 | VDXR 实机验证后再决定是否补完整视觉 polish；OpenXR 头显屏幕几何不得反向修改 convergence/parallax 参数 |
 | OpenXR headset screen presets / OSD | 已新增 `XR Headset Model` 设置和 `src/utils/xr_headset_presets.py`，按推荐距离 + 60° 水平视角自动计算屏幕尺寸；`_screen_view_distance()` 统一用户可见距离；preset OSD 显示 5 秒且不被 live distance 刷新；Y 恢复同一 preset 会重新显示 OSD；右手柄保留 sphere-orbit 并自动朝向头部；头显屏幕预设只影响 presentation geometry | 后续如增加水平视角 GUI slider，只应调整统一 FOV 参数或显式设置，不应回到每个预设手工维护宽高；屏幕几何仍不得替代 `Convergence`、`Dynamic Convergence Strength`、`Parallax Budget`、`Depth Separation` 或 FG/MG/BG Pop |
 | OpenXR main screen presentation | VDXR 实机验证证明 runtime left/right 有差异，D2S 也提交了 Quad `eye0 array=0` / `eye1 array=1`，但 Quad overlay 仍无有效 3D；projection layer 是当前可靠主画面 3D 路径。当前代码已把 D3D11 native runtime-eye / RGB+depth 主虚拟屏幕接回 projection-layer stereo rendering，并把成功的两眼 projection render 计入 `openxr_projection_screen_present` / `screen_proj`；D3D11 projection 主屏的 model matrix 已统一走 shared screen pose helper，OpenXR 公共 frame input 仍在渲染前复用现有 controller/raycast/screen-adjust/hot-parameter 状态；实机已验证 laser/controller 命中与可见屏幕一致，左右手柄拖动、距离/大小/旋转调节、Depth Strength / 2D-3D 热切换均能作用到 D3D11 projection 主屏；virtual keyboard / OSD 使用共享 overlay Quad presenter 和独立 overlay Quad swapchains，在 Projection 主屏之后合成，低频上传小 RGBA UI 纹理；keyboard/OSD 这类功能内容必须走 `overlay_textures.py` 共享 builder，OpenGL 以既有验证逻辑为准写入 OpenXR GL Quad texture，D3D11 写入 D3D11 Quad texture，backend 只负责上传/Quad layer 提交；Quad layer 仍仅保留为可选实验、诊断或 overlay，不作为主画面完成判据 | 下一轮按 `docs/36` phase 2 验证 OpenXR presenter 硬实时：runtime/capture/effects 慢时复用 last-good Projection screen frame，同时保持 controller/head pose refresh 和 `xrEndFrame` 不被阻塞 |
-| OpenXR glTF renderer compliance | 已按 `docs/38` 拆出 `src/xr_viewer/gltf/` package，并把 legacy `gltf_loader.py` 收敛为 facade；已有共享 vertex layout、`GltfMaterial`、texture binding/transform、color policy、render-pass classification、transparent sorting 和 `GltfScene(render_plan, diagnostics)`；preview/OpenGL/D3D11 当前消费同一 10-float primitive contract，Artemis 的 stride、alpha pass、empty unlit extension、UV1、legacy material dict fallback 问题已进入回归测试 | 继续真实窗口/实机验证：`preview_room_layout.py Artemis` smoke、OpenXR D3D11/OpenGL environment/controller smoke、更多 synthetic glTF fixtures；后续新增 glTF 语义只能进入 shared contract/adapter，不允许在 backend 或单模型 profile 内补丁化解释 |
+| OpenXR glTF renderer compliance | 已按 `docs/38` 拆出 `src/xr_viewer/gltf/` package，并把 legacy `gltf_loader.py` 收敛为 facade；已有共享 static vertex layout、`GltfMaterial`、texture binding/transform、color policy、render-pass classification、transparent sorting 和 `GltfScene(render_plan, diagnostics)`；preview/OpenGL/D3D11 当前消费同一 10-float primitive contract，Artemis 的 stride、alpha pass、empty unlit extension、UV1、legacy material dict fallback 问题已进入回归测试 | 该状态只是静态 renderer 子集，不是完整 glTF 2.0 core。下一步按扩展后的 `docs/38` 补齐 TRS animation sampling、per-frame node matrices、animated primitive model matrices、skinning、morph targets、sparse/interleaved/normalized accessor、camera/multi-scene 与 diagnostics；Artemis 标准 GLB 动画是首个验收样例，同时评估 Filament `gltfio` 等成熟 runtime，避免重复造完整 renderer |
 | OpenXR controller materials / laser | Controller glTF material 字段已抽到共享准备层，OpenGL/D3D11 分别只做 API 绑定；D3D11 controller 已覆盖 base/normal/MR/occlusion/emissive、alpha/doubleSided、texcoord/transform、CCW front face 和 WRAP sampler，HP/Index 透明纹理问题已由实机视觉确认修复；controller light policy 已收敛为 screen light/reflection、head/top light、HDR environment 和 ambient，不消费环境 profile 的 punctual/fill lights；laser 宽度由 `laser_params.py` 共享，手柄端 6 mm、远端 2 mm，OpenGL/D3D11 均用 crossed tapered quads 近似彩色光柱 | 继续实机比较多个 controller model、HDR 房间和非 HDR 房间；`diagnostics.materialMode` 只作为临时定位手段，不能成为默认材质模式；controller 例外只能落在 profile 覆盖层，通用 glTF 语义必须回到 compliance layer |
 | GPU texture upload / color space | 已抽出 OpenGL 共享 uploader：`GlTensorPboUploader` 统一 GPU tensor -> GL PBO -> GL texture，覆盖 CUDA/HIP/ROCm 可共用路径；`CudaGlTextureUploader` 负责 CUDA RGBA image texture copy 与 PBO fallback；CPU fallback 红色告警；算法内部应保持 GPU tensor，只有进入显示/编码边界才上传到 D3D11/GL/Metal 等资源；glow 实时采样只允许走 GPU source texture；Windows OpenXR 默认 D3D11 native，OpenGL 仅作为本地 viewer 和显式 forced/auto fallback；D3D11 desktop/screen intermediate color texture 使用 UNORM，避免 sRGB 自动 decode 后写 UNORM RTV 导致画面偏暗；glTF base/emissive 是 sRGB 语义，normal/MR/occlusion 是 linear data；GLB parse/decode/initial upload 可用 CPU，每帧 draw 必须采样 GPU texture/SRV | 继续 VDXR 真机验证 D3D11 projection/upload 和颜色亮度；继续验证 CUDA/GL fallback 日志 |
 | Realtime no-sync scalar policy | 动态会聚、motion sampler、OpenXR shader uniform staging、runtime-eye tensor diagnostics 已按 no-sync 原则处理；实时相关文件检查不再包含 `.item()` | 后续新增 realtime CUDA 标量路径必须优先传 tensor；CPU-only 消费者只能异步 staging 并使用上一帧 ready 值，不能阻塞当前帧 |
@@ -1521,7 +1538,7 @@ Capture -> timestamped frame window -> high quality synthesis -> delayed present
 
 1. 完成 GUI live hot-save 到 `RuntimeSettingsSnapshot` 的直接发送路径，把 settings.yaml polling 降为持久化同步路径。
 2. 收敛 Windows OpenXR 主路径到 D3D11 native：projection-layer 主画面和 RGB+D 核心 shader parity 已接入，继续做 VDXR 实机验收和必要 polish。
-3. 完成 `docs/38` glTF 2.0 renderer compliance layer 的真实窗口/实机验证：已拆出 parser / compliance adapter / backend upload-render 分层并统一 environment、controller、preview、OpenGL、D3D11 的 primitive/material/texture/render-pass contract；下一步补齐 preview Artemis smoke、OpenXR D3D11/OpenGL 视觉验证和更多 synthetic glTF fixtures。
+3. 执行扩展后的 `docs/38` glTF 2.0 core compliance 路线：保留已实现的 static primitive/material/texture/render-pass contract，优先补 TRS animation sampling、per-frame node matrix、animated primitive model matrix，让 Artemis 标准 GLB 动画在 preview/OpenXR backend 可见；随后补 skinning、morph targets、sparse/interleaved/normalized accessors、camera/multi-scene、diagnostics，并评估 Filament `gltfio` 等成熟 runtime。
 4. 继续 OpenXR controller parity：在 compliance layer 上保留 controller profile 覆盖、按键动画、模型偏移/旋转和手柄材质例外，实机验证 D3D11 color-space、HDR environment、screen reflection、laser 光柱和多个 controller model。
 5. OpenGL 作为本地 viewer 和兼容 fallback：继续验证 `GlTensorPboUploader` / `CudaGlTextureUploader` 的 image/PBO/CPU fallback 日志，不再把 OpenGL uploader 当作 D3D11 方案。
 6. 移除 TensorRT ORT / ONNX Runtime depth provider 的 CPU numpy 往返，实现真正 GPU zero-copy input/output。

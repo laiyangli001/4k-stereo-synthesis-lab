@@ -32,7 +32,7 @@ Canonical specs for current work:
 - `docs/02-desktop2stereo-engineering-design-specification.md` - engineering implementation, migration, compatibility cleanup, and compliance status.
 - `docs/35-OpenXR_Asynchronous_Decoupled_Rendering_Architecture_Report.md` - target OpenXR asynchronous decoupled rendering architecture.
 - `docs/36-OpenXR_Asynchronous_Decoupled_Rendering_Implementation_Plan.md` - implementation plan for the OpenXR asynchronous refactor; use it as the current plan for projection-layer main-screen presentation, optional Quad diagnostics/overlays, panorama background, GPU Glow, and wall reflection work.
-- `docs/38-gltf-2-renderer-compliance-layer-plan.md` - current plan for the OpenXR/local glTF 2.0 renderer compliance layer: parser separation, stable mesh/material/texture contracts, render-pass classification, and OpenGL/D3D11 parity.
+- `docs/38-gltf-2-renderer-compliance-layer-plan.md` - current plan for the OpenXR/local glTF 2.0 core renderer compliance layer: static mesh/material/texture/render-pass contracts plus runtime animation, skinning, morph targets, sparse/interleaved/normalized accessors, cameras/multi-scene, diagnostics, and mature runtime reuse evaluation.
 - `prompts/codex-refactor-prompt.md`
 - This file: `docs/00-api-handoff-progress.md`
 
@@ -55,7 +55,7 @@ Canonical specs for current work:
 - CUDA/GL image texture upload must remain image-texture-first. PBO is an acceptable GPU fallback, but it must be logged as fallback and must not hide the original image texture failure. Any CPU upload fallback in OpenXR, local viewer, stream/debug realtime display, or depth provider hot path must print a red console warning and record the reason.
 - OpenXR Quad layer is not a reliable VDXR main stereo display path. The latest logs prove runtime left/right eye tensors differ, OpenGL shared-array Quad swapchains are created, and Quad headers submit `eye0 array=0` / `eye1 array=1`; however the headset still shows no useful 3D. Projection layer remains the known-good OpenXR stereo path because it uses standard per-eye projection views. Current code should keep the main screen off the Quad path.
 - OpenXR Glow / screen-light sampling must follow `docs/20-openxr-gpu-glow-guide.md`: use GPU source texture, low-resolution glow texture, shader/compute sampling, or future D3D/Vulkan GPU passes. Do not reintroduce realtime `.cpu()`, `.numpy()`, `glReadPixels()`, or `tex.read()` as screen-light sampling sources.
-- glTF environment/controller rendering now has a shared compliance package, stable primitive/material/color/render-pass contracts, and OpenGL/D3D11/preview consumers for the current contract. Remaining risk is real-window/real-device validation: preview GUI smoke has not been re-run after the latest Artemis profile scale/navigation changes, and VDXR visual validation is still required for the D3D11 environment/controller paths.
+- glTF environment/controller rendering now has a shared static compliance package, stable primitive/material/color/render-pass contracts, and OpenGL/D3D11/preview consumers for that current contract. It is not yet full glTF 2.0 core compliance: runtime animation, skinning, morph targets, sparse/interleaved/normalized accessor coverage, cameras, and multi-scene behavior remain open. Animated Artemis GLB exports prove this gap because external viewers can play the node animation while the current loader still bakes static node transforms into uploaded primitives.
 
 ## Future Work
 
@@ -73,11 +73,22 @@ Current task queue:
 8. Remove remaining compatibility redundancy after all consumers use the docs/01 contract: old snapshot/API aliases and debug-only fallback keys. Legacy parallax multiplier fields and historical render-scale numeric thresholds have been cleaned from the current runtime/config path and should now be guarded against regressions.
 9. Continue network_stream encoder transport work, especially RTMP / low-latency paths, without redefining stereo synthesis semantics.
 10. Keep `docs/02-desktop2stereo-engineering-design-specification.md` aligned to the `docs/01-Realtime-2d-to-3d-specification.md` eleven-step runtime flow.
-11. Finish validation for the implemented `docs/38` glTF 2.0 renderer compliance layer: run real preview-window smoke, verify Artemis at ship scale, and validate OpenGL/D3D11 environment/controller rendering on target hardware.
+11. Execute the expanded `docs/38` glTF 2.0 core roadmap: keep validating the implemented static contract, then add TRS animation sampling, per-frame node matrices, per-primitive model matrices for animated nodes, and follow with skinning, morph targets, accessor completeness, cameras/multi-scene, and mature runtime reuse evaluation.
 12. Continue `docs/36` phase 2: harden the OpenXR frame loop so the headset presenter keeps refreshing from the last good Projection screen frame when runtime/capture/effects are slow, without backpressuring capture/runtime.
 
 ## Current Status
 
+### 2026-07-15 glTF 2.0 Core Compliance Plan Expansion
+
+Updated `docs/38-gltf-2-renderer-compliance-layer-plan.md` so the target is explicit full glTF 2.0 core coverage rather than the already-implemented static renderer subset.
+
+Current interpretation:
+
+- The existing `src/xr_viewer/gltf/` split is a useful base for static mesh/material/render-pass compliance, but it is not complete glTF 2.0 core support.
+- Standard GLB animation must be visible through glTF animation channels and samplers, not through model-specific Python/OpenXR heuristics.
+- Artemis is now the concrete regression case: the exported GLB contains standard node transform animation that Don McCurdy's viewer can play, while our loader currently builds static node matrices once and uploads baked static primitive vertices.
+- `docs/38` now tracks the missing core areas: animation runtime, skinning, morph targets, sparse/interleaved/normalized accessors, cameras/multi-scene, validation diagnostics, and evaluation of mature runtimes such as Filament `gltfio` to avoid rebuilding a full renderer unnecessarily.
+- First implementation target should be TRS animation sampling plus animated-node rendering without baking the node transform permanently into the vertex buffer; skinning/morph/accessor/camera work follows after that contract is in place.
 ### 2026-07-14 glTF 2.0 Compliance Layer Implementation and Artemis Scale Follow-up
 
 Implemented locally in the current worktree:
@@ -116,18 +127,19 @@ Remaining validation target:
 - Re-run OpenXR D3D11/OpenGL environment smoke on target hardware to verify the deleted legacy material dict fallback does not hide any remaining backend consumer.
 - If a “geometric center” camera preset is desired for Artemis, add a separate view pose around `Y=90m`; keep the current ground-level pose semantics separate from `model_position`.
 
-### 2026-07-13 glTF 2.0 Renderer Compliance Layer Plan
+### 2026-07-13 / 2026-07-15 glTF 2.0 Core Renderer Compliance Layer Plan
 
-Current engineering target has shifted from single-model fixes to a glTF 2.0 renderer compliance layer. The plan is documented in `docs/38-gltf-2-renderer-compliance-layer-plan.md` and indexed from `docs/README.md`.
+Current engineering target has shifted from single-model fixes to a glTF 2.0 core renderer compliance layer. The plan is documented in `docs/38-gltf-2-renderer-compliance-layer-plan.md` and indexed from `docs/README.md`. The 2026-07-15 expansion supersedes the earlier static-renderer-only scope.
 
 Scope captured by the plan:
 
 - Keep `pygltflib` as the glTF 2.0 structure parser, but do not treat it as a renderer.
 - Add a compliance adapter between parsed glTF and backend upload.
 - Define one shared mesh/material/texture/render-pass contract for preview, OpenGL, and D3D11.
+- Add runtime contracts for glTF core TRS animation, animated node matrices, skinning, morph targets, sparse/interleaved/normalized accessors, cameras, and multi-scene handling.
 - Treat opaque, mask, transparent, and sky/background rendering as explicit passes.
 - Keep color-space, alpha, texture role, sampler, and `extensionsRequired` behavior explicit.
-- Use Artemis and synthetic glTF fixtures as regression inputs so future valid glTF models do not require model-specific patches.
+- Use Artemis animated GLB exports and synthetic Khronos-style fixtures as regression inputs so future valid glTF models do not require model-specific patches.
 
 Recent local findings that motivated the plan:
 

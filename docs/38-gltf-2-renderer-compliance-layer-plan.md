@@ -1,18 +1,19 @@
-﻿# glTF 2.0 Renderer Compliance Layer 实施计划
+﻿# glTF 2.0 Core Renderer Compliance Layer 实施计划
 
 ## 1. 背景
 
 当前 OpenXR 房间模型和控制器模型已经改用 `pygltflib` 解析 glTF 2.0 文件结构，但显示是否正确仍取决于项目自己的 OpenGL / D3D11 上传和 shader 管线。
 
-Don McCurdy glTF Viewer 能一步正确显示，是因为它背后是 three.js 的完整 glTF 渲染栈：GLTFLoader、scene graph、PBR material、透明 pass、色彩管理、tone mapping、sky/background 处理等。`pygltflib` 只解决文件结构解析，不等于完整 viewer。
+Don McCurdy glTF Viewer 能一步正确显示，是因为它背后是 three.js 的完整 glTF 渲染栈：GLTFLoader、scene graph、animation mixer、skinning、morph target、PBR material、透明 pass、色彩管理、tone mapping、sky/background 处理等。`pygltflib` 只解决文件结构解析，不等于完整 viewer。
 
 Artemis 暴露的问题包括：
 
 - preview 曾把 loader 输出的 10-float vertex contract 当 8-float 读取，导致放射状平面。
 - preview 曾把 `alphaMode=BLEND` 当 opaque 绘制，导致透明面片遮挡。
 - `KHR_materials_unlit: {}` 曾被错误当成 False。
+- 标准 GLB animation 能在 Don McCurdy viewer 播放，但本项目 loader 把 node transform 烘进静态 VBO，导致卫星/飞船动画不可见。
 
-因此后续目标应从单模型补丁改为建设 **glTF 2.0 renderer compliance layer**。
+因此目标应从单模型补丁升级为 **glTF 2.0 core renderer compliance layer**。本文档覆盖 glTF 2.0 core 的静态与动态语义；Draco、Meshopt、BasisU、`KHR_materials_*` 等非 core 扩展按 extension 策略单独处理。
 
 ## 2. 目标
 
@@ -20,9 +21,9 @@ Artemis 暴露的问题包括：
 
 ```text
 glTF 2.0 asset
-  -> pygltflib parser
-  -> glTF compliance adapter
-  -> stable mesh/material/texture/render-pass contract
+  -> parser
+  -> glTF core compliance adapter
+  -> stable scene/mesh/material/animation/skin/morph contract
   -> OpenGL backend
   -> D3D11 backend
 ```
@@ -34,39 +35,51 @@ glTF 2.0 asset
 3. material contract 唯一，OpenGL / D3D11 共用。
 4. render pass 明确区分 opaque / mask / transparent / sky-background。
 5. 色彩空间和 alpha 语义明确。
-6. `extensionsRequired` 不支持时 fail fast，不静默错误显示。
-7. 用合成测试和真实模型 smoke test 锁住边界。
+6. glTF core animation、skin、morph target、camera、sparse accessor 不再被静默忽略。
+7. `extensionsRequired` 不支持时 fail fast，不静默错误显示。
+8. 优先复用成熟 glTF runtime / renderer；自研只做必须的 adapter 和 fallback。
+9. 用合成测试和真实模型 smoke test 锁住边界。
 
-## 3. 非目标
+## 3. 范围边界
 
-第一阶段不承诺完整替代 Don McCurdy glTF Viewer：
+### 3.1 glTF 2.0 core 必须覆盖
 
-- 不一次性支持所有 `KHR_materials_*` 扩展。
-- 不完整支持 animation、skin、morph target runtime 播放。
-- 不支持 Draco / Meshopt，除非明确接入解码库。
-- 不追求与 three.js 完全一致的 IBL / tone mapping。
+- GLB / `.gltf` JSON / external buffer / data URI buffer。
+- bufferView / accessor：`byteOffset`、`byteStride`、`componentType`、`type`、`normalized`、sparse accessor。
+- scene / node hierarchy：active scene、多 scene、matrix、TRS、动态 world matrix 传播。
+- mesh primitive：indices、attributes、morph targets。
+- core PBR material：metallic-roughness、normal、occlusion、emissive、alphaMode、doubleSided。
+- image / texture / sampler。
+- animation：channels、samplers、translation、rotation、scale、weights，STEP / LINEAR / CUBICSPLINE。
+- skinning：skins、joints、inverseBindMatrices、`JOINTS_0`、`WEIGHTS_0`。
+- cameras：perspective / orthographic。
 
-但必须做到：不支持且影响正确性的 required extension 必须明确报错，不能错误渲染成看似可用的画面。
+### 3.2 非 core 扩展
+
+以下不是 glTF 2.0 core，不作为 core 合规完成条件；如果出现在 `extensionsRequired`，必须 fail fast：
+
+- `KHR_draco_mesh_compression`
+- `EXT_meshopt_compression`
+- `KHR_texture_basisu`
+- `EXT_mesh_gpu_instancing`
+- 未明确支持的 `KHR_materials_*`
+
+### 3.3 避免重复造轮子
+
+完整 glTF viewer 是大型渲染栈，不应长期靠本项目零散补丁重写。
+
+优先级：
+
+1. 评估接入成熟 runtime renderer，例如 Filament `gltfio`。
+2. Web preview / 对照验证继续使用 Don McCurdy viewer、Khronos Sample Viewer、three.js / Babylon.js。
+3. parser 级库如 `pygltflib`、tinygltf、cgltf、Microsoft glTF-SDK 只能解决结构读取，不能替代 animation/skin/PBR runtime。
+4. 自研路径只补当前 runtime 必需的最小合规面，并用 diagnostics 明确未支持项。
 
 ## 4. 当前问题清单
 
 ### 4.1 Mesh contract 漂移
 
-当前 loader 输出可能是：
-
-```text
-position3 + normal3 + uv0 2 + uv1 2
-```
-
-部分 consumer 曾按：
-
-```text
-position3 + normal3 + uv0 2
-```
-
-读取，导致 vertex attribute 错位。
-
-第一阶段固定 contract：
+当前 loader 输出固定目标：
 
 ```text
 position: float3
@@ -76,11 +89,13 @@ uv1: float2
 tangent: float4
 ```
 
+preview、OpenGL、D3D11 必须按同一 contract 读取。任何 consumer 按 8-float 读取 10-float 数据都属于合规失败。
+
 ### 4.2 Material contract 分裂
 
-material 字段目前分散在 `gltf_loader.py`、`material_contract.py`、`controller_materials.py`、`environment_model.py`、`d3d11_native_renderer.py` 等路径中。
+material 字段不应分散在 loader、controller、environment、D3D11 native renderer 中各自解释。
 
-需要收敛为 renderer-facing material object，至少包含：
+renderer-facing material 至少包含：
 
 ```text
 base_color_factor
@@ -97,37 +112,36 @@ emissive_texture
 alpha_mode
 alpha_cutoff
 double_sided
-unlit
 texture_transforms
 texcoord_set per texture slot
 ```
 
-OpenGL 和 D3D11 不应各自解释 glTF material。
+`KHR_materials_unlit` 属于扩展，但已作为项目支持项进入 material contract。
 
 ### 4.3 Render pass 缺失或不一致
 
 最低 pass 要求：
 
 ```text
-opaque pass:
+opaque:
   depth test on
   depth write on
   blend off
 
-mask pass:
+mask:
   depth test on
   depth write on
   blend off
   alpha cutoff discard
 
-transparent pass:
+transparent:
   depth test on
   depth write off
   blend on
   source alpha / one minus source alpha
-  ideally back-to-front sorted
+  back-to-front sorted
 
-sky/background pass:
+sky/background:
   special handling
   avoid normal opaque geometry occlusion
 ```
@@ -143,7 +157,7 @@ preview、OpenGL runtime、D3D11 runtime 都必须遵守同一 pass 分类。
 - shader 内部 lighting 使用 linear。
 - 输出按 backend 目标格式决定 gamma / sRGB encode。
 
-### 4.5 extension 策略不明确
+### 4.5 Extension 策略不明确
 
 | 类别 | 策略 |
 |---|---|
@@ -151,7 +165,7 @@ preview、OpenGL runtime、D3D11 runtime 都必须遵守同一 pass 分类。
 | optional but unsupported | 警告并忽略 |
 | required but unsupported | fail fast，停止加载 |
 
-第一阶段明确支持：
+当前明确支持：
 
 - `KHR_materials_unlit`
 - `KHR_texture_transform`
@@ -164,38 +178,92 @@ preview、OpenGL runtime、D3D11 runtime 都必须遵守同一 pass 分类。
 - `EXT_mesh_gpu_instancing`
 - 其它会改变几何或材质关键语义的 `extensionsRequired`
 
+### 4.6 Core animation runtime 缺失
+
+当前 loader 会在加载时把 node world matrix 烘进顶点 VBO。这个做法对静态模型可用，但对带 `animations` 的 glTF core 模型是错误的：
+
+- animation channel 指向 node 的 `translation` / `rotation` / `scale` / `weights` 后，renderer 必须每帧采样并更新 node local matrix。
+- animated node 的 mesh 顶点不能只按加载时的静态矩阵烘死。
+- transparent sorting、bounds、camera、light 相关 world matrix 必须使用当前帧动态矩阵。
+
+Artemis 卫星/飞船 GLB 已能在标准 viewer 中播放动画，暴露的就是这一缺口。
+
+### 4.7 Skinning 缺失
+
+glTF core skinning 需要：
+
+- 读取 `skins`、`joints`、`inverseBindMatrices`。
+- 读取 vertex attributes `JOINTS_0` / `WEIGHTS_0`。
+- 每帧根据 joint world matrix 生成 joint matrix palette。
+- OpenGL / D3D11 shader 统一消费 skinning 数据。
+
+不支持 skinning 时，带骨骼动画的模型会静态错误或变形错误。
+
+### 4.8 Morph target / weights 缺失
+
+glTF core mesh target 需要：
+
+- 读取 primitive `targets` 中的 POSITION / NORMAL / TANGENT delta。
+- 支持 mesh / node 默认 `weights`。
+- 支持 animation target path `weights`。
+- shader 或 CPU fallback 应用 morph delta，并同步 normal/tangent 处理。
+
+### 4.9 Sparse accessor / interleaved buffer / normalized attribute 缺失
+
+accessor 层必须完整支持：
+
+- sparse accessor 覆盖 base accessor 数据。
+- interleaved bufferView `byteStride`。
+- normalized integer attribute 到 float 的标准转换。
+- 所有合法 componentType / accessor type 组合。
+- accessor min/max 诊断与 bounds 验证。
+
+### 4.10 Camera 和多 scene 语义缺失
+
+glTF core 包含：
+
+- 多 scene，active scene 默认规则。
+- perspective / orthographic camera。
+- camera node 的动态 transform。
+
+当前 environment profile 自己定义视角，不等于支持 glTF camera。core 合规层应能解析 camera，并让 preview / diagnostics / 可选 viewer 路径消费。
+
 ## 5. 目标架构
 
-建议新增或重组为：
+建议模块边界：
 
 ```text
 src/xr_viewer/gltf/
   __init__.py
-  document.py          # pygltflib loading, buffers, images
-  accessors.py         # accessor -> numpy
+  document.py          # GLB/gltf loading, buffers, images
+  accessors.py         # accessor -> numpy, sparse/stride/normalized
   scene.py             # scene graph, node matrices, mesh instances
-  materials.py         # glTF material -> stable material contract
+  animation.py         # animation channels/samplers and runtime sampling
+  skinning.py          # skins, joints, inverse bind matrices, joint palettes
+  morph.py             # morph targets and animated weights
+  cameras.py           # perspective / orthographic cameras
+  materials.py         # material -> stable material contract
   primitives.py        # mesh primitive -> stable primitive contract
   render_plan.py       # opaque/mask/blend/sky pass classification
-  validation.py        # extensionsRequired / asset sanity audit
+  validation.py        # core diagnostics and extensionsRequired audit
 ```
-
-如果暂时不拆目录，也至少应在 `gltf_loader.py` 内形成同样逻辑分区，并逐步迁移。
 
 ## 6. 数据 contract
 
-建议定义 dataclass 或轻量 dict schema：
-
 ```python
 GltfPrimitive:
-    vertices: np.ndarray       # N x 10 float32
+    vertices: np.ndarray       # N x 10 float32, local mesh space for animated nodes
     tangent: np.ndarray        # N x 4 float32
     indices: np.ndarray        # M uint32
     material: GltfMaterial
+    node_index: int
     node_name: str
     mesh_name: str
-    world_bounds: tuple[np.ndarray, np.ndarray]
+    local_bounds: tuple[np.ndarray, np.ndarray]
+    world_bounds: tuple[np.ndarray, np.ndarray]  # current frame
     render_pass: Literal["opaque", "mask", "transparent", "sky"]
+    skin_index: int | None
+    morph_target_indices: tuple[int, ...]
 ```
 
 ```python
@@ -223,20 +291,72 @@ TextureBinding:
     color_space: Literal["srgb", "linear"]
 ```
 
-## 7. Backend 接口
+```python
+GltfNode:
+    index: int
+    name: str
+    parent: int | None
+    children: tuple[int, ...]
+    mesh: int | None
+    skin: int | None
+    camera: int | None
+    base_translation: np.ndarray
+    base_rotation: np.ndarray       # quaternion x,y,z,w
+    base_scale: np.ndarray
+    base_matrix: np.ndarray | None
+    local_matrix: np.ndarray        # current frame
+    world_matrix: np.ndarray        # current frame
+```
 
-OpenGL 和 D3D11 backend 只接收 stable contract：
+```python
+GltfAnimation:
+    name: str
+    duration: float
+    channels: tuple[GltfAnimationChannel, ...]
+
+GltfAnimationChannel:
+    target_node: int
+    target_path: Literal["translation", "rotation", "scale", "weights"]
+    interpolation: Literal["STEP", "LINEAR", "CUBICSPLINE"]
+    input_times: np.ndarray
+    output_values: np.ndarray
+```
+
+```python
+GltfSkin:
+    joints: tuple[int, ...]
+    inverse_bind_matrices: np.ndarray
+    joint_matrices: np.ndarray      # current frame palette
+```
+
+```python
+GltfCamera:
+    type: Literal["perspective", "orthographic"]
+    node_index: int
+    projection_params: dict
+```
+
+## 7. Backend 接口
 
 ```text
 load_gltf_scene(path)
-  -> GltfScene(primitives, textures, lights, render_plan, diagnostics)
+  -> GltfScene(nodes, primitives, textures, lights, cameras, animations, skins, render_plan, diagnostics)
 
-OpenGLEnvironmentUploader.upload(scene)
-D3D11EnvironmentUploader.upload(scene)
-PreviewUploader.upload(scene)
+GltfRuntimeState.update(time_seconds, animation_index)
+OpenGLEnvironmentUploader.upload_static(scene)
+OpenGLEnvironmentRenderer.draw(scene, runtime_state)
+D3D11EnvironmentUploader.upload_static(scene)
+D3D11EnvironmentRenderer.draw(scene, runtime_state)
+PreviewUploader.upload_static(scene)
+PreviewRenderer.draw(scene, runtime_state)
 ```
 
-目标是让 preview、OpenGL、D3D11 对同一个模型使用同一个上传数据。
+核心约束：
+
+- 静态 mesh 可以走预烘 world transform 快路径。
+- animated / skinned / morphed mesh 不能只烘成一次性 VBO。
+- backend 必须支持 per-primitive model matrix，或等价的 dynamic instance matrix / dynamic VBO fallback。
+- transparent sorting 和 bounds 必须能使用 runtime_state 的当前帧 world matrix。
 
 ## 8. 实施阶段
 
@@ -245,7 +365,7 @@ PreviewUploader.upload(scene)
 任务：
 
 1. 固定 Artemis 作为真实模型 smoke test。
-2. 记录 primitive count、texture count、light count、alphaMode 分布、vertex layout width、local/world bounds。
+2. 记录 primitive count、texture count、light count、animation count、channel count、alphaMode 分布、vertex layout width、local/world bounds。
 3. 增加 loader diagnostics 输出函数。
 4. preview / OpenGL / D3D11 打印同一个 active model summary。
 
@@ -253,10 +373,10 @@ PreviewUploader.upload(scene)
 
 ```text
 Artemis:
-  44 primitives
-  19 textures
-  4 lights
-  BLEND / OPAQUE distribution matches loader diagnostics
+  primitive count stable
+  texture count stable
+  light count stable
+  animation/channel count reported
   vertex stride = 10
 ```
 
@@ -311,7 +431,7 @@ sky/background naming or profile marker -> sky
 
 2. OpenGL preview、OpenGL runtime、D3D11 runtime 都按 render plan 绘制。
 3. transparent pass 关闭 depth write。
-4. transparent pass 后续增加 back-to-front sorting。
+4. transparent pass 增加 back-to-front sorting。
 5. SkyBox 不再作为普通 opaque geometry 误遮挡场景。
 
 验收：
@@ -360,22 +480,136 @@ sky/background naming or profile marker -> sky
 | AlphaBlendPlanes.glb | BLEND pass |
 | AlphaMaskFoliage.glb | MASK / alphaCutoff |
 | TextureTransform.glb | `KHR_texture_transform` |
+| AnimatedTRS.glb | translation / rotation / scale animation |
+| AnimatedWeights.glb | morph target weights animation |
+| SimpleSkin.glb | joints / inverseBindMatrices / skinning |
+| SparseAccessor.glb | sparse accessor |
+| InterleavedAttributes.gltf | bufferView byteStride |
+| Cameras.glb | perspective / orthographic camera |
 | Artemis | 真实复杂场景 |
 | Bedroom | 当前生产房间 |
 | Controller models | 控制器材质和动画节点 |
 
+### Phase 7：Core animation runtime
+
+任务：
+
+1. 新增 `animation.py`，解析 `animations[*].channels` 和 `animations[*].samplers`。
+2. 支持 target path：`translation`、`rotation`、`scale`、`weights`。
+3. 支持 interpolation：`STEP`、`LINEAR`、`CUBICSPLINE`。
+4. 每帧按 animation time 采样 node TRS / weights。
+5. 采样后重建 node local matrix，并从 scene roots 向下更新 world matrix。
+6. animated node primitive 不再把 node world matrix 永久烘进顶点。
+7. OpenGL / D3D11 / preview 绘制时使用当前帧 model matrix。
+
+验收：
+
+- Artemis GLB 中的 satellite / spaceship transform animation 在 preview、OpenGL、D3D11 可见。
+- 合成 `AnimatedTRS.glb` 在 0s / half duration / loop boundary 的矩阵采样与预期一致。
+- 不带 animation 的模型仍走静态快路径。
+
+### Phase 8：Skinning
+
+任务：
+
+1. 解析 `skins`、`joints`、`inverseBindMatrices`。
+2. 读取 `JOINTS_0` / `WEIGHTS_0`，并验证权重归一化。
+3. 每帧计算 joint matrix palette。
+4. OpenGL / D3D11 shader 增加 joint indices / weights input 和 joint palette uniform/structured buffer。
+5. 没有 skin 的 primitive 不走 skinning shader 分支。
+
+验收：
+
+- `SimpleSkin.glb` 骨骼动画姿态与标准 viewer 接近。
+- 无 skin 模型的 vertex layout / shader path 不回退。
+
+### Phase 9：Morph targets
+
+任务：
+
+1. 读取 primitive `targets` 的 POSITION / NORMAL / TANGENT delta。
+2. 合并 mesh weights、node weights、animation weights。
+3. OpenGL / D3D11 支持 morph target 应用；少量 target 可 shader path，多 target 可 CPU/dynamic VBO fallback。
+4. morph 后 normal/tangent 保持可用，必要时重新归一化。
+
+验收：
+
+- `AnimatedWeights.glb` 的形变动画可播放。
+- morph target 缺失 normal/tangent 时有明确 fallback。
+
+### Phase 10：Accessor / buffer 完整性
+
+任务：
+
+1. accessor 统一支持 componentType、type、count、byteOffset。
+2. bufferView 支持 byteStride/interleaved attributes。
+3. 支持 normalized integer attribute 转换。
+4. 支持 sparse accessor 覆盖。
+5. 对越界 bufferView/accessor fail fast。
+
+验收：
+
+- `SparseAccessor.glb`、`InterleavedAttributes.gltf` 正确加载。
+- 访问越界的坏模型报明确错误，不产生随机几何。
+
+### Phase 11：Cameras 与多 scene
+
+任务：
+
+1. 解析 active scene 和多 scene 列表。
+2. 解析 perspective / orthographic camera。
+3. camera node 使用 runtime world matrix。
+4. preview 可以选择 glTF camera；OpenXR environment profile 可选择忽略或映射 camera，但 diagnostics 必须报告。
+
+验收：
+
+- `Cameras.glb` diagnostics 能列出 camera 类型、FOV/ortho 参数和 world pose。
+- active scene 选择符合 glTF 默认规则。
+
+### Phase 12：Core compliance diagnostics
+
+任务：
+
+1. diagnostics 输出 core feature coverage：
+
+```text
+hasAnimations
+hasSkins
+hasMorphTargets
+hasSparseAccessors
+hasInterleavedAccessors
+hasCameras
+animatedNodeCount
+skinnedPrimitiveCount
+morphedPrimitiveCount
+```
+
+2. 对“core 但尚未支持”的语义禁止静默忽略；必须 warn 或 fail fast，取决于是否会错误显示。
+3. extension diagnostics 与 core diagnostics 分开，避免把 core 缺口误标成 extension 缺口。
+
+验收：
+
+- Artemis 动画 GLB diagnostics 明确显示 animation count / channel count / animated node count。
+- 带 skin/morph/sparse 的模型在未支持路径不会被当作普通静态模型错误显示。
+
 ## 9. 验证命令
 
 ```powershell
-src\python3\python.exe -m py_compile src\xr_viewer\gltf_loader.py src\tools\preview_room_layout.py
-src\python3\python.exe -m pytest tests\test_keyboard_screen_preset.py -q
+src\python3\python.exe -m py_compile src\xr_viewer\gltf_loader.py src\xr_viewer\gltf\*.py src\tools\preview_room_layout.py
+src\python3\python.exe -m pytest tests\test_keyboard_screen_preset.py tests\test_gltf_contract.py -q
 src\python3\python.exe -c "import sys, pytest; sys.path.insert(0, 'src'); raise SystemExit(pytest.main(['tests/test_openxr_runtime.py','-q']))"
 ```
 
-Artemis smoke check：
+Artemis static smoke check：
 
 ```powershell
 src\python3\python.exe -c "import sys; sys.path.insert(0,'src'); from xr_viewer.gltf import load_glb_model; prims,tex,lights=load_glb_model('src/xr_viewer/environments/Artemis/environment.glb'); print(len(prims), len(tex), len(lights), prims[0]['vertices'].shape)"
+```
+
+Artemis animation smoke check：
+
+```powershell
+src\python3\python.exe -c "from pygltflib import GLTF2; g=GLTF2().load('src/xr_viewer/environments/Artemis/environment.glb'); print(len(g.animations or []), sum(len(a.channels or []) for a in (g.animations or [])))"
 ```
 
 preview 检查：
@@ -386,27 +620,34 @@ src\python3\python.exe src\tools\preview_room_layout.py Artemis
 
 ## 10. 第一批落地任务
 
-1. 新增 `gltf_contract.py` 或 `xr_viewer/gltf/` 包，定义 primitive/material/texture binding contract。
-2. 把 `gltf_loader.py` 的 material 解析拆出为 `parse_gltf_material()`。
-3. 把 preview、OpenGL、D3D11 的 vertex layout 检查写入测试。
-4. 把 render pass 分类写成公共函数。
-5. preview 改为调用公共 render plan，不再自己判断 alpha。
-6. OpenGL runtime 环境模型改为调用公共 render plan。
-7. D3D11 native renderer 改为调用同一 material/render pass contract。
-8. 增加 Artemis / Bedroom / controller model diagnostics smoke tests。
+1. 保留现有 `src/xr_viewer/gltf/` package，继续把 legacy `gltf_loader.py` 作为 facade。
+2. 增加 core feature diagnostics：animation / skin / morph / sparse / interleaved / cameras。
+3. 新增 animation parser 和 TRS sampling，先让 Artemis 标准 GLB 动画可见。
+4. 把 animated primitive 从一次性 world-space VBO 改为 local-space VBO + runtime model matrix。
+5. preview、OpenGL、D3D11 支持 per-primitive model matrix。
+6. 增加 sparse/interleaved accessor fixture，堵住 accessor 层 core 缺口。
+7. 后续再接 skinning、morph target、camera 消费。
+8. 评估 Filament `gltfio` 作为长期替代后端，避免继续自研完整 viewer。
 
 ## 11. 完成标准
 
 1. 更换符合 glTF 2.0 core 的普通模型时，不再出现 vertex layout 错读导致的几何爆炸。
-2. `alphaMode`、`doubleSided`、`unlit`、texture transform 在 preview / OpenGL / D3D11 一致。
-3. unsupported required extensions 有明确日志和失败路径。
-4. 用户不需要通过观察画面猜测是模型问题、loader 问题还是 render pass 问题。
-5. 新模型接入流程变成：
+2. `alphaMode`、`doubleSided`、core metallic-roughness material、texture sampler、texture transform 在 preview / OpenGL / D3D11 一致。
+3. glTF core animation 的 TRS / weights 可播放；animated node 不被静态烘死。
+4. glTF core skinning 可播放；无 skin 模型保持静态快路径。
+5. glTF core morph target 可播放；weights animation 可驱动 morph。
+6. sparse accessor、interleaved buffer、normalized attribute 正确加载。
+7. camera / active scene diagnostics 符合 glTF 默认规则。
+8. unsupported required extensions 有明确日志和失败路径。
+9. core 语义尚未支持时不能静默错误显示，必须 diagnostics warn 或 fail fast。
+10. 用户不需要通过观察画面猜测是模型问题、loader 问题还是 render pass 问题。
+11. 新模型接入流程变成：
 
 ```text
 放入 environment.glb / profile.json
 运行 diagnostics
 若 unsupported required 为空，进入 preview
+若含 animation/skin/morph/sparse/camera，diagnostics 明确显示支持状态
 preview 与 OpenXR summary 一致
 再做 profile 位置/灯光适配
 ```
