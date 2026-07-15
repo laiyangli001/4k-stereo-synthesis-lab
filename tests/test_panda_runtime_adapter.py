@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from xr_viewer.panda_runtime import scene as panda_scene_module
 from xr_viewer.panda_runtime.bridge import (
     PandaBridge,
     PandaBridgeUnavailable,
@@ -143,6 +144,33 @@ class _FakePandaRenderableScene:
 
     def render_to_framebuffers(self, **kwargs):
         self.calls.append(kwargs)
+
+
+class _FakeGraphicsEngine:
+    def __init__(self):
+        self.render_frame_calls = 0
+
+    def render_frame(self):
+        self.render_frame_calls += 1
+
+
+class _FakePandaBase:
+    def __init__(self):
+        self.render = object()
+        self.graphicsEngine = _FakeGraphicsEngine()
+
+
+class _FakeReparentableRoot:
+    def __init__(self):
+        self.parents = []
+
+    def reparent_to(self, parent):
+        self.parents.append(parent)
+
+
+class _FakeModernGlFramebuffer:
+    def __init__(self, glo):
+        self.glo = glo
 
 
 def test_gltf_renderer_selector_defaults_to_native():
@@ -383,6 +411,72 @@ def test_panda_bridge_cache_key_includes_session_eye_image_size_and_format():
 
     bridge.invalidate_session(2)
     assert bridge.resources == {}
+
+
+def test_panda_scene_graph_renders_panda_targets_then_blits_to_framebuffers(monkeypatch):
+    blits = []
+    monkeypatch.setattr(
+        panda_scene_module,
+        "_blit_panda_texture_to_framebuffer",
+        lambda texture, framebuffer, width, height: blits.append((texture, framebuffer.glo, width, height)),
+    )
+    scene = PandaSceneGraph()
+    environment_root = _FakeReparentableRoot()
+    controller_root = _FakeReparentableRoot()
+    screen_root = _FakeReparentableRoot()
+    ray_root = _FakeReparentableRoot()
+    scene._environment_root = environment_root
+    scene._controller_roots["left"] = controller_root
+    scene._screen_root = screen_root
+    scene._controller_ray_targets["left"] = type("RayTarget", (), {"ray_node": ray_root})()
+    targets = StereoTargets()
+    targets.left = StereoTargetSpec(100, 120, "rgba8")
+    targets.right = StereoTargetSpec(101, 121, "rgba8")
+    targets._panda_base = _FakePandaBase()
+    targets._panda_textures = ["left-texture", "right-texture"]
+    left_resource = type("Resource", (), {"key": SwapchainResourceKey(2, 0, 3, 100, 120, "rgba8")})()
+    right_resource = type("Resource", (), {"key": SwapchainResourceKey(2, 1, 4, 101, 121, "rgba8")})()
+
+    scene.render_to_framebuffers(
+        targets=targets,
+        frame_state=object(),
+        left_framebuffer=_FakeModernGlFramebuffer(31),
+        right_framebuffer=_FakeModernGlFramebuffer(32),
+        left_resource=left_resource,
+        right_resource=right_resource,
+    )
+    scene.render_to_framebuffers(
+        targets=targets,
+        frame_state=object(),
+        left_framebuffer=_FakeModernGlFramebuffer(33),
+        right_framebuffer=_FakeModernGlFramebuffer(34),
+        left_resource=left_resource,
+        right_resource=right_resource,
+    )
+
+    assert targets._panda_base.graphicsEngine.render_frame_calls == 4
+    assert environment_root.parents == [targets._panda_base.render]
+    assert controller_root.parents == [targets._panda_base.render]
+    assert screen_root.parents == [targets._panda_base.render]
+    assert ray_root.parents == [targets._panda_base.render]
+    assert blits == [
+        ("left-texture", 31, 100, 120),
+        ("right-texture", 32, 101, 121),
+        ("left-texture", 33, 100, 120),
+        ("right-texture", 34, 101, 121),
+    ]
+
+
+def test_panda_scene_graph_render_to_framebuffers_requires_panda_targets():
+    scene = PandaSceneGraph()
+
+    with pytest.raises(RuntimeError, match="ShowBase"):
+        scene.render_to_framebuffers(
+            targets=StereoTargets(),
+            frame_state=object(),
+            left_framebuffer=object(),
+            right_framebuffer=object(),
+        )
 
 
 def test_panda_nv_dx_bridge_locks_renders_unlocks_and_caches_resources():

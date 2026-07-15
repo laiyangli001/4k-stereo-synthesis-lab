@@ -56,6 +56,7 @@ class PandaSceneGraph:
     _environment_animation_player: Any | None = field(default=None, init=False, repr=False)
     _controller_animation_players: dict[str, Any] = field(default_factory=dict, init=False, repr=False)
     _animation_loop: bool = field(default=True, init=False, repr=False)
+    _last_render_base: Any | None = field(default=None, init=False, repr=False)
 
     def load_environment(self, asset_path: str) -> None:
         self._ensure_live()
@@ -132,6 +133,40 @@ class PandaSceneGraph:
         for player in self._controller_animation_players.values():
             _set_animation_player_loop(player, self._animation_loop)
 
+    def render_to_framebuffers(
+        self,
+        *,
+        targets: Any,
+        frame_state: Any,
+        left_framebuffer: Any,
+        right_framebuffer: Any,
+        left_resource: Any | None = None,
+        right_resource: Any | None = None,
+    ) -> None:
+        self._ensure_live()
+        base = getattr(targets, "_panda_base", None)
+        if base is None:
+            raise RuntimeError("Panda stereo targets have no ShowBase")
+        if not getattr(targets, "_panda_textures", None):
+            raise RuntimeError("Panda stereo targets have no color textures")
+        if len(targets._panda_textures) < 2:
+            raise RuntimeError("Panda stereo targets must contain both eye textures")
+        self._attach_roots_to_base(base)
+        base.graphicsEngine.render_frame()
+        base.graphicsEngine.render_frame()
+        _blit_panda_texture_to_framebuffer(
+            targets._panda_textures[0],
+            left_framebuffer,
+            _resource_width(left_resource) or _target_width(targets, 0),
+            _resource_height(left_resource) or _target_height(targets, 0),
+        )
+        _blit_panda_texture_to_framebuffer(
+            targets._panda_textures[1],
+            right_framebuffer,
+            _resource_width(right_resource) or _target_width(targets, 1),
+            _resource_height(right_resource) or _target_height(targets, 1),
+        )
+
     def release(self) -> None:
         self.environment = None
         self.controllers.clear()
@@ -143,6 +178,7 @@ class PandaSceneGraph:
         self._environment_animation_player = None
         self._controller_animation_players.clear()
         self._animation_loop = True
+        self._last_render_base = None
         self.frame_state = None
         self.snapshot = PandaSceneSnapshot()
         self.released = True
@@ -196,6 +232,22 @@ class PandaSceneGraph:
             self._screen_texture_target.set_texture(screen_texture)
             return True
         return False
+
+    def _attach_roots_to_base(self, base: Any) -> None:
+        if self._last_render_base is base:
+            return
+        render_root = getattr(base, "render", None)
+        if render_root is None:
+            raise RuntimeError("Panda ShowBase has no render root")
+        for root in _iter_scene_roots(
+            self._environment_root,
+            self._controller_roots.values(),
+            self._screen_root,
+            self._controller_ray_targets.values(),
+        ):
+            if hasattr(root, "reparent_to"):
+                root.reparent_to(render_root)
+        self._last_render_base = base
 
     def _make_asset_ref(self, role: str, asset_path: str) -> tuple[PandaAssetRef, Any | None, Any | None]:
         path = str(Path(asset_path))
@@ -260,6 +312,124 @@ def _snapshot_from_frame_state(
 def _set_animation_player_loop(player: Any | None, loop: bool) -> None:
     if player is not None and hasattr(player, "loop"):
         player.loop = bool(loop)
+
+
+def _iter_scene_roots(
+    environment_root: Any | None,
+    controller_roots: Any,
+    screen_root: Any | None,
+    controller_ray_targets: Any,
+) -> tuple[Any, ...]:
+    roots: list[Any] = []
+    if environment_root is not None:
+        roots.append(environment_root)
+    roots.extend(root for root in controller_roots if root is not None)
+    if screen_root is not None:
+        roots.append(screen_root)
+    for target in controller_ray_targets:
+        ray_node = getattr(target, "ray_node", None)
+        if ray_node is not None:
+            roots.append(ray_node)
+    return tuple(roots)
+
+
+def _framebuffer_id(framebuffer: Any) -> int:
+    value = getattr(framebuffer, "glo", framebuffer)
+    value = getattr(value, "value", value)
+    framebuffer_id = int(value or 0)
+    if framebuffer_id <= 0:
+        raise RuntimeError("target framebuffer has no OpenGL id")
+    return framebuffer_id
+
+
+def _panda_texture_native_id(texture: Any) -> int:
+    cached_id = int(getattr(texture, "_d2s_native_id", 0) or 0)
+    if cached_id > 0:
+        return cached_id
+    getter = getattr(texture, "get_native_id", None)
+    if callable(getter):
+        texture_id = int(getter() or 0)
+        if texture_id > 0:
+            return texture_id
+    context = getattr(texture, "get_texture_context", lambda: None)()
+    getter = getattr(context, "get_native_id", None)
+    texture_id = int(getter() or 0) if callable(getter) else 0
+    if texture_id <= 0:
+        raise RuntimeError("Panda color texture has no OpenGL native id")
+    return texture_id
+
+
+def _resource_width(resource: Any | None) -> int:
+    return int(getattr(getattr(resource, "key", None), "width", 0) or 0)
+
+
+def _resource_height(resource: Any | None) -> int:
+    return int(getattr(getattr(resource, "key", None), "height", 0) or 0)
+
+
+def _target_width(targets: Any, eye_index: int) -> int:
+    spec = getattr(getattr(targets, "left" if eye_index == 0 else "right", None), "width", 0)
+    return int(spec or 0)
+
+
+def _target_height(targets: Any, eye_index: int) -> int:
+    spec = getattr(getattr(targets, "left" if eye_index == 0 else "right", None), "height", 0)
+    return int(spec or 0)
+
+
+def _blit_panda_texture_to_framebuffer(texture: Any, framebuffer: Any, width: int, height: int) -> None:
+    if width <= 0 or height <= 0:
+        raise RuntimeError("Panda blit dimensions must be positive")
+    from OpenGL.GL import (
+        GL_COLOR_ATTACHMENT0,
+        GL_COLOR_BUFFER_BIT,
+        GL_DRAW_FRAMEBUFFER,
+        GL_FRAMEBUFFER,
+        GL_FRAMEBUFFER_COMPLETE,
+        GL_LINEAR,
+        GL_READ_FRAMEBUFFER,
+        GL_TEXTURE_2D,
+        glBindFramebuffer,
+        glBlitFramebuffer,
+        glCheckFramebufferStatus,
+        glDeleteFramebuffers,
+        glFramebufferTexture2D,
+        glGenFramebuffers,
+        glReadBuffer,
+    )
+
+    source_texture_id = _panda_texture_native_id(texture)
+    target_framebuffer_id = _framebuffer_id(framebuffer)
+    read_fbo = int(glGenFramebuffers(1))
+    try:
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, read_fbo)
+        glFramebufferTexture2D(
+            GL_READ_FRAMEBUFFER,
+            GL_COLOR_ATTACHMENT0,
+            GL_TEXTURE_2D,
+            source_texture_id,
+            0,
+        )
+        if glCheckFramebufferStatus(GL_READ_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE:
+            raise RuntimeError("Panda source framebuffer is incomplete")
+        glReadBuffer(GL_COLOR_ATTACHMENT0)
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, target_framebuffer_id)
+        glBlitFramebuffer(
+            0,
+            0,
+            width,
+            height,
+            0,
+            0,
+            width,
+            height,
+            GL_COLOR_BUFFER_BIT,
+            GL_LINEAR,
+        )
+    finally:
+        glBindFramebuffer(GL_FRAMEBUFFER, 0)
+        if read_fbo:
+            glDeleteFramebuffers(1, [read_fbo])
 
 
 def _apply_controller_ray_to_target(target: Any, ray: Any) -> bool:

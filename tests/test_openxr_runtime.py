@@ -3979,6 +3979,7 @@ def test_d3d11_projection_path_uses_native_renderer():
     assert "viewer._panda3d_phase0_probe_vao.render()" in presenter
     assert "panda_bridge_requested = bool(" in d3d11
     assert "self._configure_panda_nv_dx_bridge()" in d3d11
+    assert "renderer.targets.create_panda_targets = True" in d3d11
     assert "PandaNvDxBridge(ViewerPandaNvDxInteropAdapter(self))" in d3d11
     assert "def _lock_panda_nv_dx_image" in (SRC / "xr_viewer" / "core_d3d_interop.py").read_text(encoding="utf-8")
     assert "if viewer._d3d11_native_renderer is not None:" in presenter

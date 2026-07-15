@@ -154,7 +154,16 @@ def _create_panda_offscreen_target(
     )
     if not buffer:
         raise RuntimeError("Panda3D did not create an offscreen stereo target")
-    buffer.add_render_texture(texture, buffer.RTMCopyRam)
+    render_texture_mode = getattr(
+        buffer,
+        "RTMBindOrCopy",
+        getattr(buffer, "RTMCopyTexture", buffer.RTMCopyRam),
+    )
+    buffer.add_render_texture(texture, render_texture_mode)
     texture_context = texture.prepare_now(0, gsg.get_prepared_objects(), gsg)
     native_id = int(texture_context.get_native_id()) if texture_context is not None else 0
+    try:
+        texture._d2s_native_id = native_id
+    except Exception:
+        pass
     return buffer, texture, native_id

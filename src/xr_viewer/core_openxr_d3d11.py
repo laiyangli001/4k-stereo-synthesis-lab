@@ -254,6 +254,7 @@ class CoreOpenXRD3D11Mixin:
                 PandaNvDxBridge,
                 ViewerPandaNvDxInteropAdapter,
             )
+            renderer.targets.create_panda_targets = True
             renderer.bridge = PandaNvDxBridge(ViewerPandaNvDxInteropAdapter(self))
             print("[OpenXRViewer] Panda3D bridge active: NV_DX_interop2")
         except Exception as e:
