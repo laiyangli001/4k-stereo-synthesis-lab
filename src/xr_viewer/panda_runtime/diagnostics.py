@@ -98,6 +98,18 @@ def _scene_asset_summary(scene: Any) -> tuple[Mapping[str, object], ...]:
             "loaded_with_panda": bool(getattr(asset, "loaded_with_panda", False)),
             "node_count": int(getattr(asset, "node_count", 0) or 0),
             "geom_count": int(getattr(asset, "geom_count", 0) or 0),
+            "animation_channel_count": int(
+                getattr(asset, "animation_channel_count", 0) or 0
+            ),
+            "animation_target_node_count": int(
+                getattr(asset, "animation_target_node_count", 0) or 0
+            ),
+            "animation_bound_node_count": int(
+                getattr(asset, "animation_bound_node_count", 0) or 0
+            ),
+            "animation_duration_seconds": float(
+                getattr(asset, "animation_duration_seconds", 0.0) or 0.0
+            ),
         }
         for asset in loaded_assets()
     )

@@ -14,6 +14,10 @@ class PandaAssetRef:
     loaded_with_panda: bool = False
     node_count: int = 0
     geom_count: int = 0
+    animation_channel_count: int = 0
+    animation_target_node_count: int = 0
+    animation_bound_node_count: int = 0
+    animation_duration_seconds: float = 0.0
 
 
 @dataclass
@@ -27,28 +31,38 @@ class PandaSceneGraph:
     released: bool = False
     _environment_root: Any | None = field(default=None, init=False, repr=False)
     _controller_roots: dict[str, Any] = field(default_factory=dict, init=False, repr=False)
+    _environment_animation_player: Any | None = field(default=None, init=False, repr=False)
+    _controller_animation_players: dict[str, Any] = field(default_factory=dict, init=False, repr=False)
 
     def load_environment(self, asset_path: str) -> None:
         self._ensure_live()
-        asset, root = self._make_asset_ref("environment", asset_path)
+        asset, root, animation_player = self._make_asset_ref("environment", asset_path)
         self.environment = asset
         self._environment_root = root
+        self._environment_animation_player = animation_player
 
     def load_controller(self, hand: str, asset_path: str) -> None:
         self._ensure_live()
         key = str(hand).strip().lower()
         if key not in {"left", "right"}:
             raise ValueError("controller hand must be 'left' or 'right'")
-        asset, root = self._make_asset_ref(f"controller:{key}", asset_path)
+        asset, root, animation_player = self._make_asset_ref(f"controller:{key}", asset_path)
         self.controllers[key] = asset
         if root is not None:
             self._controller_roots[key] = root
         else:
             self._controller_roots.pop(key, None)
+        if animation_player is not None:
+            self._controller_animation_players[key] = animation_player
+        else:
+            self._controller_animation_players.pop(key, None)
 
     def update_frame_state(self, frame_state: Any) -> None:
         self._ensure_live()
         self.frame_state = frame_state
+        animation_time = getattr(frame_state, "animation_time_seconds", None)
+        if animation_time is not None:
+            self._apply_animation_time(float(animation_time))
 
     def loaded_assets(self) -> tuple[PandaAssetRef, ...]:
         assets = []
@@ -65,16 +79,40 @@ class PandaSceneGraph:
         self.controllers.clear()
         self._environment_root = None
         self._controller_roots.clear()
+        self._environment_animation_player = None
+        self._controller_animation_players.clear()
         self.frame_state = None
         self.released = True
 
-    def _make_asset_ref(self, role: str, asset_path: str) -> tuple[PandaAssetRef, Any | None]:
+    def _apply_animation_time(self, time_seconds: float) -> None:
+        if self._environment_animation_player is not None:
+            self._environment_animation_player.set_time_seconds(time_seconds)
+        for player in self._controller_animation_players.values():
+            player.set_time_seconds(time_seconds)
+
+    def _make_asset_ref(self, role: str, asset_path: str) -> tuple[PandaAssetRef, Any | None, Any | None]:
         path = str(Path(asset_path))
         if not self.load_panda_assets:
-            return PandaAssetRef(role, path), None
+            return PandaAssetRef(role, path), None, None
         root = _load_panda_root(path)
         node_count, geom_count = _node_counts(root)
-        return PandaAssetRef(role, path, True, node_count, geom_count), root
+        animation_player = _make_node_animation_player(path, root)
+        animation_runtime = getattr(animation_player, "runtime", None)
+        return (
+            PandaAssetRef(
+                role,
+                path,
+                True,
+                node_count,
+                geom_count,
+                int(getattr(animation_runtime, "channel_count", 0) or 0),
+                int(getattr(animation_runtime, "target_node_count", 0) or 0),
+                int(getattr(animation_runtime, "bound_node_count", 0) or 0),
+                float(getattr(animation_runtime, "duration_seconds", 0.0) or 0.0),
+            ),
+            root,
+            animation_player,
+        )
 
     def _ensure_live(self) -> None:
         if self.released:
@@ -86,6 +124,18 @@ def _load_panda_root(asset_path: str) -> Any:
     from panda3d.core import NodePath
 
     return NodePath(gltf.load_model(str(asset_path)))
+
+
+def _make_node_animation_player(asset_path: str, root: Any) -> Any | None:
+    from xr_viewer.panda3d_node_animation import (
+        GltfNodeAnimationPlayer,
+        GltfNodeAnimationRuntime,
+    )
+
+    runtime = GltfNodeAnimationRuntime.from_asset(asset_path, root)
+    if runtime.channel_count <= 0:
+        return None
+    return GltfNodeAnimationPlayer(runtime)
 
 
 def _node_counts(root: Any) -> tuple[int, int]:

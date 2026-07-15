@@ -115,8 +115,16 @@ def test_panda_scene_graph_can_own_panda_loaded_environment_root():
     assert scene.environment.loaded_with_panda is True
     assert scene.environment.node_count > 0
     assert scene.environment.geom_count > 0
+    assert scene.environment.animation_channel_count == 38
+    assert scene.environment.animation_target_node_count == 19
+    assert scene.environment.animation_bound_node_count == 19
+    assert scene.environment.animation_duration_seconds == pytest.approx(15.0)
     assert scene.loaded_assets() == (scene.environment,)
     assert "_environment_root" not in scene.environment.__dict__
+
+    scene.update_frame_state(PandaFrameState(animation_time_seconds=7.5))
+    assert scene.frame_state.animation_time_seconds == pytest.approx(7.5)
+    assert scene._environment_animation_player.time_seconds == pytest.approx(7.5)
 
     scene.release()
     assert scene.released
@@ -214,6 +222,8 @@ def test_panda_runtime_diagnostics_snapshot_summarizes_assets_targets_and_bridge
     assert snapshot.event_count == 2
     assert snapshot.events == ("environment_loaded", "stereo_targets_rebuilt")
     assert snapshot.scene_assets[0]["role"] == "environment"
+    assert snapshot.scene_assets[0]["animation_channel_count"] == 0
+    assert snapshot.scene_assets[0]["animation_duration_seconds"] == 0.0
     assert snapshot.target_ready
     assert snapshot.target_generation == 1
     assert snapshot.target_refs[0]["eye_index"] == 0
