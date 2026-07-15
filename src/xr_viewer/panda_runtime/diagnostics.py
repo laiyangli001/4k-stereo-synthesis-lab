@@ -34,6 +34,11 @@ class PandaRuntimeSnapshot:
     scene_controller_hands: tuple[str, ...]
     scene_screen_pose_present: bool
     scene_screen_texture_present: bool
+    scene_screen_texture_applied: bool
+    scene_screen_texture_width: int
+    scene_screen_texture_height: int
+    scene_screen_texture_format: str
+    scene_screen_texture_native_id_available: bool
     scene_eye_view_count: int
     scene_applied_controller_hands: tuple[str, ...]
     scene_screen_pose_applied: bool
@@ -90,6 +95,14 @@ class PandaRuntimeDiagnostics:
             scene_controller_hands=_scene_controller_hands(scene),
             scene_screen_pose_present=_scene_bool(scene, "screen_pose_present"),
             scene_screen_texture_present=_scene_bool(scene, "screen_texture_present"),
+            scene_screen_texture_applied=_scene_bool(scene, "screen_texture_applied"),
+            scene_screen_texture_width=_scene_int(scene, "screen_texture_width"),
+            scene_screen_texture_height=_scene_int(scene, "screen_texture_height"),
+            scene_screen_texture_format=_scene_str(scene, "screen_texture_format"),
+            scene_screen_texture_native_id_available=_scene_bool(
+                scene,
+                "screen_texture_native_id_available",
+            ),
             scene_eye_view_count=_scene_int(scene, "eye_view_count"),
             scene_applied_controller_hands=_scene_applied_controller_hands(scene),
             scene_screen_pose_applied=_scene_bool(scene, "screen_pose_applied"),
@@ -136,6 +149,10 @@ def _scene_bool(scene: Any, name: str) -> bool:
 
 def _scene_int(scene: Any, name: str) -> int:
     return int(getattr(_scene_snapshot(scene), name, 0) or 0)
+
+
+def _scene_str(scene: Any, name: str) -> str:
+    return str(getattr(_scene_snapshot(scene), name, "") or "")
 
 
 def _scene_asset_summary(scene: Any) -> tuple[Mapping[str, object], ...]:

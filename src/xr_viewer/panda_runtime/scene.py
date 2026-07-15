@@ -26,6 +26,11 @@ class PandaSceneSnapshot:
     controller_hands: tuple[str, ...] = ()
     screen_pose_present: bool = False
     screen_texture_present: bool = False
+    screen_texture_applied: bool = False
+    screen_texture_width: int = 0
+    screen_texture_height: int = 0
+    screen_texture_format: str = ""
+    screen_texture_native_id_available: bool = False
     eye_view_count: int = 0
     applied_controller_hands: tuple[str, ...] = ()
     screen_pose_applied: bool = False
@@ -44,6 +49,7 @@ class PandaSceneGraph:
     _environment_root: Any | None = field(default=None, init=False, repr=False)
     _controller_roots: dict[str, Any] = field(default_factory=dict, init=False, repr=False)
     _screen_root: Any | None = field(default=None, init=False, repr=False)
+    _screen_texture_target: Any | None = field(default=None, init=False, repr=False)
     _environment_animation_player: Any | None = field(default=None, init=False, repr=False)
     _controller_animation_players: dict[str, Any] = field(default_factory=dict, init=False, repr=False)
 
@@ -75,10 +81,12 @@ class PandaSceneGraph:
         self.frame_state = frame_state
         applied_controller_hands = self._apply_controller_poses(frame_state)
         screen_pose_applied = self._apply_screen_pose(frame_state)
+        screen_texture_applied = self._apply_screen_texture(frame_state)
         self.snapshot = _snapshot_from_frame_state(
             frame_state,
             applied_controller_hands,
             screen_pose_applied,
+            screen_texture_applied,
         )
         animation_time = getattr(frame_state, "animation_time_seconds", None)
         if animation_time is not None:
@@ -98,12 +106,17 @@ class PandaSceneGraph:
         self._ensure_live()
         self._screen_root = root
 
+    def attach_screen_texture_target(self, target: Any) -> None:
+        self._ensure_live()
+        self._screen_texture_target = target
+
     def release(self) -> None:
         self.environment = None
         self.controllers.clear()
         self._environment_root = None
         self._controller_roots.clear()
         self._screen_root = None
+        self._screen_texture_target = None
         self._environment_animation_player = None
         self._controller_animation_players.clear()
         self.frame_state = None
@@ -134,6 +147,20 @@ class PandaSceneGraph:
         if screen_pose is None:
             return False
         return _apply_pose_to_node_path(self._screen_root, screen_pose)
+
+    def _apply_screen_texture(self, frame_state: Any) -> bool:
+        if self._screen_texture_target is None:
+            return False
+        screen_texture = getattr(frame_state, "screen_texture", None)
+        if screen_texture is None:
+            return False
+        if hasattr(self._screen_texture_target, "set_screen_texture"):
+            self._screen_texture_target.set_screen_texture(screen_texture)
+            return True
+        if hasattr(self._screen_texture_target, "set_texture"):
+            self._screen_texture_target.set_texture(screen_texture)
+            return True
+        return False
 
     def _make_asset_ref(self, role: str, asset_path: str) -> tuple[PandaAssetRef, Any | None, Any | None]:
         path = str(Path(asset_path))
@@ -168,14 +195,23 @@ def _snapshot_from_frame_state(
     frame_state: Any,
     applied_controller_hands: tuple[str, ...] = (),
     screen_pose_applied: bool = False,
+    screen_texture_applied: bool = False,
 ) -> PandaSceneSnapshot:
     eye_views = getattr(frame_state, "eye_views", ()) or ()
     controller_poses = getattr(frame_state, "controller_poses", {}) or {}
+    screen_texture = getattr(frame_state, "screen_texture", None)
     return PandaSceneSnapshot(
         frame_index=getattr(frame_state, "frame_index", None),
         controller_hands=tuple(sorted(str(hand) for hand in controller_poses)),
         screen_pose_present=getattr(frame_state, "screen_pose", None) is not None,
-        screen_texture_present=getattr(frame_state, "screen_texture", None) is not None,
+        screen_texture_present=screen_texture is not None,
+        screen_texture_applied=screen_texture_applied,
+        screen_texture_width=int(getattr(screen_texture, "width", 0) or 0),
+        screen_texture_height=int(getattr(screen_texture, "height", 0) or 0),
+        screen_texture_format=str(getattr(screen_texture, "format", "") or ""),
+        screen_texture_native_id_available=bool(
+            getattr(screen_texture, "native_id_available", False)
+        ),
         eye_view_count=sum(1 for eye_view in eye_views if eye_view is not None),
         applied_controller_hands=applied_controller_hands,
         screen_pose_applied=screen_pose_applied,

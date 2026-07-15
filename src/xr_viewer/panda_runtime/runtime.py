@@ -63,6 +63,26 @@ class PandaEyeView:
 
 
 @dataclass(frozen=True)
+class PandaScreenTextureFrame:
+    """Latest completed screen texture snapshot for the Panda scene."""
+
+    width: int
+    height: int
+    format: int | str = "rgba8"
+    native_id: int = 0
+    frame_index: int | None = None
+    payload: Any | None = None
+
+    def __post_init__(self) -> None:
+        if self.width <= 0 or self.height <= 0:
+            raise ValueError("screen texture dimensions must be positive")
+
+    @property
+    def native_id_available(self) -> bool:
+        return self.native_id > 0
+
+
+@dataclass(frozen=True)
 class PandaFrameState:
     """Frame snapshot passed from the existing OpenXR state machine."""
 
@@ -74,7 +94,7 @@ class PandaFrameState:
     eye_poses: tuple[Any | None, Any | None] = (None, None)
     controller_poses: Mapping[str, Any] = field(default_factory=dict)
     screen_pose: Any | None = None
-    screen_texture: Any | None = None
+    screen_texture: PandaScreenTextureFrame | Any | None = None
 
 
 def validate_frame_state(frame_state: PandaFrameState) -> None:

@@ -17,6 +17,7 @@ from xr_viewer.panda_runtime.runtime import (
     PandaPose,
     PandaRuntimeUnavailable,
     PandaSceneRenderer,
+    PandaScreenTextureFrame,
     log_renderer_selection,
     resolve_gltf_renderer_mode,
     validate_frame_state,
@@ -50,6 +51,14 @@ class _FakePoseRoot:
 
     def set_pos_quat(self, pos, quat):
         self.pos_quat = (pos, quat)
+
+
+class _FakeScreenTextureTarget:
+    def __init__(self):
+        self.screen_texture = None
+
+    def set_screen_texture(self, screen_texture):
+        self.screen_texture = screen_texture
 
 
 def test_gltf_renderer_selector_defaults_to_native():
@@ -195,6 +204,30 @@ def test_panda_scene_graph_applies_screen_pose_to_attached_root():
     assert quat.get_r() == pytest.approx(1.0)
 
 
+def test_panda_scene_graph_applies_screen_texture_to_attached_target():
+    scene = PandaSceneGraph()
+    target = _FakeScreenTextureTarget()
+    scene.attach_screen_texture_target(target)
+    screen_texture = PandaScreenTextureFrame(
+        width=1920,
+        height=1080,
+        format="rgba8",
+        native_id=77,
+        frame_index=12,
+        payload=object(),
+    )
+
+    scene.update_frame_state(PandaFrameState(screen_texture=screen_texture))
+
+    assert scene.snapshot.screen_texture_present is True
+    assert scene.snapshot.screen_texture_applied is True
+    assert scene.snapshot.screen_texture_width == 1920
+    assert scene.snapshot.screen_texture_height == 1080
+    assert scene.snapshot.screen_texture_format == "rgba8"
+    assert scene.snapshot.screen_texture_native_id_available is True
+    assert target.screen_texture is screen_texture
+
+
 def test_stereo_targets_default_mode_stays_import_light():
     targets = StereoTargets()
 
@@ -299,6 +332,11 @@ def test_panda_runtime_diagnostics_snapshot_summarizes_assets_targets_and_bridge
     assert snapshot.scene_controller_hands == ("left", "right")
     assert snapshot.scene_screen_pose_present is True
     assert snapshot.scene_screen_texture_present is False
+    assert snapshot.scene_screen_texture_applied is False
+    assert snapshot.scene_screen_texture_width == 0
+    assert snapshot.scene_screen_texture_height == 0
+    assert snapshot.scene_screen_texture_format == ""
+    assert snapshot.scene_screen_texture_native_id_available is False
     assert snapshot.scene_eye_view_count == 2
     assert snapshot.scene_applied_controller_hands == ()
     assert snapshot.scene_screen_pose_applied is False
@@ -318,6 +356,15 @@ def test_panda_runtime_diagnostics_snapshot_summarizes_assets_targets_and_bridge
     assert '"frame_eye_view_count": 2' in snapshot_json
     assert '"scene_controller_hands": [' in snapshot_json
     assert '"scene_assets"' in snapshot_json
+
+
+def test_panda_screen_texture_frame_validates_dimensions():
+    screen_texture = PandaScreenTextureFrame(1920, 1080, native_id=42)
+
+    assert screen_texture.native_id_available is True
+
+    with pytest.raises(ValueError, match="dimensions"):
+        PandaScreenTextureFrame(0, 1080)
 
 
 def test_panda_frame_state_validates_same_frame_eye_views():
