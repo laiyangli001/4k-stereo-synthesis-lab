@@ -24,6 +24,10 @@ from xr_viewer.panda_runtime.runtime import (
     validate_frame_state,
 )
 from xr_viewer.panda_runtime.scene import PandaSceneGraph
+from xr_viewer.panda_runtime.screen_texture import (
+    PandaScreenTextureUploadError,
+    PandaScreenTextureUploadTarget,
+)
 from xr_viewer.panda_runtime.stereo_targets import StereoTargetSpec, StereoTargets
 
 
@@ -390,6 +394,31 @@ def test_panda_runtime_diagnostics_snapshot_summarizes_assets_targets_and_bridge
     assert '"frame_eye_view_count": 2' in snapshot_json
     assert '"scene_controller_hands": [' in snapshot_json
     assert '"scene_assets"' in snapshot_json
+
+
+def test_panda_screen_texture_upload_target_binds_payload_to_node_path():
+    pytest.importorskip("panda3d")
+    from panda3d.core import NodePath
+
+    node = NodePath("screen")
+    target = PandaScreenTextureUploadTarget(node)
+    frame = PandaScreenTextureFrame(
+        2,
+        2,
+        frame_index=33,
+        payload=bytes(range(16)),
+    )
+
+    texture = target.set_screen_texture(frame)
+
+    assert target.texture is texture
+    assert target.last_frame_index == 33
+    assert node.get_texture() == texture
+    assert texture.get_x_size() == 2
+    assert texture.get_y_size() == 2
+
+    with pytest.raises(PandaScreenTextureUploadError, match="byte length"):
+        target.set_screen_texture(PandaScreenTextureFrame(2, 2, payload=b"short"))
 
 
 def test_panda_screen_texture_frame_validates_dimensions():
