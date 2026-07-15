@@ -175,7 +175,18 @@ class CoreOpenXRD3D11Mixin:
             self._swapchain_images[eye_index] = images
             self._swapchain_sizes[eye_index]  = (sc_w, sc_h)
 
-        # 9. Prefer native D3D11 for runtime eye/RGB+depth -> Projection layer
+        # 9. Resolve the future glTF scene-renderer selector without changing
+        # the default native path before the Panda3D OpenXR swapchain gate passes.
+        try:
+            from .panda_runtime.runtime import log_renderer_selection, resolve_gltf_renderer_mode
+            self._gltf_renderer_config = resolve_gltf_renderer_mode()
+            if self._gltf_renderer_config.requested_mode != 'native' or self._gltf_renderer_config.fallback_reason:
+                log_renderer_selection(self._gltf_renderer_config)
+        except Exception as e:
+            self._gltf_renderer_config = None
+            print(f"[OpenXRViewer] glTF renderer selector unavailable: {e}")
+
+        # 10. Prefer native D3D11 for runtime eye/RGB+depth -> Projection layer
         # upload. OpenGL/NV_DX interop remains a compatibility fallback only.
         if self._d3d11_native_requested:
             try:
@@ -200,7 +211,7 @@ class CoreOpenXRD3D11Mixin:
             self._quad_swapchain_presented_eyes = set()
             print(f"[OpenXRViewer] Quad layer D3D11 lazy swapchains armed max={max_w}x{max_h}")
 
-        # 10. Try NV_DX interop for projection overlays when native D3D11
+        # 11. Try NV_DX interop for projection overlays when native D3D11
         # rendering is not available. Phase-0 Panda3D migration probes may also
         # request it explicitly to validate real OpenXR swapchain registration.
         if self._panda3d_phase0_swapchain_probe_enabled:
@@ -209,7 +220,7 @@ class CoreOpenXRD3D11Mixin:
         elif self._d3d11_native_renderer is None:
             self._setup_gpu_interop_d3d11()
 
-        # 11. Controller actions (best-effort)
+        # 12. Controller actions (best-effort)
         try:
             if self._action_set is None:
                 self._init_controller_actions()
