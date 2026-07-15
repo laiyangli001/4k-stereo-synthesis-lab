@@ -83,6 +83,23 @@ class PandaScreenTextureFrame:
 
 
 @dataclass(frozen=True)
+class PandaControllerRay:
+    """Controller ray visual state captured in the same XR frame snapshot."""
+
+    origin: tuple[float, float, float]
+    direction: tuple[float, float, float]
+    length: float = 30.0
+    visible: bool = True
+    hit_target: str = ""
+
+    def __post_init__(self) -> None:
+        if len(self.origin) != 3 or len(self.direction) != 3:
+            raise ValueError("controller ray origin and direction must be 3D vectors")
+        if self.length <= 0.0:
+            raise ValueError("controller ray length must be positive")
+
+
+@dataclass(frozen=True)
 class PandaFrameState:
     """Frame snapshot passed from the existing OpenXR state machine."""
 
@@ -93,6 +110,7 @@ class PandaFrameState:
     eye_views: tuple[PandaEyeView | None, PandaEyeView | None] = (None, None)
     eye_poses: tuple[Any | None, Any | None] = (None, None)
     controller_poses: Mapping[str, Any] = field(default_factory=dict)
+    controller_rays: Mapping[str, PandaControllerRay] = field(default_factory=dict)
     screen_pose: Any | None = None
     screen_texture: PandaScreenTextureFrame | Any | None = None
 

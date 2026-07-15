@@ -30,8 +30,11 @@ class PandaRuntimeSnapshot:
     frame_index: int | None
     frame_eye_view_count: int
     frame_controller_count: int
+    frame_controller_ray_count: int
     frame_screen_pose_present: bool
     scene_controller_hands: tuple[str, ...]
+    scene_controller_ray_hands: tuple[str, ...]
+    scene_applied_controller_ray_hands: tuple[str, ...]
     scene_screen_pose_present: bool
     scene_screen_texture_present: bool
     scene_screen_texture_applied: bool
@@ -91,8 +94,11 @@ class PandaRuntimeDiagnostics:
             frame_index=_optional_int(getattr(frame_state, "frame_index", None)),
             frame_eye_view_count=_eye_view_count(frame_state),
             frame_controller_count=len(getattr(frame_state, "controller_poses", {}) or {}),
+            frame_controller_ray_count=len(getattr(frame_state, "controller_rays", {}) or {}),
             frame_screen_pose_present=getattr(frame_state, "screen_pose", None) is not None,
             scene_controller_hands=_scene_controller_hands(scene),
+            scene_controller_ray_hands=_scene_controller_ray_hands(scene),
+            scene_applied_controller_ray_hands=_scene_applied_controller_ray_hands(scene),
             scene_screen_pose_present=_scene_bool(scene, "screen_pose_present"),
             scene_screen_texture_present=_scene_bool(scene, "screen_texture_present"),
             scene_screen_texture_applied=_scene_bool(scene, "screen_texture_applied"),
@@ -141,6 +147,14 @@ def _scene_controller_hands(scene: Any) -> tuple[str, ...]:
 
 def _scene_applied_controller_hands(scene: Any) -> tuple[str, ...]:
     return tuple(getattr(_scene_snapshot(scene), "applied_controller_hands", ()) or ())
+
+
+def _scene_controller_ray_hands(scene: Any) -> tuple[str, ...]:
+    return tuple(getattr(_scene_snapshot(scene), "controller_ray_hands", ()) or ())
+
+
+def _scene_applied_controller_ray_hands(scene: Any) -> tuple[str, ...]:
+    return tuple(getattr(_scene_snapshot(scene), "applied_controller_ray_hands", ()) or ())
 
 
 def _scene_bool(scene: Any, name: str) -> bool:

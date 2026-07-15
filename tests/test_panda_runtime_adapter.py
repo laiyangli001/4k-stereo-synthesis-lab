@@ -12,6 +12,7 @@ from xr_viewer.panda_runtime.bridge import (
 from xr_viewer.panda_runtime.runtime import (
     GLTF_RENDERER_ENV_VAR,
     PandaAnimationClock,
+    PandaControllerRay,
     PandaEyeView,
     PandaFrameState,
     PandaPose,
@@ -59,6 +60,14 @@ class _FakeScreenTextureTarget:
 
     def set_screen_texture(self, screen_texture):
         self.screen_texture = screen_texture
+
+
+class _FakeControllerRayTarget:
+    def __init__(self):
+        self.controller_ray = None
+
+    def set_controller_ray(self, controller_ray):
+        self.controller_ray = controller_ray
 
 
 def test_gltf_renderer_selector_defaults_to_native():
@@ -185,6 +194,27 @@ def test_panda_scene_graph_applies_controller_pose_to_loaded_roots():
     assert quat.get_i() == pytest.approx(0.0)
     assert quat.get_j() == pytest.approx(0.0)
     assert quat.get_k() == pytest.approx(0.0)
+
+
+def test_panda_scene_graph_applies_controller_ray_to_attached_target():
+    scene = PandaSceneGraph()
+    target = _FakeControllerRayTarget()
+    scene.attach_controller_ray_target("left", target)
+    ray = PandaControllerRay(
+        origin=(1.0, 2.0, 3.0),
+        direction=(0.0, 0.0, -1.0),
+        length=12.5,
+        hit_target="screen",
+    )
+
+    scene.update_frame_state(PandaFrameState(controller_rays={"left": ray}))
+
+    assert scene.snapshot.controller_ray_hands == ("left",)
+    assert scene.snapshot.applied_controller_ray_hands == ("left",)
+    assert target.controller_ray is ray
+
+    with pytest.raises(ValueError, match="controller ray hand"):
+        scene.attach_controller_ray_target("middle", target)
 
 
 def test_panda_scene_graph_applies_screen_pose_to_attached_root():
@@ -316,6 +346,7 @@ def test_panda_runtime_diagnostics_snapshot_summarizes_assets_targets_and_bridge
             frame_index=11,
             eye_views=(PandaEyeView(0, pose=pose), PandaEyeView(1, pose=pose)),
             controller_poses={"left": pose, "right": pose},
+            controller_rays={"left": PandaControllerRay((0.0, 0.0, 0.0), (0.0, 0.0, -1.0))},
             screen_pose=pose,
         )
     )
@@ -328,8 +359,11 @@ def test_panda_runtime_diagnostics_snapshot_summarizes_assets_targets_and_bridge
     assert snapshot.frame_index == 11
     assert snapshot.frame_eye_view_count == 2
     assert snapshot.frame_controller_count == 2
+    assert snapshot.frame_controller_ray_count == 1
     assert snapshot.frame_screen_pose_present is True
     assert snapshot.scene_controller_hands == ("left", "right")
+    assert snapshot.scene_controller_ray_hands == ("left",)
+    assert snapshot.scene_applied_controller_ray_hands == ()
     assert snapshot.scene_screen_pose_present is True
     assert snapshot.scene_screen_texture_present is False
     assert snapshot.scene_screen_texture_applied is False
@@ -365,6 +399,18 @@ def test_panda_screen_texture_frame_validates_dimensions():
 
     with pytest.raises(ValueError, match="dimensions"):
         PandaScreenTextureFrame(0, 1080)
+
+
+def test_panda_controller_ray_validates_vectors_and_length():
+    ray = PandaControllerRay((0.0, 0.0, 0.0), (0.0, 0.0, -1.0), length=5.0)
+
+    assert ray.visible is True
+    assert ray.length == pytest.approx(5.0)
+
+    with pytest.raises(ValueError, match="3D vectors"):
+        PandaControllerRay((0.0, 0.0), (0.0, 0.0, -1.0))
+    with pytest.raises(ValueError, match="positive"):
+        PandaControllerRay((0.0, 0.0, 0.0), (0.0, 0.0, -1.0), length=0.0)
 
 
 def test_panda_frame_state_validates_same_frame_eye_views():

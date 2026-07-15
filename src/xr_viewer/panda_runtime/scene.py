@@ -24,6 +24,8 @@ class PandaAssetRef:
 class PandaSceneSnapshot:
     frame_index: int | None = None
     controller_hands: tuple[str, ...] = ()
+    controller_ray_hands: tuple[str, ...] = ()
+    applied_controller_ray_hands: tuple[str, ...] = ()
     screen_pose_present: bool = False
     screen_texture_present: bool = False
     screen_texture_applied: bool = False
@@ -48,6 +50,7 @@ class PandaSceneGraph:
     released: bool = False
     _environment_root: Any | None = field(default=None, init=False, repr=False)
     _controller_roots: dict[str, Any] = field(default_factory=dict, init=False, repr=False)
+    _controller_ray_targets: dict[str, Any] = field(default_factory=dict, init=False, repr=False)
     _screen_root: Any | None = field(default=None, init=False, repr=False)
     _screen_texture_target: Any | None = field(default=None, init=False, repr=False)
     _environment_animation_player: Any | None = field(default=None, init=False, repr=False)
@@ -80,11 +83,13 @@ class PandaSceneGraph:
         self._ensure_live()
         self.frame_state = frame_state
         applied_controller_hands = self._apply_controller_poses(frame_state)
+        applied_controller_ray_hands = self._apply_controller_rays(frame_state)
         screen_pose_applied = self._apply_screen_pose(frame_state)
         screen_texture_applied = self._apply_screen_texture(frame_state)
         self.snapshot = _snapshot_from_frame_state(
             frame_state,
             applied_controller_hands,
+            applied_controller_ray_hands,
             screen_pose_applied,
             screen_texture_applied,
         )
@@ -102,6 +107,13 @@ class PandaSceneGraph:
     def controller_paths(self) -> Mapping[str, str]:
         return {hand: asset.path for hand, asset in self.controllers.items()}
 
+    def attach_controller_ray_target(self, hand: str, target: Any) -> None:
+        self._ensure_live()
+        key = str(hand).strip().lower()
+        if key not in {"left", "right"}:
+            raise ValueError("controller ray hand must be 'left' or 'right'")
+        self._controller_ray_targets[key] = target
+
     def attach_screen_root(self, root: Any) -> None:
         self._ensure_live()
         self._screen_root = root
@@ -115,6 +127,7 @@ class PandaSceneGraph:
         self.controllers.clear()
         self._environment_root = None
         self._controller_roots.clear()
+        self._controller_ray_targets.clear()
         self._screen_root = None
         self._screen_texture_target = None
         self._environment_animation_player = None
@@ -137,6 +150,17 @@ class PandaSceneGraph:
             if pose is None:
                 continue
             if _apply_pose_to_node_path(root, pose):
+                applied.append(hand)
+        return tuple(applied)
+
+    def _apply_controller_rays(self, frame_state: Any) -> tuple[str, ...]:
+        controller_rays = getattr(frame_state, "controller_rays", {}) or {}
+        applied: list[str] = []
+        for hand, target in sorted(self._controller_ray_targets.items()):
+            ray = controller_rays.get(hand)
+            if ray is None:
+                continue
+            if _apply_controller_ray_to_target(target, ray):
                 applied.append(hand)
         return tuple(applied)
 
@@ -194,15 +218,19 @@ class PandaSceneGraph:
 def _snapshot_from_frame_state(
     frame_state: Any,
     applied_controller_hands: tuple[str, ...] = (),
+    applied_controller_ray_hands: tuple[str, ...] = (),
     screen_pose_applied: bool = False,
     screen_texture_applied: bool = False,
 ) -> PandaSceneSnapshot:
     eye_views = getattr(frame_state, "eye_views", ()) or ()
     controller_poses = getattr(frame_state, "controller_poses", {}) or {}
+    controller_rays = getattr(frame_state, "controller_rays", {}) or {}
     screen_texture = getattr(frame_state, "screen_texture", None)
     return PandaSceneSnapshot(
         frame_index=getattr(frame_state, "frame_index", None),
         controller_hands=tuple(sorted(str(hand) for hand in controller_poses)),
+        controller_ray_hands=tuple(sorted(str(hand) for hand in controller_rays)),
+        applied_controller_ray_hands=applied_controller_ray_hands,
         screen_pose_present=getattr(frame_state, "screen_pose", None) is not None,
         screen_texture_present=screen_texture is not None,
         screen_texture_applied=screen_texture_applied,
@@ -216,6 +244,16 @@ def _snapshot_from_frame_state(
         applied_controller_hands=applied_controller_hands,
         screen_pose_applied=screen_pose_applied,
     )
+
+
+def _apply_controller_ray_to_target(target: Any, ray: Any) -> bool:
+    if hasattr(target, "set_controller_ray"):
+        target.set_controller_ray(ray)
+        return True
+    if hasattr(target, "set_ray"):
+        target.set_ray(ray)
+        return True
+    return False
 
 
 def _apply_pose_to_node_path(node_path: Any, pose: Any) -> bool:
