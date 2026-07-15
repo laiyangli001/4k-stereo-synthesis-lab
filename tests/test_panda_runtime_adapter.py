@@ -20,6 +20,7 @@ from xr_viewer.panda_runtime.frame_source import (
     mat4_to_panda_pose,
 )
 from xr_viewer.panda_runtime.scene_bindings import sync_panda_scene_assets_from_viewer
+from xr_viewer.panda_runtime.screen_node import create_panda_screen_node_target
 from xr_viewer.panda_runtime.runtime import (
     GLTF_RENDERER_ENV_VAR,
     PandaAnimationClock,
@@ -97,6 +98,14 @@ class _FakeAnimationPlayer:
 class _FakePandaSceneForBindings:
     def __init__(self):
         self.load_panda_assets = False
+        self.screen_root = None
+        self.screen_texture_target = None
+
+    def attach_screen_root(self, root):
+        self.screen_root = root
+
+    def attach_screen_texture_target(self, target):
+        self.screen_texture_target = target
 
 
 class _FakePandaRendererForBindings:
@@ -640,6 +649,8 @@ def test_panda_scene_binding_loads_active_environment_and_controllers(tmp_path):
     viewer._controllers_root = str(tmp_path / "controllers")
     viewer._current_brand = "pico"
     viewer._controller_model = "fallback"
+    viewer.screen_width = 2.4
+    viewer.screen_height = 1.35
 
     result = sync_panda_scene_assets_from_viewer(viewer)
     second = sync_panda_scene_assets_from_viewer(viewer)
@@ -649,7 +660,26 @@ def test_panda_scene_binding_loads_active_environment_and_controllers(tmp_path):
     assert renderer.scene.load_panda_assets is True
     assert renderer.environments == [str(env_path)]
     assert renderer.controllers == [("left", str(left)), ("right", str(right))]
+    assert result.screen_size == pytest.approx((2.4, 1.35))
+    assert result.screen_target_bound is True
+    assert renderer.scene.screen_root is not None
+    assert renderer.scene.screen_texture_target is not None
     assert viewer._panda_scene_binding_error == ""
+
+
+def test_panda_screen_node_target_creates_textured_card():
+    pytest.importorskip("panda3d")
+
+    target = create_panda_screen_node_target(2.4, 1.35)
+
+    assert target.width == pytest.approx(2.4)
+    assert target.height == pytest.approx(1.35)
+    assert target.root.get_name() == "d2s-screen-root"
+    assert target.root.get_num_children() == 1
+    assert target.texture_target.node_path == target.root.get_child(0)
+
+    with pytest.raises(ValueError, match="screen dimensions"):
+        create_panda_screen_node_target(0.0, 1.0)
 
 
 def test_panda_scene_renderer_facade_contract():
