@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from xr_viewer.panda_runtime.bridge import PandaBridge, RenderEyesResult, SwapchainImageRef
 from xr_viewer.panda_runtime.runtime import (
     GLTF_RENDERER_ENV_VAR,
@@ -9,10 +11,12 @@ from xr_viewer.panda_runtime.runtime import (
     log_renderer_selection,
     resolve_gltf_renderer_mode,
 )
+from xr_viewer.panda_runtime.scene import PandaSceneGraph
 from xr_viewer.panda_runtime.stereo_targets import StereoTargetSpec
 
 
 ROOT = Path(__file__).resolve().parents[1]
+ARTEMIS = ROOT / "src" / "xr_viewer" / "environments" / "Artemis" / "environment.glb"
 
 
 class _RecordingBridge(PandaBridge):
@@ -80,6 +84,36 @@ def test_d3d11_init_resolves_gltf_renderer_selector_without_replacing_native_pat
     assert "_gltf_renderer_config" in source
     assert "D3D11 native renderer active" in source
     assert "self._d3d11_native_renderer = D3D11NativeRenderer" in source
+
+
+def test_panda_scene_graph_default_mode_stays_import_light():
+    scene = PandaSceneGraph()
+
+    scene.load_environment(str(ARTEMIS))
+
+    assert scene.environment is not None
+    assert scene.environment.loaded_with_panda is False
+    assert scene.environment.node_count == 0
+    assert scene.environment.geom_count == 0
+
+
+def test_panda_scene_graph_can_own_panda_loaded_environment_root():
+    pytest.importorskip("gltf")
+    pytest.importorskip("panda3d")
+    scene = PandaSceneGraph(load_panda_assets=True)
+
+    scene.load_environment(str(ARTEMIS))
+
+    assert scene.environment is not None
+    assert scene.environment.loaded_with_panda is True
+    assert scene.environment.node_count > 0
+    assert scene.environment.geom_count > 0
+    assert scene.loaded_assets() == (scene.environment,)
+    assert "_environment_root" not in scene.environment.__dict__
+
+    scene.release()
+    assert scene.released
+    assert scene.loaded_assets() == ()
 
 
 def test_panda_scene_renderer_facade_contract():

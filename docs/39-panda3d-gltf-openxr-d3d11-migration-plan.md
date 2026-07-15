@@ -145,7 +145,7 @@ CUDA bridge 的 POC 需逐项证明：同 adapter、RGBA 格式、行方向、MS
 
 ### Phase 1：新 renderer 适配层，不改默认路径
 
-当前状态（2026-07-15）：已新增 `src/xr_viewer/panda_runtime/` 的 import-light 适配层骨架，包含 `runtime.py`、`scene.py`、`stereo_targets.py`、`bridge.py`、`diagnostics.py`；`PandaSceneRenderer` 已定义 `load_environment`、`load_controller`、`update_frame_state`、`render_eyes`、`rebuild_targets`、`release` facade 契约。`D2S_GLTF_RENDERER=native|panda3d` selector 已加入，默认仍为 `native`；在真实 OpenXR swapchain gate 未通过前，请求 `panda3d` 会记录原因并回退 native，不会替换现有 D3D11 native renderer。
+当前状态（2026-07-15）：已新增 `src/xr_viewer/panda_runtime/` 的 import-light 适配层骨架，包含 `runtime.py`、`scene.py`、`stereo_targets.py`、`bridge.py`、`diagnostics.py`；`PandaSceneRenderer` 已定义 `load_environment`、`load_controller`、`update_frame_state`、`render_eyes`、`rebuild_targets`、`release` facade 契约。`scene.py` 默认只记录资产路径，启用 `load_panda_assets=True` 时会懒加载 `panda3d-gltf`、保留内部 root ownership，并记录 node/geom 计数，不向 facade 外暴露 `NodePath`。`D2S_GLTF_RENDERER=native|panda3d` selector 已加入，默认仍为 `native`；在真实 OpenXR swapchain gate 未通过前，请求 `panda3d` 会记录原因并回退 native，不会替换现有 D3D11 native renderer。
 
 新增 `src/xr_viewer/panda_runtime/`，建议边界如下：
 
