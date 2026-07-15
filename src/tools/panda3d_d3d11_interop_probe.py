@@ -31,7 +31,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[Panda3DD3D11InteropProbe] ERROR: {exc}", file=sys.stderr)
         return 1
     print(d3d11_interop_report_as_json(report))
-    return 0 if report.readiness_status == "ready_for_swapchain_texture_registration" else 2
+    return 0 if report.readiness_status == "ready_for_openxr_swapchain_texture_probe" else 2
 
 
 if __name__ == "__main__":

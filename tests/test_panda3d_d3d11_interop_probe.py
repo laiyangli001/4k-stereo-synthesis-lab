@@ -23,9 +23,18 @@ def test_panda3d_d3d11_interop_probe_opens_nv_dx_device():
     assert report.nv_dx_interop_loaded
     assert report.nv_dx_device_opened
     assert report.nv_dx_device_closed
+    assert report.d3d11_texture_created
+    assert report.d3d11_texture_width == 64
+    assert report.d3d11_texture_height == 64
+    assert report.d3d11_texture_format == 28
+    assert report.nv_dx_texture_registered
+    assert report.nv_dx_texture_locked
+    assert report.nv_dx_fbo_complete
     assert not report.swapchain_texture_registration_tested
-    assert report.readiness_status == "ready_for_swapchain_texture_registration"
+    assert report.readiness_status == "ready_for_openxr_swapchain_texture_probe"
 
     report_json = d3d11_interop_report_as_json(report)
     assert '"nv_dx_device_opened": true' in report_json
+    assert '"nv_dx_texture_registered": true' in report_json
+    assert '"nv_dx_fbo_complete": true' in report_json
     assert '"swapchain_texture_registration_tested": false' in report_json
