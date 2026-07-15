@@ -229,7 +229,11 @@ class OpenXRFramePipeline:
         loop_last_log = float(getattr(viewer, '_xr_loop_perf_last_log', 0.0) or 0.0)
         if loop_total_ms < 25.0 and (loop_log_now - loop_last_log) < 2.0:
             return
+        loop_log_count = int(getattr(viewer, '_xr_loop_perf_log_count', 0) or 0)
+        if loop_log_count >= 5:
+            return
         viewer._xr_loop_perf_last_log = loop_log_now
+        viewer._xr_loop_perf_log_count = loop_log_count + 1
         loop_parts = ' '.join(f'{label}={ms:.1f}' for label, ms in marks if ms >= 0.05)
         print(
             '[OpenXRViewer] loop segments '

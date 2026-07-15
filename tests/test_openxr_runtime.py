@@ -2783,6 +2783,28 @@ def test_openxr_frame_pipeline_runs_hard_realtime_frame_order():
     assert len(viewer._frame_ts_ring) == 1
 
 
+def test_openxr_frame_pipeline_loop_segment_perf_log_is_limited_to_five(capsys):
+    from xr_viewer.openxr_frame_pipeline import OpenXRFramePipeline
+
+    pipeline = object.__new__(OpenXRFramePipeline)
+    viewer = SimpleNamespace(actual_fps=29.5, _runtime_direct_source=True)
+    viewer._has_fresh_source_frame = lambda _now: True
+    viewer._has_renderable_source_frame = lambda: True
+    pipeline.viewer = viewer
+    frame_state = SimpleNamespace(should_render=True)
+
+    for _ in range(6):
+        pipeline._log_perf(
+            frame_state,
+            [("wait_frame", 3.0), ("controller_pose", 4.1), ("poll_upload", 23.3), ("end_frame", 0.9)],
+            0.0,
+        )
+
+    output = capsys.readouterr().out
+    assert output.count("[OpenXRViewer] loop segments") == 5
+    assert viewer._xr_loop_perf_log_count == 5
+
+
 def test_openxr_frame_gate_keeps_rendering_last_good_frame_when_source_stale():
     from xr_viewer.openxr_frame_gate import OpenXRFrameGate
 
