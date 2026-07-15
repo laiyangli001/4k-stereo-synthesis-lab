@@ -33,7 +33,7 @@ Canonical specs for current work:
 - `docs/35-OpenXR_Asynchronous_Decoupled_Rendering_Architecture_Report.md` - target OpenXR asynchronous decoupled rendering architecture.
 - `docs/36-OpenXR_Asynchronous_Decoupled_Rendering_Implementation_Plan.md` - implementation plan for the OpenXR asynchronous refactor; use it as the current plan for projection-layer main-screen presentation, optional Quad diagnostics/overlays, panorama background, GPU Glow, and wall reflection work.
 - `docs/38-gltf-2-renderer-compliance-layer-plan.md` - current plan for the OpenXR/local glTF 2.0 core renderer compliance layer: static mesh/material/texture/render-pass contracts plus runtime animation, skinning, morph targets, sparse/interleaved/normalized accessors, cameras/multi-scene, diagnostics, and mature runtime reuse evaluation.
-- `docs/39-panda3d-gltf-openxr-d3d11-migration-plan.md` - active Panda3D migration plan for replacing the self-authored glTF scene renderer with Panda3D OpenGL offscreen rendering bridged into the existing D3D11 OpenXR Projection swapchains; Phase 0/1 are code-backed, but real headset/OpenXR visibility is still the blocking gate.
+- `docs/39-panda3d-gltf-openxr-d3d11-migration-plan.md` - active Panda3D migration plan for replacing the self-authored glTF scene renderer with Panda3D scene ownership and GPU-only OpenXR projection output. D3D11/NV_DX is the main target, OpenGL shared-context rendering is the fallback target, and real acquired OpenXR swapchain rendering remains the blocking gate.
 - `prompts/codex-refactor-prompt.md`
 - This file: `docs/00-api-handoff-progress.md`
 
@@ -57,7 +57,7 @@ Canonical specs for current work:
 - OpenXR Quad layer is not a reliable VDXR main stereo display path. The latest logs prove runtime left/right eye tensors differ, OpenGL shared-array Quad swapchains are created, and Quad headers submit `eye0 array=0` / `eye1 array=1`; however the headset still shows no useful 3D. Projection layer remains the known-good OpenXR stereo path because it uses standard per-eye projection views. Current code should keep the main screen off the Quad path.
 - OpenXR Glow / screen-light sampling must follow `docs/20-openxr-gpu-glow-guide.md`: use GPU source texture, low-resolution glow texture, shader/compute sampling, or future D3D/Vulkan GPU passes. Do not reintroduce realtime `.cpu()`, `.numpy()`, `glReadPixels()`, or `tex.read()` as screen-light sampling sources.
 - glTF environment/controller rendering now has a shared static compliance package, stable primitive/material/color/render-pass contracts, and OpenGL/D3D11/preview consumers for that current contract. It is not yet full glTF 2.0 core compliance: runtime animation, skinning, morph targets, sparse/interleaved/normalized accessor coverage, cameras, and multi-scene behavior remain open. Animated Artemis GLB exports prove this gap because external viewers can play the node animation while the current loader still bakes static node transforms into uploaded primitives.
-- Panda3D migration is an opt-in path, not the default renderer. Current code has Panda3D asset probes, node-animation sampling, screen/controller/ray frame-state adapters, Panda offscreen targets, NV_DX bridge plumbing, and Panda projection bridge diagnostics. The hard gate remains real headset/OpenXR runtime proof that `D2S_GLTF_RENDERER=panda3d` + D3D11/NV_DX renders visibly with correct eye pose, no sync/device errors, and no fallback to native.
+- Panda3D migration is an opt-in path, not the default renderer. Current code has Panda3D asset probes, node-animation sampling, screen/controller/ray frame-state adapters, Panda offscreen targets, NV_DX bridge plumbing, OpenGL fallback bridge plumbing, and Panda projection bridge diagnostics. The hard gate remains real headset/OpenXR runtime proof that Panda3D can render into the currently acquired OpenXR projection swapchain texture with correct eye pose, no sync/device errors, no CPU/PBO/PIL/Numpy readback, and no fallback to native. Ordinary D3D11 texture interop success is only readiness; it is not proof that real OpenXR swapchain acquire/render/release has passed.
 
 ## Future Work
 
@@ -76,10 +76,49 @@ Current task queue:
 9. Continue network_stream encoder transport work, especially RTMP / low-latency paths, without redefining stereo synthesis semantics.
 10. Keep `docs/02-desktop2stereo-engineering-design-specification.md` aligned to the `docs/01-Realtime-2d-to-3d-specification.md` eleven-step runtime flow.
 11. Execute the expanded `docs/38` glTF 2.0 core roadmap while using `docs/39` as the active mature-runtime candidate: keep the self-authored static contract stable, but prioritize proving Panda3D can own glTF scene graph, animation, material, skybox, controller, and screen rendering before adding more custom renderer surface area.
-12. Continue `docs/39` Panda3D migration gate: run the real headset/OpenXR D3D11/NV_DX path and confirm the Panda diagnostics show success count > 0, failure count 0, bridge mode `nv_dx`, correct per-eye target sizes/image indices, empty error string, and useful timing fields.
-13. Continue `docs/36` phase 2: harden the OpenXR frame loop so the headset presenter keeps refreshing from the last good Projection screen frame when runtime/capture/effects are slow, without backpressuring capture/runtime.
+12. Continue `docs/39` Panda3D migration gate: first prove the D3D11/NV_DX main path on the real acquired OpenXR swapchain, then prove the OpenGL fallback path only when Panda3D and OpenXR GL contexts are the same or verified shared. Required evidence is success count > 0, failure count 0, bridge mode `nv_dx` or `opengl`, correct per-eye target sizes/image indices, empty error string, useful timing fields, continuous glTF animation, and visible headset output.
+13. Treat `GLError 1282`, FBO incomplete, swapchain lock failure, missing shared GL context, or any CPU readback/PBO readback/PIL/Numpy image movement as Panda3D zero-copy gate failure, not as an acceptable fallback.
+14. Continue `docs/36` phase 2: harden the OpenXR frame loop so the headset presenter keeps refreshing from the last good Projection screen frame when runtime/capture/effects are slow, without backpressuring capture/runtime.
 
 ## Current Status
+
+### 2026-07-16 Panda3D OpenXR GPU-only Gate Update
+
+Updated the active migration contract after the OpenGL fallback investigation:
+
+- `docs/39` now states the hard GPU-only/zero-copy requirement explicitly. Panda3D may own glTF scene graph, animation, materials, screen/controller/ray rendering, and per-eye cameras, but OpenXR still owns acquire/wait/release/submit and the projection swapchain lifecycle.
+- D3D11 remains the main path: `WGL_NV_DX_interop2` must register/lock the current acquired OpenXR D3D11 swapchain texture and expose it as a GL-writable FBO/texture for Panda rendering.
+- OpenGL is a required fallback path, but only if Panda3D and OpenXR use the same GL context or a verified shared WGL/GLX object namespace. Separate, unshared contexts are a gate failure.
+- Panda offscreen texture plus GPU blit is still GPU-only and may be timed as a transition path, but it is not strict zero-copy. CPU readback, PBO readback, PIL/Numpy staging, or any CPU image copy is forbidden for realtime Panda projection output.
+- Ordinary D3D11 texture register/lock/FBO complete results only prove readiness. They do not replace the true gate: real OpenXR swapchain acquire -> Panda render -> unlock/release -> headset-visible frame.
+
+Implemented locally in the current worktree:
+
+- Added the Panda OpenGL bridge boundary so OpenGL backend can attempt Panda rendering only when a target OpenXR GL context callback is available.
+- Added shared-context enforcement at the Panda scene blit boundary; missing target context is reported as a bridge failure instead of silently using an unproven context.
+- Added OpenGL bridge backoff and same-frame native fallback suppression after bridge failure to avoid OpenXR acquire/release call-order errors.
+- Reused Panda stereo targets across identical specs instead of rebuilding ShowBase/offscreen resources every frame.
+- Reduced repeated Panda render-path and projection render failure logs so bridge errors remain visible without flooding the child log.
+
+Verification run during this pass:
+
+```powershell
+.\src\python3\python.exe -m py_compile src\xr_viewer\projection_layer_presenter.py src\xr_viewer\openxr_frame_renderer.py src\xr_viewer\panda_runtime\opengl_bridge.py src\xr_viewer\panda_runtime\scene.py src\xr_viewer\panda_runtime\runtime.py tests\test_openxr_runtime.py tests\test_panda_runtime_adapter.py
+.\src\python3\python.exe -m pytest tests\test_panda_runtime_adapter.py::test_panda_opengl_bridge_renders_to_supplied_framebuffers_and_caches_resources tests\test_panda_runtime_adapter.py::test_panda_opengl_bridge_requires_target_context_callback tests\test_panda_runtime_adapter.py::test_panda_scene_graph_renders_panda_targets_then_blits_to_framebuffers tests\test_panda_runtime_adapter.py::test_panda_scene_renderer_facade_contract tests\test_openxr_runtime.py::test_panda_opengl_projection_bridge_acquires_renders_and_releases_both_eyes tests\test_openxr_runtime.py::test_projection_layer_attempts_panda_opengl_bridge_before_native_fallback tests\test_openxr_runtime.py::test_projection_layer_presenter_owns_backend_selection -q -p no:cacheprovider
+```
+
+Result:
+
+```text
+py_compile passed
+Focused Panda/OpenXR tests passed: 7 passed
+```
+
+Remaining validation target:
+
+- Real headset/OpenXR D3D11/NV_DX gate: current acquired swapchain texture must register/lock/render/unlock/release successfully and show Panda-rendered Artemis in the headset.
+- Real headset/OpenXR OpenGL fallback gate: Panda3D and OpenXR GL contexts must be identical or verified shared before rendering into the OpenXR GL swapchain/FBO.
+- `GLError 1282`, FBO incomplete, missing shared context proof, or any CPU image staging keeps the Panda path blocked.
 
 ### 2026-07-15 Panda3D glTF OpenXR D3D11 Migration Progress
 

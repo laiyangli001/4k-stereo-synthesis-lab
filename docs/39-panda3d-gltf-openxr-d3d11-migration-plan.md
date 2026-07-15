@@ -49,6 +49,9 @@ OpenXR-owned D3D11 left/right swapchain textures
                  |
                  v
        existing xrEndFrame Projection layer submit
+
+OpenXR OpenGL fallback, only when D3D11 is unavailable or explicitly disabled:
+Panda3D OpenGL renderer -> acquired OpenXR OpenGL swapchain FBO -> xrEndFrame
 ```
 
 Panda3D 的职责只到“画出当前帧的左右眼场景”。OpenXR 的 acquire/wait/release、layer composition、frame timing 和 D3D11 device 生命周期仍必须由现有 D3D11 backend 统一管理。这样不会出现两个模块同时拥有或释放同一 swapchain texture 的问题。
@@ -97,18 +100,28 @@ Panda 颜色管理必须单独验证：base color/emissive 按 sRGB 解释，nor
 
 ## 5. OpenGL 到 D3D11 桥接方案
 
+### 5.0 GPU-only / zero-copy 硬性约束
+
+Panda3D 可以做到项目要求的 GPU-only 路径，但这不是 Panda3D 默认自动保证的能力。Panda3D renderer 只有在满足下列条件之一时，才允许作为 OpenXR projection 的有效输出路径：
+
+1. D3D11 主路径：`WGL_NV_DX_interop2` 成功，且当前 acquire 的 D3D11 OpenXR swapchain texture 能被注册、lock，并作为 OpenGL 可写 FBO/texture 使用。
+2. OpenGL fallback：Panda3D GL context 和 OpenXR GL context 是同一个 context，或处于已验证的 WGL/GLX shared object namespace，使 Panda render target 与 OpenXR swapchain FBO/texture 可互相可见。
+
+以上是必要条件，必须通过真实 runtime 证据实现和验证。普通 D3D11 texture 的 register/lock/FBO complete 只能证明前置 readiness，不能等同于 OpenXR runtime 创建的 D3D11 swapchain texture、Panda3D GSG/context、acquire→render→release 真机帧循环已经通过。若条件不成立，Panda3D path 必须明确报告原因并回退；禁止用 CPU readback、PBO readback、Numpy/PIL 中转或其它 CPU 图像搬运伪装成 fallback。`GLError 1282`、FBO incomplete、无法 lock swapchain texture、无法证明 shared context，都应视为 zero-copy gate 未通过，而不是资产或 glTF loader 问题。
+
 ### 5.1 首选：复用 NV_DX_interop2 直接渲染
 
 每个 OpenXR acquire 的 `(eye, image_index)` 对应一个长期缓存的 D3D11 texture。第一阶段复用现有注册/lock/unlock 逻辑，把它映射为 GL texture/FBO；Panda render 时将该 FBO 作为该眼的目标，而不是先渲染到 Panda texture 再复制。
 
 这是最短路径，但只有同时满足下列条件才可采用：
 
-1. Panda 的 OpenGL context 与 WGL registration context 兼容，且与 D3D11/OpenXR 使用同一 NVIDIA adapter。
-2. Panda 可以在目标 FBO 被 lock 期间完成该眼全部绘制，随后完成 GPU flush/fence，再 unlock。
-3. OpenXR `release_swapchain_image` 一定发生在 unlock 后；不能跨帧持有 runtime texture。
-4. 左右眼、尺寸变化、session 重建和 device lost 都能正确注销和重新注册缓存。
+1. `WGL_NV_DX_interop2` 对当前 OpenXR D3D11 swapchain texture 注册成功，lock 后可作为 OpenGL FBO/texture 写入。
+2. Panda 的 OpenGL context 与 WGL registration context 兼容，且与 D3D11/OpenXR 使用同一 NVIDIA adapter。
+3. Panda 可以在目标 FBO 被 lock 期间完成该眼全部绘制，随后完成 GPU flush/fence，再 unlock。
+4. OpenXR `release_swapchain_image` 一定发生在 unlock 后；不能跨帧持有 runtime texture。
+5. 左右眼、尺寸变化、session 重建和 device lost 都能正确注销和重新注册缓存。
 
-该路径不是零风险：Panda3D 管理自己的 `GraphicsStateGuardian` 和 framebuffer 状态。若无法在不侵入 Panda 内部的前提下把 OpenXR texture 设为它的可靠 render target，则停止此路径，不通过裸 OpenGL 调用强行篡改 Panda state。
+该路径不是零风险：Panda3D 管理自己的 `GraphicsStateGuardian` 和 framebuffer 状态。最佳结果是 Panda3D 在 lock 期间直接把当前眼画到 interop FBO/OpenXR swapchain texture；如果只能先渲染到 Panda offscreen color texture，再用 GPU blit 到 interop FBO，则仍属于 GPU-only、无 CPU copy，但不能标记为严格 zero-copy，只能作为过渡或性能可接受的 fallback 形态单独计时和验收。若无法在不侵入 Panda 内部的前提下把 OpenXR texture 设为它的可靠 render target，则停止此路径，不通过裸 OpenGL 调用强行篡改 Panda state。
 
 ### 5.2 后备：CUDA GL→D3D11 native bridge
 
@@ -123,9 +136,22 @@ Panda 颜色管理必须单独验证：base color/emissive 按 sRGB 解释，nor
 
 CUDA bridge 的 POC 需逐项证明：同 adapter、RGBA 格式、行方向、MSAA resolve、resize、GPU fence 顺序和 device reset。它可以避免 CPU 回读，但并不自动等于零拷贝：GL 与 D3D11 是不同 API 资源，至少会有一次 GPU copy。
 
-### 5.3 明确不采用的路径
+### 5.3 OpenXR OpenGL fallback：Panda3D zero-copy projection path
 
-- 不使用 CPU `glReadPixels`、PBO readback、PIL/Numpy 中转到 D3D11；它违反实时渲染目标。
+主路径仍然是 D3D11 + `WGL_NV_DX_interop2`。当用户显式使用 OpenXR OpenGL backend，或 D3D11 backend 在当前 runtime/GPU 组合下不可用时，必须提供 Panda3D 的 OpenGL fallback path，避免退回自研 glTF renderer。
+
+该 fallback 仍必须由 Panda3D 负责 glTF scene graph、动画、PBR/材质、screen NodePath、controller NodePath 和每眼相机；OpenXR 层只负责 acquire/wait/release swapchain image 与提交 Projection layer。它不是 CPU fallback，也不能使用 `glReadPixels`、PBO readback、PIL/Numpy 或任何 CPU 图像中转。
+
+OpenGL fallback 的 zero-copy 合法实现只有两类：
+
+1. Panda3D 直接在 OpenXR OpenGL session 使用的 context 中渲染，或由 Panda3D 创建并拥有该 context，再用它创建 OpenXR `GraphicsBindingOpenGL*KHR` session。
+2. Panda3D context 与 OpenXR OpenGL context 处于同一个已验证的 WGL/GLX shared object namespace，使 Panda color target 与 OpenXR swapchain FBO/texture 可互相可见。
+
+如果无法证明同 context 或 shared context 成立，OpenGL fallback 必须报告一次明确原因并回退 native/OpenGL renderer 或 D3D11 主路径；禁止通过 CPU copy 绕过。实现上必须想办法让 Panda3D 直接使用 OpenXR GL session context，或建立并验证可共享 OpenGL 对象的 context pair。OpenGL fallback 的验收证据必须至少包含：Panda GL vendor/renderer、OpenXR GL binding context、shared-context 验证、左右眼 acquire-render-release 顺序、无 `GLError 1282`、无 CPU readback 调用、动画连续播放。
+
+### 5.4 明确不采用的路径
+
+- 不使用 CPU `glReadPixels`、PBO readback、PIL/Numpy 中转到 D3D11 或 OpenGL swapchain；它违反实时渲染目标。
 - 不让 Panda3D 使用 Direct3D 9 再尝试 DX9→DX11 级联。
 - 不修改 Panda3D 源码来增加 D3D11 backend。
 - 不让 Panda 和现有 Moderngl renderer 同时渲染同一个环境；切换必须是 renderer ownership 的互斥选择。
@@ -139,7 +165,7 @@ CUDA bridge 的 POC 需逐项证明：同 adapter、RGBA 格式、行方向、MS
 - 安装锁定版本的 `panda3d` 与 `panda3d-gltf`，记录 Python ABI、GPU driver、Panda 版本和插件版本。
 - 运行 `src/tools/panda3d_gltf_probe.py`：加载 Artemis/控制器并验证 glTF animation target 是否属于 active scene，以及 Panda runtime node 是否可驱动这些动画；Artemis 已由自定义 node animation runtime 通过，probe JSON 已记录 0.0/7.5/15.0 秒采样时间、采样节点和 transform changed 结果；`src/tools/panda3d_animation_screenshot_probe.py` 可保存 0.0/7.5/15.0 秒 PNG 截图并输出 SHA-256/大小摘要；`src/tools/panda3d_material_probe.py` 可输出 alpha、double-sided、unlit、texture/image 和 skybox material 摘要；12 个控制器 fixture 已通过，Bedroom missing-node warning 已通过清理越界 child 引用解决。
 - 记录 Panda OpenGL vendor/renderer、Panda texture native handle 的可获取性、实际 offscreen texture format、同 adapter CUDA/D3D11 枚举结果；当前已记录 vendor/renderer/version、RGBA8/depth24 offscreen RT、Panda texture native id、D3D11 adapter description/vendor/device/LUID/VRAM、GL/D3D adapter 名称匹配、D3D11 feature level、NV_DX device open/close，以及普通 D3D11 Texture2D 的 register/lock/FBO complete。
-- 使用现有 D3D11 OpenXR session 做 NV_DX interop POC；当前已验证普通 D3D11 texture 注册，并已提供 `D2S_PANDA3D_PHASE0_SWAPCHAIN_PROBE=1` 的真实 OpenXR swapchain 测试图路径。下一步需在头显运行时确认 acquire、注册、lock、渲染、unlock、release 全链路成功，先不加载真实 GLB。
+- 使用现有 D3D11 OpenXR session 做 NV_DX interop POC；当前已验证普通 D3D11 texture 注册，并已提供 `D2S_PANDA3D_PHASE0_SWAPCHAIN_PROBE=1` 的真实 OpenXR swapchain 测试图路径。普通 texture 结果只能作为 readiness，不能代替真实 OpenXR swapchain gate。下一步需在头显运行时确认 acquire、注册、lock、渲染、unlock、release 全链路成功，先不加载真实 GLB。
 
 闸门：任何一个 asset 的加载/动画/透明正确性失败，或 GL→D3D11 不能完成单帧 acquire-render-release，则保留当前 renderer，先修 POC，不开始替换。
 
@@ -173,6 +199,7 @@ panda_runtime/
 ### Phase 3：接入与性能
 
 - 优先打通 NV_DX 路径；仅在失败后启用 CUDA bridge，并在日志中记录实际桥接模式。当前已存在受保护的 Panda `render_eyes()` 调用点、失败回落 native 路径，以及 `PandaNvDxBridge` / `ViewerPandaNvDxInteropAdapter` concrete bridge shell；该 shell 复用现有 `_get_or_create_nv_interop_fbo()` 与 `_nv_dx_objects`，按左右眼 `SwapchainImageRef` 获取 FBO、lock/unlock NV_DX object。`PandaSceneGraph.render_to_framebuffers()` 已接入 Panda offscreen 左右眼 target：先把已加载环境、控制器、screen 和 ray root 挂到当前 Panda `ShowBase.render`，把同帧 OpenXR eye pose/fov 同步到 Panda 左右眼 camera，再 `render_frame()`，最后把 Panda eye color texture blit 到 NV_DX 锁定后的 OpenGL FBO。`PandaSceneRenderer` 和 `ProjectionLayerPresenter` 现在会记录 Panda bridge 成功/失败次数、最后 bridge mode、左右眼 target size、image index、左右眼 rendered 状态和最后错误，便于真机 gate 后直接判断 acquire/render/release 证据。下一步仍需在头显/OpenXR runtime 下确认该路径真实可见、姿态矩阵正确且无显存/同步错误。
+- OpenXR OpenGL backend 也必须有 Panda3D fallback，但只能作为 zero-copy fallback：Panda3D 必须使用 OpenXR GL session context 或已验证 shared context 直接写入 acquired OpenXR GL swapchain/FBO；不能做 CPU readback、PBO readback 或 Numpy/PIL 中转。若 context ownership/share 验证失败，该 fallback 必须显式失败并回退 native/OpenGL renderer，不允许静默黑屏。
 - 所有 swapchain 资源缓存以 `(session_generation, eye, image_index, width, height, format)` 为 key；session 重建先清资源，再创建。
 - 统计每帧 Panda render、bridge、OpenXR acquire/release、submit 的 GPU/CPU 时间，区分首次资源创建与稳态。当前 Panda projection bridge 已记录 CPU 分段 timing：`acquire_wait`、`target_rebuild`、`bridge_render`、`release`、`total`，并通过 `_breakdown_add_time()` 进入现有 breakdown；GPU timing、submit p50/p95 汇总和首次资源创建/稳态区分仍需结合真机运行证据补齐。
 - 让 Panda 使用最新已完成屏幕帧；旧帧可继续作为环境光或 screen texture，不能反压 capture/inference 队列。

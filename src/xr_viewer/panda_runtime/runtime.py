@@ -334,6 +334,8 @@ class PandaSceneRenderer:
 
     def rebuild_targets(self, left: StereoTargetSpec, right: StereoTargetSpec) -> None:
         self._ensure_live()
+        if self.targets.ready and self.targets.left == left and self.targets.right == right:
+            return
         self.targets.rebuild(left, right)
         self.diagnostics.record_event("stereo_targets_rebuilt", f"{left.width}x{left.height}/{right.width}x{right.height}")
 

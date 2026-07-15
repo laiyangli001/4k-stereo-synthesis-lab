@@ -158,6 +158,8 @@ class PandaSceneGraph:
         right_framebuffer: Any,
         left_resource: Any | None = None,
         right_resource: Any | None = None,
+        make_target_context_current: Any | None = None,
+        require_shared_context: bool = False,
     ) -> None:
         self._ensure_live()
         base = getattr(targets, "_panda_base", None)
@@ -171,6 +173,10 @@ class PandaSceneGraph:
         _update_eye_cameras(getattr(targets, "_panda_cameras", ()), frame_state)
         base.graphicsEngine.render_frame()
         base.graphicsEngine.render_frame()
+        if make_target_context_current is not None:
+            make_target_context_current()
+        elif require_shared_context:
+            raise RuntimeError("Panda OpenGL fallback requires a current target context")
         _blit_panda_texture_to_framebuffer(
             targets._panda_textures[0],
             left_framebuffer,

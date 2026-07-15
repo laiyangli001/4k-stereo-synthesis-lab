@@ -3717,6 +3717,7 @@ def test_projection_layer_presenter_owns_backend_selection(monkeypatch):
     presenter.render_d3d11_native = lambda *args, **kwargs: calls.append("d3d11") or ["d3d11"]
     presenter.render_nv_dx_interop = lambda *args, **kwargs: calls.append("nv_dx") or ["nv_dx"]
     presenter.render_panda_bridge = lambda *args, **kwargs: calls.append("panda") or ["panda"]
+    presenter.render_panda_opengl_bridge = lambda *args, **kwargs: calls.append("panda_gl") or ["panda_gl"]
     kwargs = dict(
         views=[],
         default_fov=object(),
@@ -3728,6 +3729,11 @@ def test_projection_layer_presenter_owns_backend_selection(monkeypatch):
     assert calls == []
 
     assert presenter.render_projection(enabled=True, updated_quad_eyes=(), **kwargs) == ["opengl"]
+    viewer._gltf_renderer_config = SimpleNamespace(panda3d_enabled=True)
+    viewer._panda_scene_renderer = object()
+    assert presenter.render_projection(enabled=True, updated_quad_eyes=(), **kwargs) == ["panda_gl"]
+    viewer._gltf_renderer_config = None
+    viewer._panda_scene_renderer = None
     viewer._use_d3d11 = True
     viewer._d3d11_native_renderer = Renderer()
     viewer._interop_mode = "nv_dx"
@@ -3746,9 +3752,111 @@ def test_projection_layer_presenter_owns_backend_selection(monkeypatch):
     viewer._interop_mode = "none"
     assert presenter.render_projection(enabled=True, updated_quad_eyes=(0,), **kwargs) == []
     assert presenter.render_projection(enabled=True, updated_quad_eyes=(), **kwargs) == []
-    assert calls == ["opengl", "nv_dx", "d3d11", "panda", "nv_dx"]
+    assert calls == ["opengl", "panda_gl", "nv_dx", "d3d11", "panda", "nv_dx"]
     assert viewer.inc_calls == [("openxr_projection_d3d11_no_interop_skip", 1)] * 2
 
+
+def test_panda_opengl_projection_bridge_acquires_renders_and_releases_both_eyes(monkeypatch):
+    import xr_viewer.projection_layer_presenter as presenter_module
+    from xr_viewer.panda_runtime.opengl_bridge import PandaOpenGLBridge
+    from xr_viewer.projection_layer_presenter import ProjectionLayerPresenter
+
+    events = []
+
+    class FakeXr:
+        @staticmethod
+        def acquire_swapchain_image(swapchain, _info):
+            events.append(("acquire", swapchain))
+            return 0
+
+        @staticmethod
+        def release_swapchain_image(swapchain, _info):
+            events.append(("release", swapchain))
+
+    class Renderer:
+        def __init__(self):
+            self.bridge = None
+            self.targets = SimpleNamespace(create_panda_targets=False)
+            self.rebuilds = []
+            self.images = []
+
+        def rebuild_targets(self, left, right):
+            self.rebuilds.append((left, right))
+
+        def render_eyes(self, left_image, right_image):
+            self.images.append((left_image, right_image))
+            return SimpleNamespace(rendered=True, bridge_mode="opengl")
+
+        def diagnostics_snapshot(self):
+            return SimpleNamespace(render_success_count=1, render_failure_count=0, scene_animation_sample_count=3)
+
+    current_context = {"window": "panda-window"}
+    monkeypatch.setattr(presenter_module, "xr", FakeXr)
+    monkeypatch.setattr(
+        presenter_module.glfw,
+        "make_context_current",
+        lambda window: events.append(("make_current", window)) or current_context.__setitem__("window", window),
+    )
+    renderer = Renderer()
+    calls = []
+    time_calls = []
+    def get_or_create_fbo(eye, image, tex, width, height):
+        assert current_context["window"] == "viewer-window"
+        return f"raw{eye}", f"fbo{eye}"
+
+    viewer = SimpleNamespace(
+        _panda_scene_renderer=renderer,
+        _xr_swapchains={0: "sc0", 1: "sc1"},
+        _xr_sc_acquire_info=object(),
+        _xr_sc_release_info=object(),
+        _swapchain_images={0: [SimpleNamespace(image="gltex0")], 1: [SimpleNamespace(image="gltex1")]},
+        _swapchain_sizes={0: (100, 120), 1: (101, 121)},
+        _opengl_swapchain_fmt="rgba8",
+        _panda_swapchain_session_generation=7,
+        _preview_active=False,
+        window="viewer-window",
+        _wait_swapchain_image=lambda swapchain: events.append(("wait", swapchain)),
+        _get_or_create_fbo=get_or_create_fbo,
+        _breakdown_inc=lambda name, amount=1: calls.append((name, amount)),
+        _breakdown_add_time=lambda name, seconds: time_calls.append((name, seconds)),
+        _record_projection_screen_presented=lambda: calls.append("presented"),
+        _use_d3d11=False,
+    )
+    presenter = ProjectionLayerPresenter(viewer)
+    presenter._projection_view = lambda swapchain, width, height, view, _fov: (swapchain, width, height, view)
+
+    result = presenter.render_panda_opengl_bridge(["view0", "view1"], default_fov=object())
+
+    assert result == [("sc0", 100, 120, "view0"), ("sc1", 101, 121, "view1")]
+    assert isinstance(renderer.bridge, PandaOpenGLBridge)
+    assert renderer.targets.create_panda_targets is True
+    assert events == [
+        ("make_current", "viewer-window"),
+        ("acquire", "sc0"),
+        ("wait", "sc0"),
+        ("acquire", "sc1"),
+        ("wait", "sc1"),
+        ("make_current", "viewer-window"),
+        ("release", "sc0"),
+        ("release", "sc1"),
+    ]
+    left_image, right_image = renderer.images[0]
+    assert left_image.texture == "fbo0"
+    assert right_image.texture == "fbo1"
+    assert left_image.session_generation == 7
+    assert viewer._panda_render_last_bridge_mode == "opengl"
+    assert viewer._panda_render_last_target_size == ((100, 120), (101, 121))
+    assert viewer._panda_render_last_image_indices == (0, 0)
+    assert viewer._panda_render_success_count == 1
+    assert viewer._panda_render_error == ""
+    assert calls == [("openxr_projection_panda_present", 1), "presented"]
+    assert [name for name, _seconds in time_calls] == [
+        "openxr_projection_panda_acquire_wait",
+        "openxr_projection_panda_target_rebuild",
+        "openxr_projection_panda_bridge_render",
+        "openxr_projection_panda_release",
+        "openxr_projection_panda_total",
+    ]
 
 def test_panda_projection_bridge_acquires_renders_and_releases_both_eyes(monkeypatch):
     import xr_viewer.projection_layer_presenter as presenter_module

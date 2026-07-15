@@ -1064,6 +1064,29 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
             print("[OpenXRViewer] Primary OpenXR backend: opengl (D3D11 fallback enabled)")
         else:
             print("[OpenXRViewer] Forced OpenXR backend: opengl")
+        # Enable the Panda3D glTF test path by default while keeping the OpenXR
+        # backend default on OpenGL. The D3D11/NV_DX bridge remains D3D11-only;
+        # OpenGL runs the Panda asset/frame-state/animation side for live testing.
+        try:
+            from .panda_runtime.runtime import (
+                PandaSceneRenderer,
+                log_renderer_selection,
+                resolve_gltf_renderer_mode,
+            )
+            panda_env = dict(os.environ)
+            panda_env.setdefault('D2S_GLTF_RENDERER', 'panda3d')
+            self._gltf_renderer_config = resolve_gltf_renderer_mode(
+                panda_env,
+                panda3d_available=True,
+            )
+            log_renderer_selection(self._gltf_renderer_config)
+            self._panda_scene_renderer = (
+                PandaSceneRenderer() if self._gltf_renderer_config.panda3d_requested else None
+            )
+        except Exception as e:
+            self._gltf_renderer_config = None
+            self._panda_scene_renderer = None
+            print(f"[OpenXRViewer] glTF renderer selector unavailable: {e}")
         self._d3d11_device          = None    # c_void_p ID3D11Device*
         self._d3d11_context         = None    # c_void_p ID3D11DeviceContext*
         self._d3d11_swapchain_fmt   = _DXGI_FORMAT_R8G8B8A8_UNORM_SRGB
@@ -2243,9 +2266,25 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
             now = time.perf_counter()
             last_log = float(getattr(self, '_xr_render_perf_last_log', 0.0) or 0.0)
             slow = total_ms >= 18.0
-            if slow or (now - last_log) >= 2.0:
+            log_count = int(getattr(self, '_xr_render_perf_log_count', 0) or 0)
+            periodic = (now - last_log) >= 2.0 and log_count < 5
+            if slow or periodic:
                 self._xr_render_perf_last_log = now
-                parts = ' '.join(f'{label}={ms:.1f}' for label, ms in perf_marks if ms >= 0.05)
+                if periodic and not slow:
+                    self._xr_render_perf_log_count = log_count + 1
+                perf_by_label = {label: ms for label, ms in perf_marks}
+                labels = (
+                    'clear',
+                    'env',
+                    'quality',
+                    'screen',
+                    'border',
+                    'keyboard',
+                    'osd',
+                    'screen_use',
+                    'hidden',
+                )
+                parts = ' '.join(f'{label}={perf_by_label.get(label, 0.0):.1f}' for label in labels)
                 print(
                     '[OpenXRViewer] render segments '
                     f'eye={eye_index} total_ms={total_ms:.1f} '

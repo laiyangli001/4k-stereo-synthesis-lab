@@ -47,7 +47,7 @@ class OpenXRFrameRenderer:
                 updated_quad_eyes=updated_quad_eyes,
             )
         except Exception as exc:
-            print(f"[OpenXRViewer] Projection layer render failed: {type(exc).__name__}: {exc}")
+            self._log_projection_render_failed(exc)
             viewer._breakdown_inc('openxr_projection_render_failed')
             eye_layer_views = []
         if eye_layer_views:
@@ -62,3 +62,15 @@ class OpenXRFrameRenderer:
             background_layer_headers=background_layer_headers,
         )
         return screen_frame_uploaded, view_pose_adjusted, bool(eye_layer_views)
+
+    def _log_projection_render_failed(self, exc):
+        viewer = self.viewer
+        now = time.perf_counter()
+        key = (type(exc).__name__, str(exc))
+        last_key = getattr(viewer, '_projection_render_error_log_key', None)
+        next_log = float(getattr(viewer, '_projection_render_error_next_log_time', 0.0) or 0.0)
+        if key == last_key and now < next_log:
+            return
+        viewer._projection_render_error_log_key = key
+        viewer._projection_render_error_next_log_time = now + 2.0
+        print(f"[OpenXRViewer] Projection layer render failed: {type(exc).__name__}: {exc}", flush=True)

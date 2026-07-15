@@ -2,7 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from xr_viewer.openxr_panda_frame_state import _eye_fovs
+from xr_viewer.openxr_panda_frame_state import _eye_fovs, update_panda_frame_state_from_viewer
+from xr_viewer.projection_layer_presenter import ProjectionLayerPresenter
 from xr_viewer.panda_runtime import scene as panda_scene_module
 from xr_viewer.panda_runtime.bridge import (
     PandaBridge,
@@ -22,6 +23,7 @@ from xr_viewer.panda_runtime.frame_source import (
     mat4_to_panda_pose,
 )
 from xr_viewer.panda_runtime.nv_dx_bridge import PandaNvDxBridge
+from xr_viewer.panda_runtime.opengl_bridge import PandaOpenGLBridge
 from xr_viewer.panda_runtime.scene_bindings import sync_panda_scene_assets_from_viewer
 from xr_viewer.panda_runtime.screen_node import create_panda_screen_node_target
 from xr_viewer.panda_runtime.runtime import (
@@ -122,12 +124,16 @@ class _FakePandaRendererForBindings:
         self.scene = _FakePandaSceneForBindings()
         self.environments = []
         self.controllers = []
+        self.frame_states = []
 
     def load_environment(self, path):
         self.environments.append(path)
 
     def load_controller(self, hand, path):
         self.controllers.append((hand, path))
+
+    def update_frame_state(self, frame_state):
+        self.frame_states.append(frame_state)
 
 
 class _FakeNvDxAdapter:
@@ -252,9 +258,11 @@ def test_gltf_renderer_selector_falls_back_on_invalid_mode():
 def test_d3d11_init_resolves_gltf_renderer_selector_without_replacing_native_path():
     source = (ROOT / "src" / "xr_viewer" / "core_openxr_d3d11.py").read_text(encoding="utf-8")
 
-    assert "resolve_gltf_renderer_mode()" in source
+    assert "resolve_gltf_renderer_mode(" in source
+    assert "panda3d_available=True" in source
     assert "_gltf_renderer_config" in source
-    assert "PandaSceneRenderer() if self._gltf_renderer_config.panda3d_requested else None" in source
+    assert "self._gltf_renderer_config.panda3d_requested" in source
+    assert "PandaSceneRenderer()" in source
     assert "D3D11 native renderer active" in source
     assert "self._d3d11_native_renderer = D3D11NativeRenderer" in source
 
@@ -486,6 +494,7 @@ def test_panda_scene_graph_renders_panda_targets_then_blits_to_framebuffers(monk
     left_resource = type("Resource", (), {"key": SwapchainResourceKey(2, 0, 3, 100, 120, "rgba8")})()
     right_resource = type("Resource", (), {"key": SwapchainResourceKey(2, 1, 4, 101, 121, "rgba8")})()
 
+    context_calls = []
     scene.render_to_framebuffers(
         targets=targets,
         frame_state=PandaFrameState(
@@ -506,6 +515,8 @@ def test_panda_scene_graph_renders_panda_targets_then_blits_to_framebuffers(monk
         right_framebuffer=_FakeModernGlFramebuffer(32),
         left_resource=left_resource,
         right_resource=right_resource,
+        make_target_context_current=lambda: context_calls.append("target-context"),
+        require_shared_context=True,
     )
     scene.render_to_framebuffers(
         targets=targets,
@@ -514,9 +525,12 @@ def test_panda_scene_graph_renders_panda_targets_then_blits_to_framebuffers(monk
         right_framebuffer=_FakeModernGlFramebuffer(34),
         left_resource=left_resource,
         right_resource=right_resource,
+        make_target_context_current=lambda: context_calls.append("target-context"),
+        require_shared_context=True,
     )
 
     assert targets._panda_base.graphicsEngine.render_frame_calls == 4
+    assert context_calls == ["target-context", "target-context"]
     assert environment_root.parents == [targets._panda_base.render]
     assert controller_root.parents == [targets._panda_base.render]
     assert screen_root.parents == [targets._panda_base.render]
@@ -542,6 +556,45 @@ def test_panda_scene_graph_render_to_framebuffers_requires_panda_targets():
             frame_state=object(),
             left_framebuffer=object(),
             right_framebuffer=object(),
+        )
+
+
+def test_panda_opengl_bridge_renders_to_supplied_framebuffers_and_caches_resources():
+    context_calls = []
+    bridge = PandaOpenGLBridge(make_target_context_current=lambda: context_calls.append("target-context"))
+    scene = _FakePandaRenderableScene()
+    left = SwapchainImageRef(0, 3, "left-fbo", 100, 120, "rgba8", session_generation=2)
+    right = SwapchainImageRef(1, 4, "right-fbo", 101, 121, "rgba8", session_generation=2)
+
+    result = bridge.render_eyes(
+        scene=scene,
+        targets="targets",
+        frame_state="frame",
+        left_image=left,
+        right_image=right,
+    )
+
+    assert result.rendered is True
+    assert result.bridge_mode == "opengl"
+    assert len(scene.calls) == 1
+    assert scene.calls[0]["left_framebuffer"] == "left-fbo"
+    assert scene.calls[0]["right_framebuffer"] == "right-fbo"
+    assert callable(scene.calls[0]["make_target_context_current"])
+    assert scene.calls[0]["require_shared_context"] is True
+    assert context_calls == []
+    assert len(bridge.resources) == 2
+
+def test_panda_opengl_bridge_requires_target_context_callback():
+    bridge = PandaOpenGLBridge()
+    scene = _FakePandaRenderableScene()
+
+    with pytest.raises(PandaBridgeUnavailable, match="target OpenXR GL context"):
+        bridge.render_eyes(
+            scene=scene,
+            targets="targets",
+            frame_state="frame",
+            left_image=SwapchainImageRef(0, 3, "left-fbo", 100, 120, "rgba8"),
+            right_image=SwapchainImageRef(1, 4, "right-fbo", 101, 121, "rgba8"),
         )
 
 
@@ -813,6 +866,98 @@ def test_openxr_panda_frame_state_carries_eye_fovs():
     assert _eye_fovs([]) == (None, None)
 
 
+def test_projection_layer_attempts_panda_opengl_bridge_before_native_fallback(monkeypatch, capsys):
+    renderer = PandaSceneRenderer(bridge=_RecordingBridge())
+    renderer.update_frame_state(PandaFrameState(predicted_display_time=1.0))
+    viewer = type("Viewer", (), {})()
+    viewer._use_d3d11 = False
+    viewer._gltf_renderer_config = type("Config", (), {"panda3d_enabled": True})()
+    viewer._panda_scene_renderer = renderer
+    viewer._ensure_projection_swapchains = lambda: True
+    viewer._breakdown_inc = lambda _name, amount=1: None
+    presenter = ProjectionLayerPresenter(viewer)
+    monkeypatch.setattr(presenter, "render_opengl", lambda *args, **kwargs: ["native-opengl"])
+
+    result = presenter.render_projection(
+        enabled=True,
+        views=[],
+        default_fov=None,
+        default_proj=None,
+        default_proj_d3d=None,
+    )
+    fallback_result = presenter.render_projection(
+        enabled=True,
+        views=[],
+        default_fov=None,
+        default_proj=None,
+        default_proj_d3d=None,
+    )
+
+    output = capsys.readouterr().out
+    assert result == []
+    assert fallback_result == ["native-opengl"]
+    assert "Panda3D render path status status=bridge-failed" in output
+    assert "backend=opengl" in output
+    assert "scene-bound-only" not in output
+
+def test_openxr_panda_scene_binding_logs_when_screen_binding_becomes_active(monkeypatch, capsys):
+    bindings = iter(
+        [
+            type(
+                "Binding",
+                (),
+                {
+                    "loaded": True,
+                    "screen_target_bound": False,
+                    "screen_size": None,
+                    "environment_path": "Artemis/environment.glb",
+                },
+            )(),
+            type(
+                "Binding",
+                (),
+                {
+                    "loaded": True,
+                    "screen_target_bound": True,
+                    "screen_size": (2.4, 1.35),
+                    "environment_path": "Artemis/environment.glb",
+                },
+            )(),
+        ]
+    )
+    monkeypatch.setattr(
+        "xr_viewer.openxr_panda_frame_state.sync_panda_scene_assets_from_viewer",
+        lambda viewer: next(bindings),
+    )
+    renderer = _FakePandaRendererForBindings()
+    viewer = type("Viewer", (), {})()
+    viewer._gltf_renderer_config = type("Config", (), {"panda3d_requested": True})()
+    viewer._panda_scene_renderer = renderer
+    viewer._frame_count = 1
+    viewer.screen_width = 2.4
+    viewer.screen_height = None
+    viewer._screen_pose_mat4 = lambda: None
+    viewer._ensure_screen_dimensions = lambda: setattr(viewer, "screen_height", 1.35)
+
+    update_panda_frame_state_from_viewer(
+        viewer,
+        predicted_display_time=10.0,
+        views=[],
+        screen_frame_uploaded=False,
+    )
+    update_panda_frame_state_from_viewer(
+        viewer,
+        predicted_display_time=10.1,
+        views=[],
+        screen_frame_uploaded=False,
+    )
+
+    output = capsys.readouterr().out
+    assert "Panda3D scene binding active loaded=True screen_bound=False" in output
+    assert "Panda3D scene binding active loaded=True screen_bound=True" in output
+    assert len(renderer.frame_states) == 2
+
+
 def test_panda_frame_state_validates_same_frame_eye_views():
     pose = PandaPose((0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))
     validate_frame_state(
@@ -902,7 +1047,7 @@ def test_panda_scene_renderer_configures_animation_runtime_controls():
     assert "animation_configured" in snapshot.events
 
 
-def test_panda_scene_binding_loads_active_environment_and_controllers(tmp_path):
+def test_panda_scene_binding_loads_active_environment_and_controllers(tmp_path, monkeypatch):
     env_path = tmp_path / "environment.glb"
     env_path.write_bytes(b"glb")
     controllers = tmp_path / "controllers" / "pico"
@@ -911,6 +1056,15 @@ def test_panda_scene_binding_loads_active_environment_and_controllers(tmp_path):
     right = controllers / "right.glb"
     left.write_bytes(b"left")
     right.write_bytes(b"right")
+    screen_target = type(
+        "FakeScreenNodeTarget",
+        (),
+        {"root": "screen-root", "texture_target": "screen-texture-target"},
+    )()
+    monkeypatch.setattr(
+        "xr_viewer.panda_runtime.screen_node.create_panda_screen_node_target",
+        lambda width, height: screen_target,
+    )
     renderer = _FakePandaRendererForBindings()
     viewer = type("Viewer", (), {})()
     viewer._panda_scene_renderer = renderer
@@ -958,10 +1112,12 @@ def test_panda_scene_renderer_facade_contract():
 
     renderer.load_environment("Artemis/environment.glb")
     renderer.load_controller("left", "controllers/left.glb")
-    renderer.rebuild_targets(
-        StereoTargetSpec(100, 120, "rgba8"),
-        StereoTargetSpec(100, 120, "rgba8"),
-    )
+    left_spec = StereoTargetSpec(100, 120, "rgba8")
+    right_spec = StereoTargetSpec(100, 120, "rgba8")
+    renderer.rebuild_targets(left_spec, right_spec)
+    first_target_generation = renderer.targets.generation
+    renderer.rebuild_targets(left_spec, right_spec)
+    assert renderer.targets.generation == first_target_generation
     renderer.update_frame_state(PandaFrameState(predicted_display_time=123.0))
     renderer.update_frame_state(PandaFrameState(predicted_display_time=123.5))
     result = renderer.render_eyes(

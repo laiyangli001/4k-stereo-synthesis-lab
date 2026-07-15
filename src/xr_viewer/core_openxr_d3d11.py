@@ -1,6 +1,7 @@
 # Desktop2Stereo OpenXR viewer: D3D11-backed OpenXR session creation.
 
 import ctypes
+import os
 
 import numpy as np
 
@@ -175,25 +176,25 @@ class CoreOpenXRD3D11Mixin:
             self._swapchain_images[eye_index] = images
             self._swapchain_sizes[eye_index]  = (sc_w, sc_h)
 
-        # 9. Resolve the future glTF scene-renderer selector without changing
-        # the default native path before the Panda3D OpenXR swapchain gate passes.
+        # 9. Reuse the optional Panda3D glTF test selector initialized by the
+        # viewer. D3D11 only adds the NV_DX projection bridge when requested.
         try:
-            from .panda_runtime.runtime import (
-                PandaSceneRenderer,
-                log_renderer_selection,
-                resolve_gltf_renderer_mode,
-            )
-            self._gltf_renderer_config = resolve_gltf_renderer_mode()
-            if self._gltf_renderer_config.requested_mode != 'native' or self._gltf_renderer_config.fallback_reason:
+            from .panda_runtime.runtime import PandaSceneRenderer, log_renderer_selection
+            if getattr(self, '_gltf_renderer_config', None) is None:
+                from .panda_runtime.runtime import resolve_gltf_renderer_mode
+                panda_env = dict(os.environ)
+                panda_env.setdefault('D2S_GLTF_RENDERER', 'panda3d')
+                self._gltf_renderer_config = resolve_gltf_renderer_mode(
+                    panda_env,
+                    panda3d_available=True,
+                )
                 log_renderer_selection(self._gltf_renderer_config)
-            self._panda_scene_renderer = (
-                PandaSceneRenderer() if self._gltf_renderer_config.panda3d_requested else None
-            )
+            if getattr(self, '_panda_scene_renderer', None) is None and self._gltf_renderer_config.panda3d_requested:
+                self._panda_scene_renderer = PandaSceneRenderer()
         except Exception as e:
             self._gltf_renderer_config = None
             self._panda_scene_renderer = None
             print(f"[OpenXRViewer] glTF renderer selector unavailable: {e}")
-
         # 10. Prefer native D3D11 for runtime eye/RGB+depth -> Projection layer
         # upload. OpenGL/NV_DX interop remains a compatibility fallback only.
         if self._d3d11_native_requested:

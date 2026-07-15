@@ -121,7 +121,9 @@ class EnvironmentLayoutMixin:
             self._xr_profile_space_applied = False
             return False
 
-        desired_head = raw_head.copy()
+        desired_head = self._level_head_model_mat4(raw_head)
+        if desired_head is None:
+            desired_head = raw_head.copy()
         if auto_center:
             auto_pos = self._auto_view_position_from_screen(view, has_rot, rot_deg_keys, rot_rad_keys)
             if auto_pos is None and has_pos:
@@ -139,9 +141,10 @@ class EnvironmentLayoutMixin:
 
         try:
             current_space_in_ref = getattr(self, '_xr_space_pose_in_ref', np.eye(4, dtype=np.float32))
-            reference_head = current_space_in_ref @ raw_head
-            if auto_center:
-                reference_head = self._level_head_model_mat4(reference_head)
+            reference_head = self._level_head_model_mat4(current_space_in_ref @ raw_head)
+            if reference_head is None:
+                self._xr_profile_space_applied = False
+                return False
             space_in_ref = reference_head @ np.linalg.inv(desired_head)
             new_space = xr.create_reference_space(
                 self._xr_session,

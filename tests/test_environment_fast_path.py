@@ -227,6 +227,51 @@ def test_profile_view_pose_accepts_xyz_position_alias(monkeypatch):
     ) == [math.radians(90.0), 0.0, 0.0]
 
 
+def test_profile_view_pose_xr_space_drops_startup_head_pitch(monkeypatch):
+    import math
+    import numpy as np
+    import xr_viewer.environment_layout as environment_layout
+    from xr_viewer.xr_math import euler_to_mat4
+
+    viewer = _make_default_viewer(monkeypatch)
+    captured = {}
+
+    class FakeXr:
+        class ReferenceSpaceCreateInfo:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+        @staticmethod
+        def create_reference_space(session, info):
+            captured["session"] = session
+            captured["pose"] = info.kwargs["pose_in_reference_space"]
+            return "new-space"
+
+        @staticmethod
+        def destroy_space(_space):
+            captured["destroyed"] = True
+
+    def capture_pose(matrix):
+        captured["matrix"] = np.array(matrix, dtype=np.float32)
+        return "pose"
+
+    monkeypatch.setattr(environment_layout, "xr", FakeXr)
+    monkeypatch.setattr(environment_layout, "mat4_to_xr_posef", capture_pose)
+    raw_head = euler_to_mat4(0.0, math.radians(18.0), math.radians(7.0)).astype(np.float32)
+    raw_head[:3, 3] = np.array([1.0, 1.6, -2.0], dtype=np.float32)
+    viewer._head_model_mat4_from_views = lambda _views: raw_head
+    viewer._xr_profile_space_applied = False
+    viewer._view_pose_profile = {"x": 1.0, "y": 1.6, "z": -2.0}
+    viewer._xr_session = "session"
+    viewer._xr_space = "old-space"
+    viewer._xr_ref_space_type = "local"
+    viewer._xr_space_pose_in_ref = np.eye(4, dtype=np.float32)
+
+    assert viewer._apply_profile_view_pose_to_xr_space([object(), object()]) is True
+
+    np.testing.assert_allclose(captured["matrix"][:3, :3], np.eye(3, dtype=np.float32), atol=1e-5)
+    np.testing.assert_allclose(captured["matrix"][:3, 3], np.zeros(3, dtype=np.float32), atol=1e-5)
+
 def test_environment_switch_does_not_reset_profile_view_pose_for_movable_screen():
     source = (SRC / "xr_viewer" / "environment_model.py").read_text(encoding="utf-8")
     switch_func = source.split("def _switch_environment_model", 1)[1]

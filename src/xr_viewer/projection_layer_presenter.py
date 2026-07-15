@@ -16,6 +16,7 @@ from OpenGL.GL import (
 
 from . import d3d_interop as _d3d_interop
 from .panda_runtime.bridge import SwapchainImageRef
+from .panda_runtime.opengl_bridge import PandaOpenGLBridge
 from .panda_runtime.stereo_targets import StereoTargetSpec
 from .xr_math import _fov_to_proj_mat4, _fov_to_proj_mat4_d3d, _pose_to_view_mat4
 
@@ -36,21 +37,71 @@ def _record_panda_bridge_timing(viewer, timing):
 
 
 def _log_panda_bridge_diagnostics(viewer):
-    log_count = int(getattr(viewer, '_panda_render_diagnostic_log_count', 0) or 0)
-    if log_count >= 5:
+    _log_panda_render_path_status(viewer, status='bridge-active')
+
+
+def _panda_opengl_bridge_backoff_active(viewer, now=None):
+    if now is None:
+        now = time.perf_counter()
+    until = float(getattr(viewer, '_panda_opengl_bridge_disabled_until', 0.0) or 0.0)
+    return now < until
+
+
+def _make_viewer_gl_context_current(viewer):
+    window = getattr(viewer, 'window', None)
+    if window is not None:
+        glfw.make_context_current(window)
+
+
+def _log_panda_render_path_status(viewer, *, status, reason=''):
+    renderer = getattr(viewer, '_panda_scene_renderer', None)
+    if renderer is None:
         return
-    viewer._panda_render_diagnostic_log_count = log_count + 1
     timing = getattr(viewer, '_panda_render_last_timing', {}) or {}
     timing_text = ','.join(f'{name}={seconds * 1000.0:.2f}ms' for name, seconds in timing.items())
+    snapshot = None
+    snapshot_error = ''
+    try:
+        snapshot = renderer.diagnostics_snapshot()
+    except Exception as exc:
+        snapshot_error = f'{type(exc).__name__}: {exc}'
+    viewer_success = int(getattr(viewer, '_panda_render_success_count', 0) or 0)
+    viewer_failure = int(getattr(viewer, '_panda_render_failure_count', 0) or 0)
+    bridge_mode = getattr(viewer, '_panda_render_last_bridge_mode', '')
+    renderer_success = getattr(snapshot, 'render_success_count', 0) if snapshot is not None else 0
+    renderer_failure = getattr(snapshot, 'render_failure_count', 0) if snapshot is not None else 0
+    animation_samples = getattr(snapshot, 'scene_animation_sample_count', 0) if snapshot is not None else 0
+    key = (
+        status,
+        reason,
+        bridge_mode,
+        getattr(viewer, '_panda_render_error', ''),
+        getattr(viewer, '_panda_render_last_target_size', None),
+    )
+    if getattr(viewer, '_panda_render_path_status_key', None) == key:
+        return
+    log_count = int(getattr(viewer, '_panda_render_diagnostic_log_count', 0) or 0)
+    if log_count >= 8:
+        return
+    viewer._panda_render_path_status_key = key
+    viewer._panda_render_diagnostic_log_count = log_count + 1
     print(
-        '[OpenXRViewer] Panda3D projection bridge diagnostics '
-        f'viewer._panda_render_success_count={int(getattr(viewer, "_panda_render_success_count", 0) or 0)} '
-        f'viewer._panda_render_failure_count={int(getattr(viewer, "_panda_render_failure_count", 0) or 0)} '
-        f'viewer._panda_render_last_bridge_mode={getattr(viewer, "_panda_render_last_bridge_mode", "")!r} '
-        f'viewer._panda_render_last_target_size={getattr(viewer, "_panda_render_last_target_size", None)!r} '
-        f'viewer._panda_render_last_image_indices={getattr(viewer, "_panda_render_last_image_indices", None)!r} '
-        f'viewer._panda_render_error={getattr(viewer, "_panda_render_error", "")!r} '
-        f'viewer._panda_render_last_timing={{{timing_text}}}'
+        '[OpenXRViewer] Panda3D render path status '
+        f'status={status} '
+        f'reason={reason!r} '
+        f'backend={"d3d11" if bool(getattr(viewer, "_use_d3d11", False)) else "opengl"} '
+        f'viewer_success={viewer_success} '
+        f'viewer_failure={viewer_failure} '
+        f'bridge={bridge_mode!r} '
+        f'renderer_success={renderer_success} '
+        f'renderer_failure={renderer_failure} '
+        f'animation_samples={animation_samples} '
+        f'target_size={getattr(viewer, "_panda_render_last_target_size", None)!r} '
+        f'image_indices={getattr(viewer, "_panda_render_last_image_indices", None)!r} '
+        f'error={getattr(viewer, "_panda_render_error", "")!r} '
+        f'snapshot_error={snapshot_error!r} '
+        f'timing={{{timing_text}}}',
+        flush=True,
     )
 
 
@@ -71,6 +122,17 @@ class ProjectionLayerPresenter:
             ensure_swapchains = getattr(viewer, '_ensure_projection_swapchains', None)
             if callable(ensure_swapchains) and not ensure_swapchains():
                 return []
+            if self._panda_opengl_bridge_enabled() and not _panda_opengl_bridge_backoff_active(viewer):
+                viewer._panda_opengl_bridge_failed_this_frame = False
+                panda_views = self.render_panda_opengl_bridge(
+                    views,
+                    default_fov,
+                    updated_quad_eyes=updated_quad_eyes,
+                )
+                if panda_views:
+                    return panda_views
+                if bool(getattr(viewer, '_panda_opengl_bridge_failed_this_frame', False)):
+                    return []
             return self.render_opengl(
                 views,
                 default_fov,
@@ -107,6 +169,25 @@ class ProjectionLayerPresenter:
         viewer._breakdown_inc('openxr_projection_d3d11_no_interop_skip')
         return []
 
+    def _panda_opengl_bridge_enabled(self):
+        viewer = self.viewer
+        config = getattr(viewer, '_gltf_renderer_config', None)
+        return bool(
+            getattr(config, 'panda3d_enabled', False)
+            and getattr(viewer, '_panda_scene_renderer', None) is not None
+            and not getattr(viewer, '_use_d3d11', False)
+        )
+
+    def _ensure_panda_opengl_bridge(self, renderer):
+        if not isinstance(getattr(renderer, 'bridge', None), PandaOpenGLBridge):
+            renderer.bridge = PandaOpenGLBridge(
+                make_target_context_current=lambda: _make_viewer_gl_context_current(self.viewer)
+            )
+        else:
+            renderer.bridge.make_target_context_current = lambda: _make_viewer_gl_context_current(self.viewer)
+        targets = getattr(renderer, 'targets', None)
+        if targets is not None and not bool(getattr(targets, 'create_panda_targets', False)):
+            targets.create_panda_targets = True
     def _panda_bridge_enabled(self):
         viewer = self.viewer
         config = getattr(viewer, '_gltf_renderer_config', None)
@@ -116,6 +197,100 @@ class ProjectionLayerPresenter:
             and getattr(viewer, '_use_d3d11', False)
         )
 
+    def render_panda_opengl_bridge(self, views, default_fov, *, updated_quad_eyes=()):
+        viewer = self.viewer
+        renderer = getattr(viewer, '_panda_scene_renderer', None)
+        if renderer is None:
+            return []
+        self._ensure_panda_opengl_bridge(renderer)
+        _make_viewer_gl_context_current(viewer)
+        acquired = []
+        released = set()
+        total_start = time.perf_counter()
+        timing = {
+            'acquire_wait': 0.0,
+            'target_rebuild': 0.0,
+            'bridge_render': 0.0,
+            'release': 0.0,
+            'total': 0.0,
+        }
+        try:
+            for eye_index in range(2):
+                acquire_start = time.perf_counter()
+                swapchain = viewer._xr_swapchains[eye_index]
+                img_index = xr.acquire_swapchain_image(swapchain, viewer._xr_sc_acquire_info)
+                viewer._wait_swapchain_image(swapchain)
+                sc_image = viewer._swapchain_images[eye_index][img_index]
+                sc_w, sc_h = viewer._swapchain_sizes[eye_index]
+                raw_fbo, mgl_fbo = viewer._get_or_create_fbo(
+                    eye_index, img_index, sc_image.image, sc_w, sc_h
+                )
+                view = views[eye_index] if views and views[eye_index] else None
+                acquired.append((eye_index, swapchain, img_index, raw_fbo, mgl_fbo, sc_w, sc_h, view))
+                timing['acquire_wait'] += time.perf_counter() - acquire_start
+
+            left = acquired[0]
+            right = acquired[1]
+            fmt = getattr(viewer, '_opengl_swapchain_fmt', 'rgba8')
+            generation = int(getattr(viewer, '_panda_swapchain_session_generation', 0) or 0)
+            rebuild_start = time.perf_counter()
+            renderer.rebuild_targets(
+                StereoTargetSpec(left[5], left[6], fmt),
+                StereoTargetSpec(right[5], right[6], fmt),
+            )
+            timing['target_rebuild'] = time.perf_counter() - rebuild_start
+            left_image = SwapchainImageRef(left[0], left[2], left[4], left[5], left[6], fmt, generation)
+            right_image = SwapchainImageRef(right[0], right[2], right[4], right[5], right[6], fmt, generation)
+            bridge_start = time.perf_counter()
+            result = renderer.render_eyes(left_image, right_image)
+            _make_viewer_gl_context_current(viewer)
+            timing['bridge_render'] = time.perf_counter() - bridge_start
+            if not result.rendered:
+                raise RuntimeError(f"Panda OpenGL bridge did not render both eyes: {result.bridge_mode}")
+            viewer._panda_render_last_bridge_mode = str(result.bridge_mode)
+            viewer._panda_render_last_target_size = ((left[5], left[6]), (right[5], right[6]))
+            viewer._panda_render_last_image_indices = (left[2], right[2])
+            viewer._panda_render_success_count = int(getattr(viewer, '_panda_render_success_count', 0) or 0) + 1
+            viewer._panda_render_error = ""
+
+            eye_layer_views = []
+            release_start = time.perf_counter()
+            for eye_index, swapchain, _img_index, raw_fbo, _mgl_fbo, sc_w, sc_h, view in acquired:
+                if viewer._preview_active and eye_index == 0 and not updated_quad_eyes:
+                    self._mirror_preview(raw_fbo, sc_w, sc_h)
+                xr.release_swapchain_image(swapchain, viewer._xr_sc_release_info)
+                released.add(eye_index)
+                eye_layer_views.append(self._projection_view(swapchain, sc_w, sc_h, view, default_fov))
+            timing['release'] += time.perf_counter() - release_start
+            timing['total'] = time.perf_counter() - total_start
+            _record_panda_bridge_timing(viewer, timing)
+            _log_panda_bridge_diagnostics(viewer)
+            viewer._breakdown_inc('openxr_projection_panda_present')
+            viewer._record_projection_screen_presented()
+            return eye_layer_views
+        except Exception as exc:
+            _make_viewer_gl_context_current(viewer)
+            release_start = time.perf_counter()
+            for eye_index, swapchain, *_rest in acquired:
+                if eye_index in released:
+                    continue
+                try:
+                    xr.release_swapchain_image(swapchain, viewer._xr_sc_release_info)
+                except Exception:
+                    pass
+            timing['release'] += time.perf_counter() - release_start
+            timing['total'] = time.perf_counter() - total_start
+            _record_panda_bridge_timing(viewer, timing)
+            viewer._breakdown_inc('openxr_projection_panda_failed')
+            viewer._panda_render_failure_count = int(getattr(viewer, '_panda_render_failure_count', 0) or 0) + 1
+            viewer._panda_render_error = f"{type(exc).__name__}: {exc}"
+            viewer._panda_opengl_bridge_failed_this_frame = True
+            viewer._panda_opengl_bridge_disabled_until = time.perf_counter() + 2.0
+            if not getattr(viewer, '_panda_render_error_logged', False):
+                print(f"[OpenXRViewer] Panda3D OpenGL projection bridge failed; temporarily using native projection on later frames: {type(exc).__name__}: {exc}", flush=True)
+                viewer._panda_render_error_logged = True
+            _log_panda_render_path_status(viewer, status='bridge-failed', reason=viewer._panda_render_error)
+            return []
     def render_panda_bridge(self, views, default_fov):
         viewer = self.viewer
         renderer = getattr(viewer, '_panda_scene_renderer', None)
