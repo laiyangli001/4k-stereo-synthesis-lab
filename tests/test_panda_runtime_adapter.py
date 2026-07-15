@@ -19,6 +19,7 @@ from xr_viewer.panda_runtime.frame_source import (
     controller_ray_from_vectors,
     mat4_to_panda_pose,
 )
+from xr_viewer.panda_runtime.nv_dx_bridge import PandaNvDxBridge
 from xr_viewer.panda_runtime.scene_bindings import sync_panda_scene_assets_from_viewer
 from xr_viewer.panda_runtime.screen_node import create_panda_screen_node_target
 from xr_viewer.panda_runtime.runtime import (
@@ -119,6 +120,29 @@ class _FakePandaRendererForBindings:
 
     def load_controller(self, hand, path):
         self.controllers.append((hand, path))
+
+
+class _FakeNvDxAdapter:
+    def __init__(self):
+        self.events = []
+
+    def get_or_create_fbo(self, image):
+        self.events.append(("fbo", image.eye_index, image.image_index))
+        return f"fbo{image.eye_index}"
+
+    def lock(self, image):
+        self.events.append(("lock", image.eye_index, image.image_index))
+
+    def unlock(self, image):
+        self.events.append(("unlock", image.eye_index, image.image_index))
+
+
+class _FakePandaRenderableScene:
+    def __init__(self):
+        self.calls = []
+
+    def render_to_framebuffers(self, **kwargs):
+        self.calls.append(kwargs)
 
 
 def test_gltf_renderer_selector_defaults_to_native():
@@ -359,6 +383,55 @@ def test_panda_bridge_cache_key_includes_session_eye_image_size_and_format():
 
     bridge.invalidate_session(2)
     assert bridge.resources == {}
+
+
+def test_panda_nv_dx_bridge_locks_renders_unlocks_and_caches_resources():
+    adapter = _FakeNvDxAdapter()
+    bridge = PandaNvDxBridge(adapter)
+    scene = _FakePandaRenderableScene()
+    left = SwapchainImageRef(0, 3, "tex0", 100, 120, 87, session_generation=2)
+    right = SwapchainImageRef(1, 4, "tex1", 101, 121, 87, session_generation=2)
+
+    result = bridge.render_eyes(
+        scene=scene,
+        targets="targets",
+        frame_state="frame",
+        left_image=left,
+        right_image=right,
+    )
+
+    assert result.rendered is True
+    assert result.bridge_mode == "nv_dx"
+    assert adapter.events == [
+        ("fbo", 0, 3),
+        ("fbo", 1, 4),
+        ("lock", 0, 3),
+        ("lock", 1, 4),
+        ("unlock", 1, 4),
+        ("unlock", 0, 3),
+    ]
+    assert len(scene.calls) == 1
+    assert scene.calls[0]["left_framebuffer"] == "fbo0"
+    assert scene.calls[0]["right_framebuffer"] == "fbo1"
+    assert len(bridge.resources) == 2
+
+
+def test_panda_nv_dx_bridge_unlocks_when_scene_render_hook_is_missing():
+    adapter = _FakeNvDxAdapter()
+    bridge = PandaNvDxBridge(adapter)
+    left = SwapchainImageRef(0, 0, "tex0", 64, 64, 87)
+    right = SwapchainImageRef(1, 0, "tex1", 64, 64, 87)
+
+    with pytest.raises(PandaBridgeUnavailable, match="render_to_framebuffers"):
+        bridge.render_eyes(
+            scene=object(),
+            targets=object(),
+            frame_state=object(),
+            left_image=left,
+            right_image=right,
+        )
+
+    assert adapter.events[-2:] == [("unlock", 1, 0), ("unlock", 0, 0)]
 
 
 def test_unimplemented_panda_bridge_fails_explicitly_after_caching_resources():

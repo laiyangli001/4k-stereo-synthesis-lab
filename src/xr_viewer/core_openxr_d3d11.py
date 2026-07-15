@@ -222,11 +222,16 @@ class CoreOpenXRD3D11Mixin:
         # 11. Try NV_DX interop for projection overlays when native D3D11
         # rendering is not available. Phase-0 Panda3D migration probes may also
         # request it explicitly to validate real OpenXR swapchain registration.
+        panda_bridge_requested = bool(
+            getattr(getattr(self, '_gltf_renderer_config', None), 'panda3d_enabled', False)
+        )
         if self._panda3d_phase0_swapchain_probe_enabled:
             print("[OpenXRViewer] Panda3D Phase-0 swapchain probe enabled")
             self._setup_gpu_interop_d3d11()
-        elif self._d3d11_native_renderer is None:
+        elif self._d3d11_native_renderer is None or panda_bridge_requested:
             self._setup_gpu_interop_d3d11()
+        if panda_bridge_requested:
+            self._configure_panda_nv_dx_bridge()
 
         # 12. Controller actions (best-effort)
         try:
@@ -236,3 +241,20 @@ class CoreOpenXRD3D11Mixin:
                 self._attach_controller_actions_to_session()
         except Exception as e:
             print(f"[OpenXRViewer] Controller actions unavailable: {e}")
+
+    def _configure_panda_nv_dx_bridge(self):
+        renderer = getattr(self, '_panda_scene_renderer', None)
+        if renderer is None:
+            return
+        if getattr(self, '_interop_mode', None) != 'nv_dx':
+            print("[OpenXRViewer] Panda3D NV_DX bridge unavailable: NV_DX interop is not active")
+            return
+        try:
+            from .panda_runtime.nv_dx_bridge import (
+                PandaNvDxBridge,
+                ViewerPandaNvDxInteropAdapter,
+            )
+            renderer.bridge = PandaNvDxBridge(ViewerPandaNvDxInteropAdapter(self))
+            print("[OpenXRViewer] Panda3D bridge active: NV_DX_interop2")
+        except Exception as e:
+            print(f"[OpenXRViewer] Panda3D NV_DX bridge unavailable: {e}")

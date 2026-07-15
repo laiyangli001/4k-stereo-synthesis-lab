@@ -3977,6 +3977,10 @@ def test_d3d11_projection_path_uses_native_renderer():
     assert "def _render_phase0_swapchain_probe" in presenter
     assert "Panda3D Phase-0 probe rendering into acquired D3D11 swapchain" in presenter
     assert "viewer._panda3d_phase0_probe_vao.render()" in presenter
+    assert "panda_bridge_requested = bool(" in d3d11
+    assert "self._configure_panda_nv_dx_bridge()" in d3d11
+    assert "PandaNvDxBridge(ViewerPandaNvDxInteropAdapter(self))" in d3d11
+    assert "def _lock_panda_nv_dx_image" in (SRC / "xr_viewer" / "core_d3d_interop.py").read_text(encoding="utf-8")
     assert "if viewer._d3d11_native_renderer is not None:" in presenter
     assert "return self.render_d3d11_native(" in presenter
     assert "model = viewer._build_model_mat4()" in presenter

@@ -167,6 +167,22 @@ class CoreD3DInteropMixin:
         self._nv_dx_objects[key] = (gl_tex, raw_fbo, dx_obj)
         return self.ctx.detect_framebuffer(raw_fbo), raw_fbo
 
+    def _lock_panda_nv_dx_image(self, eye_index, img_index):
+        key = (eye_index, img_index)
+        if key not in self._nv_dx_objects:
+            raise RuntimeError(f"NV_DX object is not registered for eye {eye_index} img {img_index}")
+        _gl_tex, _raw_fbo, dx_obj = self._nv_dx_objects[key]
+        locked = _d3d_interop._wglDXLockObjectsNV(self._nv_dx_device, 1, ctypes.byref(dx_obj))
+        if not locked:
+            raise RuntimeError("wglDXLockObjectsNV returned false")
+
+    def _unlock_panda_nv_dx_image(self, eye_index, img_index):
+        key = (eye_index, img_index)
+        if key not in self._nv_dx_objects:
+            raise RuntimeError(f"NV_DX object is not registered for eye {eye_index} img {img_index}")
+        _gl_tex, _raw_fbo, dx_obj = self._nv_dx_objects[key]
+        _d3d_interop._wglDXUnlockObjectsNV(self._nv_dx_device, 1, ctypes.byref(dx_obj))
+
     def _cleanup_interop(self):
         """Release all GPU interop resources."""
         if self._interop_mode == 'nv_dx' and self._nv_dx_device:

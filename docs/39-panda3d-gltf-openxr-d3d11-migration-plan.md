@@ -172,7 +172,7 @@ panda_runtime/
 
 ### Phase 3：接入与性能
 
-- 优先打通 NV_DX 路径；仅在失败后启用 CUDA bridge，并在日志中记录实际桥接模式。当前已存在受保护的 Panda `render_eyes()` 调用点和失败回落 native 路径，但 concrete NV_DX/CUDA bridge 仍未实现。
+- 优先打通 NV_DX 路径；仅在失败后启用 CUDA bridge，并在日志中记录实际桥接模式。当前已存在受保护的 Panda `render_eyes()` 调用点、失败回落 native 路径，以及 `PandaNvDxBridge` / `ViewerPandaNvDxInteropAdapter` concrete bridge shell；该 shell 复用现有 `_get_or_create_nv_interop_fbo()` 与 `_nv_dx_objects`，按左右眼 `SwapchainImageRef` 获取 FBO、lock/unlock NV_DX object，并要求 Panda scene 暴露 `render_to_framebuffers()`。真实 Panda draw loop 接入该 hook 前仍不会宣称完整替换。
 - 所有 swapchain 资源缓存以 `(session_generation, eye, image_index, width, height, format)` 为 key；session 重建先清资源，再创建。
 - 统计每帧 Panda render、bridge、OpenXR acquire/release、submit 的 GPU/CPU 时间，区分首次资源创建与稳态。
 - 让 Panda 使用最新已完成屏幕帧；旧帧可继续作为环境光或 screen texture，不能反压 capture/inference 队列。
