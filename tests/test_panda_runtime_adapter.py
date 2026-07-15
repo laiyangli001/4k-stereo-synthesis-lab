@@ -125,9 +125,24 @@ def test_panda_scene_graph_can_own_panda_loaded_environment_root():
     assert scene.loaded_assets() == (scene.environment,)
     assert "_environment_root" not in scene.environment.__dict__
 
-    scene.update_frame_state(PandaFrameState(animation_time_seconds=7.5))
+    pose = PandaPose((0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))
+    scene.update_frame_state(
+        PandaFrameState(
+            animation_time_seconds=7.5,
+            frame_index=22,
+            eye_views=(PandaEyeView(0, pose=pose), PandaEyeView(1, pose=pose)),
+            controller_poses={"right": pose, "left": pose},
+            screen_pose=pose,
+            screen_texture=object(),
+        )
+    )
     assert scene.frame_state.animation_time_seconds == pytest.approx(7.5)
     assert scene._environment_animation_player.time_seconds == pytest.approx(7.5)
+    assert scene.snapshot.frame_index == 22
+    assert scene.snapshot.controller_hands == ("left", "right")
+    assert scene.snapshot.screen_pose_present is True
+    assert scene.snapshot.screen_texture_present is True
+    assert scene.snapshot.eye_view_count == 2
 
     scene.release()
     assert scene.released
@@ -235,6 +250,10 @@ def test_panda_runtime_diagnostics_snapshot_summarizes_assets_targets_and_bridge
     assert snapshot.frame_eye_view_count == 2
     assert snapshot.frame_controller_count == 2
     assert snapshot.frame_screen_pose_present is True
+    assert snapshot.scene_controller_hands == ("left", "right")
+    assert snapshot.scene_screen_pose_present is True
+    assert snapshot.scene_screen_texture_present is False
+    assert snapshot.scene_eye_view_count == 2
     assert snapshot.event_count == 2
     assert snapshot.events == ("environment_loaded", "stereo_targets_rebuilt")
     assert snapshot.scene_assets[0]["role"] == "environment"
@@ -249,6 +268,7 @@ def test_panda_runtime_diagnostics_snapshot_summarizes_assets_targets_and_bridge
     assert '"bridge_resource_count": 1' in snapshot_json
     assert '"frame_animation_time_seconds": 1.5' in snapshot_json
     assert '"frame_eye_view_count": 2' in snapshot_json
+    assert '"scene_controller_hands": [' in snapshot_json
     assert '"scene_assets"' in snapshot_json
 
 

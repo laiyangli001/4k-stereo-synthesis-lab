@@ -31,6 +31,10 @@ class PandaRuntimeSnapshot:
     frame_eye_view_count: int
     frame_controller_count: int
     frame_screen_pose_present: bool
+    scene_controller_hands: tuple[str, ...]
+    scene_screen_pose_present: bool
+    scene_screen_texture_present: bool
+    scene_eye_view_count: int
     event_count: int
     events: tuple[str, ...]
 
@@ -81,6 +85,10 @@ class PandaRuntimeDiagnostics:
             frame_eye_view_count=_eye_view_count(frame_state),
             frame_controller_count=len(getattr(frame_state, "controller_poses", {}) or {}),
             frame_screen_pose_present=getattr(frame_state, "screen_pose", None) is not None,
+            scene_controller_hands=_scene_controller_hands(scene),
+            scene_screen_pose_present=_scene_bool(scene, "screen_pose_present"),
+            scene_screen_texture_present=_scene_bool(scene, "screen_texture_present"),
+            scene_eye_view_count=_scene_int(scene, "eye_view_count"),
             event_count=len(self.events),
             events=tuple(event.name for event in self.events),
         )
@@ -104,6 +112,22 @@ def _optional_int(value: Any) -> int | None:
 def _eye_view_count(frame_state: Any) -> int:
     eye_views = getattr(frame_state, "eye_views", ()) or ()
     return sum(1 for eye_view in eye_views if eye_view is not None)
+
+
+def _scene_snapshot(scene: Any) -> Any:
+    return getattr(scene, "snapshot", None)
+
+
+def _scene_controller_hands(scene: Any) -> tuple[str, ...]:
+    return tuple(getattr(_scene_snapshot(scene), "controller_hands", ()) or ())
+
+
+def _scene_bool(scene: Any, name: str) -> bool:
+    return bool(getattr(_scene_snapshot(scene), name, False))
+
+
+def _scene_int(scene: Any, name: str) -> int:
+    return int(getattr(_scene_snapshot(scene), name, 0) or 0)
 
 
 def _scene_asset_summary(scene: Any) -> tuple[Mapping[str, object], ...]:

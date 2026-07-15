@@ -20,6 +20,15 @@ class PandaAssetRef:
     animation_duration_seconds: float = 0.0
 
 
+@dataclass(frozen=True)
+class PandaSceneSnapshot:
+    frame_index: int | None = None
+    controller_hands: tuple[str, ...] = ()
+    screen_pose_present: bool = False
+    screen_texture_present: bool = False
+    eye_view_count: int = 0
+
+
 @dataclass
 class PandaSceneGraph:
     """Owns glTF asset roots without exposing Panda NodePath to callers."""
@@ -28,6 +37,7 @@ class PandaSceneGraph:
     environment: PandaAssetRef | None = None
     controllers: dict[str, PandaAssetRef] = field(default_factory=dict)
     frame_state: Any | None = None
+    snapshot: PandaSceneSnapshot = field(default_factory=PandaSceneSnapshot)
     released: bool = False
     _environment_root: Any | None = field(default=None, init=False, repr=False)
     _controller_roots: dict[str, Any] = field(default_factory=dict, init=False, repr=False)
@@ -60,6 +70,7 @@ class PandaSceneGraph:
     def update_frame_state(self, frame_state: Any) -> None:
         self._ensure_live()
         self.frame_state = frame_state
+        self.snapshot = _snapshot_from_frame_state(frame_state)
         animation_time = getattr(frame_state, "animation_time_seconds", None)
         if animation_time is not None:
             self._apply_animation_time(float(animation_time))
@@ -82,6 +93,7 @@ class PandaSceneGraph:
         self._environment_animation_player = None
         self._controller_animation_players.clear()
         self.frame_state = None
+        self.snapshot = PandaSceneSnapshot()
         self.released = True
 
     def _apply_animation_time(self, time_seconds: float) -> None:
@@ -117,6 +129,18 @@ class PandaSceneGraph:
     def _ensure_live(self) -> None:
         if self.released:
             raise RuntimeError("PandaSceneGraph has been released")
+
+
+def _snapshot_from_frame_state(frame_state: Any) -> PandaSceneSnapshot:
+    eye_views = getattr(frame_state, "eye_views", ()) or ()
+    controller_poses = getattr(frame_state, "controller_poses", {}) or {}
+    return PandaSceneSnapshot(
+        frame_index=getattr(frame_state, "frame_index", None),
+        controller_hands=tuple(sorted(str(hand) for hand in controller_poses)),
+        screen_pose_present=getattr(frame_state, "screen_pose", None) is not None,
+        screen_texture_present=getattr(frame_state, "screen_texture", None) is not None,
+        eye_view_count=sum(1 for eye_view in eye_views if eye_view is not None),
+    )
 
 
 def _load_panda_root(asset_path: str) -> Any:
