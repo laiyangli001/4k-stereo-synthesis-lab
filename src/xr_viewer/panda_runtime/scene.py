@@ -28,6 +28,7 @@ class PandaSceneSnapshot:
     screen_texture_present: bool = False
     eye_view_count: int = 0
     applied_controller_hands: tuple[str, ...] = ()
+    screen_pose_applied: bool = False
 
 
 @dataclass
@@ -42,6 +43,7 @@ class PandaSceneGraph:
     released: bool = False
     _environment_root: Any | None = field(default=None, init=False, repr=False)
     _controller_roots: dict[str, Any] = field(default_factory=dict, init=False, repr=False)
+    _screen_root: Any | None = field(default=None, init=False, repr=False)
     _environment_animation_player: Any | None = field(default=None, init=False, repr=False)
     _controller_animation_players: dict[str, Any] = field(default_factory=dict, init=False, repr=False)
 
@@ -72,7 +74,12 @@ class PandaSceneGraph:
         self._ensure_live()
         self.frame_state = frame_state
         applied_controller_hands = self._apply_controller_poses(frame_state)
-        self.snapshot = _snapshot_from_frame_state(frame_state, applied_controller_hands)
+        screen_pose_applied = self._apply_screen_pose(frame_state)
+        self.snapshot = _snapshot_from_frame_state(
+            frame_state,
+            applied_controller_hands,
+            screen_pose_applied,
+        )
         animation_time = getattr(frame_state, "animation_time_seconds", None)
         if animation_time is not None:
             self._apply_animation_time(float(animation_time))
@@ -87,11 +94,16 @@ class PandaSceneGraph:
     def controller_paths(self) -> Mapping[str, str]:
         return {hand: asset.path for hand, asset in self.controllers.items()}
 
+    def attach_screen_root(self, root: Any) -> None:
+        self._ensure_live()
+        self._screen_root = root
+
     def release(self) -> None:
         self.environment = None
         self.controllers.clear()
         self._environment_root = None
         self._controller_roots.clear()
+        self._screen_root = None
         self._environment_animation_player = None
         self._controller_animation_players.clear()
         self.frame_state = None
@@ -114,6 +126,14 @@ class PandaSceneGraph:
             if _apply_pose_to_node_path(root, pose):
                 applied.append(hand)
         return tuple(applied)
+
+    def _apply_screen_pose(self, frame_state: Any) -> bool:
+        if self._screen_root is None:
+            return False
+        screen_pose = getattr(frame_state, "screen_pose", None)
+        if screen_pose is None:
+            return False
+        return _apply_pose_to_node_path(self._screen_root, screen_pose)
 
     def _make_asset_ref(self, role: str, asset_path: str) -> tuple[PandaAssetRef, Any | None, Any | None]:
         path = str(Path(asset_path))
@@ -147,6 +167,7 @@ class PandaSceneGraph:
 def _snapshot_from_frame_state(
     frame_state: Any,
     applied_controller_hands: tuple[str, ...] = (),
+    screen_pose_applied: bool = False,
 ) -> PandaSceneSnapshot:
     eye_views = getattr(frame_state, "eye_views", ()) or ()
     controller_poses = getattr(frame_state, "controller_poses", {}) or {}
@@ -157,6 +178,7 @@ def _snapshot_from_frame_state(
         screen_texture_present=getattr(frame_state, "screen_texture", None) is not None,
         eye_view_count=sum(1 for eye_view in eye_views if eye_view is not None),
         applied_controller_hands=applied_controller_hands,
+        screen_pose_applied=screen_pose_applied,
     )
 
 

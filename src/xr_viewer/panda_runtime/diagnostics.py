@@ -36,6 +36,7 @@ class PandaRuntimeSnapshot:
     scene_screen_texture_present: bool
     scene_eye_view_count: int
     scene_applied_controller_hands: tuple[str, ...]
+    scene_screen_pose_applied: bool
     event_count: int
     events: tuple[str, ...]
 
@@ -91,6 +92,7 @@ class PandaRuntimeDiagnostics:
             scene_screen_texture_present=_scene_bool(scene, "screen_texture_present"),
             scene_eye_view_count=_scene_int(scene, "eye_view_count"),
             scene_applied_controller_hands=_scene_applied_controller_hands(scene),
+            scene_screen_pose_applied=_scene_bool(scene, "screen_pose_applied"),
             event_count=len(self.events),
             events=tuple(event.name for event in self.events),
         )
