@@ -676,6 +676,12 @@ def test_panda_runtime_diagnostics_snapshot_summarizes_assets_targets_and_bridge
     assert snapshot.bridge_mode == "unimplemented"
     assert snapshot.bridge_resource_count == 1
     assert snapshot.bridge_resource_keys == ("session=5:eye=0:image=2:size=64x72:format=rgba8",)
+    assert snapshot.render_success_count == 0
+    assert snapshot.render_failure_count == 0
+    assert snapshot.last_render_bridge_mode == ""
+    assert snapshot.last_render_left_rendered is False
+    assert snapshot.last_render_right_rendered is False
+    assert snapshot.last_render_error == ""
     assert '"bridge_resource_count": 1' in snapshot_json
     assert '"frame_animation_time_seconds": 1.5' in snapshot_json
     assert '"scene_animation_time_seconds": 1.5' in snapshot_json
@@ -965,6 +971,14 @@ def test_panda_scene_renderer_facade_contract():
     assert result.rendered
     assert result.bridge_mode == "test"
     assert len(bridge.calls) == 1
+    snapshot = renderer.diagnostics_snapshot()
+    assert snapshot.render_success_count == 1
+    assert snapshot.render_failure_count == 0
+    assert snapshot.last_render_bridge_mode == "test"
+    assert snapshot.last_render_left_rendered is True
+    assert snapshot.last_render_right_rendered is True
+    assert snapshot.last_render_error == ""
+    assert "render_eyes" in snapshot.events
     frame_state = bridge.calls[0][2]
     assert frame_state.predicted_display_time == pytest.approx(123.5)
     assert frame_state.animation_time_seconds == pytest.approx(0.5)
@@ -976,6 +990,31 @@ def test_panda_scene_renderer_facade_contract():
     renderer.release()
     assert renderer.released
     assert bridge.released
+
+
+def test_panda_scene_renderer_records_render_failure_diagnostics():
+    class FailingBridge(_RecordingBridge):
+        def render_eyes(self, **_kwargs):
+            raise RuntimeError("bridge exploded")
+
+    renderer = PandaSceneRenderer(bridge=FailingBridge())
+    renderer.rebuild_targets(
+        StereoTargetSpec(100, 120, "rgba8"),
+        StereoTargetSpec(100, 120, "rgba8"),
+    )
+    renderer.update_frame_state(PandaFrameState(predicted_display_time=123.0))
+
+    with pytest.raises(RuntimeError, match="bridge exploded"):
+        renderer.render_eyes(
+            SwapchainImageRef(0, 0, object(), 100, 120, "rgba8"),
+            SwapchainImageRef(1, 0, object(), 100, 120, "rgba8"),
+        )
+
+    snapshot = renderer.diagnostics_snapshot()
+    assert snapshot.render_success_count == 0
+    assert snapshot.render_failure_count == 1
+    assert snapshot.last_render_error == "RuntimeError: bridge exploded"
+    assert "render_failed" in snapshot.events
 
 
 def test_panda_scene_renderer_requires_frame_state_and_targets():

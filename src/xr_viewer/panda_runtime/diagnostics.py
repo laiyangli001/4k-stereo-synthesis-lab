@@ -25,6 +25,12 @@ class PandaRuntimeSnapshot:
     bridge_mode: str
     bridge_resource_count: int
     bridge_resource_keys: tuple[str, ...]
+    render_success_count: int
+    render_failure_count: int
+    last_render_bridge_mode: str
+    last_render_left_rendered: bool
+    last_render_right_rendered: bool
+    last_render_error: str
     frame_predicted_display_time: float | None
     frame_animation_time_seconds: float | None
     frame_index: int | None
@@ -95,6 +101,12 @@ class PandaRuntimeDiagnostics:
             bridge_mode=str(getattr(bridge, "bridge_mode", "")),
             bridge_resource_count=len(getattr(bridge, "resources", {}) or {}),
             bridge_resource_keys=_bridge_resource_key_summary(bridge),
+            render_success_count=int(getattr(renderer, "_render_success_count", 0) or 0),
+            render_failure_count=int(getattr(renderer, "_render_failure_count", 0) or 0),
+            last_render_bridge_mode=str(getattr(renderer, "_last_render_bridge_mode", "") or ""),
+            last_render_left_rendered=bool(getattr(renderer, "_last_render_left_rendered", False)),
+            last_render_right_rendered=bool(getattr(renderer, "_last_render_right_rendered", False)),
+            last_render_error=str(getattr(renderer, "_last_render_error", "") or ""),
             frame_predicted_display_time=_optional_float(
                 getattr(frame_state, "predicted_display_time", None)
             ),

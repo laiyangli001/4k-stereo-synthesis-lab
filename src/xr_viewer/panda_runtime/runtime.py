@@ -281,6 +281,12 @@ class PandaSceneRenderer:
         self._animation_loop = True
         self._released = False
         self._last_frame_state: PandaFrameState | None = None
+        self._render_success_count = 0
+        self._render_failure_count = 0
+        self._last_render_bridge_mode = ""
+        self._last_render_left_rendered = False
+        self._last_render_right_rendered = False
+        self._last_render_error = ""
 
     @property
     def released(self) -> bool:
@@ -339,13 +345,29 @@ class PandaSceneRenderer:
             raise PandaRuntimeUnavailable("PandaSceneRenderer.update_frame_state must run before render_eyes")
         if not self.targets.ready:
             raise PandaRuntimeUnavailable("PandaSceneRenderer.rebuild_targets must run before render_eyes")
-        return self.bridge.render_eyes(
-            scene=self.scene,
-            targets=self.targets,
-            frame_state=self._last_frame_state,
-            left_image=left_image,
-            right_image=right_image,
+        try:
+            result = self.bridge.render_eyes(
+                scene=self.scene,
+                targets=self.targets,
+                frame_state=self._last_frame_state,
+                left_image=left_image,
+                right_image=right_image,
+            )
+        except Exception as exc:
+            self._render_failure_count += 1
+            self._last_render_error = f"{type(exc).__name__}: {exc}"
+            self.diagnostics.record_event("render_failed", self._last_render_error)
+            raise
+        self._render_success_count += 1
+        self._last_render_error = ""
+        self._last_render_bridge_mode = str(result.bridge_mode)
+        self._last_render_left_rendered = bool(result.left_rendered)
+        self._last_render_right_rendered = bool(result.right_rendered)
+        self.diagnostics.record_event(
+            "render_eyes",
+            _render_result_detail(result, left_image, right_image),
         )
+        return result
 
     def diagnostics_snapshot(self) -> Any:
         return self.diagnostics.snapshot(self)
@@ -367,6 +389,20 @@ class PandaSceneRenderer:
     def _ensure_live(self) -> None:
         if self._released:
             raise PandaRuntimeUnavailable("PandaSceneRenderer has been released")
+
+
+def _render_result_detail(
+    result: RenderEyesResult,
+    left_image: SwapchainImageRef,
+    right_image: SwapchainImageRef,
+) -> str:
+    return (
+        f"mode={result.bridge_mode};"
+        f"left={int(result.left_rendered)};"
+        f"right={int(result.right_rendered)};"
+        f"left_image={left_image.image_index}:{left_image.width}x{left_image.height};"
+        f"right_image={right_image.image_index}:{right_image.width}x{right_image.height}"
+    )
 
 
 def _animation_state_detail(state: PandaAnimationPlaybackState) -> str:

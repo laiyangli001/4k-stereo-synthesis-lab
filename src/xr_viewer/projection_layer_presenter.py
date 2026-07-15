@@ -111,12 +111,16 @@ class ProjectionLayerPresenter:
                 StereoTargetSpec(left[4], left[5], fmt),
                 StereoTargetSpec(right[4], right[5], fmt),
             )
-            result = renderer.render_eyes(
-                SwapchainImageRef(left[0], left[2], left[3].texture, left[4], left[5], fmt, generation),
-                SwapchainImageRef(right[0], right[2], right[3].texture, right[4], right[5], fmt, generation),
-            )
+            left_image = SwapchainImageRef(left[0], left[2], left[3].texture, left[4], left[5], fmt, generation)
+            right_image = SwapchainImageRef(right[0], right[2], right[3].texture, right[4], right[5], fmt, generation)
+            result = renderer.render_eyes(left_image, right_image)
             if not result.rendered:
                 raise RuntimeError(f"Panda bridge did not render both eyes: {result.bridge_mode}")
+            viewer._panda_render_last_bridge_mode = str(result.bridge_mode)
+            viewer._panda_render_last_target_size = ((left[4], left[5]), (right[4], right[5]))
+            viewer._panda_render_last_image_indices = (left[2], right[2])
+            viewer._panda_render_success_count = int(getattr(viewer, '_panda_render_success_count', 0) or 0) + 1
+            viewer._panda_render_error = ""
 
             eye_layer_views = []
             for eye_index, swapchain, _img_index, _sc_image, sc_w, sc_h, view in acquired:
@@ -135,6 +139,7 @@ class ProjectionLayerPresenter:
                 except Exception:
                     pass
             viewer._breakdown_inc('openxr_projection_panda_failed')
+            viewer._panda_render_failure_count = int(getattr(viewer, '_panda_render_failure_count', 0) or 0) + 1
             viewer._panda_render_error = f"{type(exc).__name__}: {exc}"
             if not getattr(viewer, '_panda_render_error_logged', False):
                 print(f"[OpenXRViewer] Panda3D projection bridge failed, falling back to native: {type(exc).__name__}: {exc}")

@@ -3784,6 +3784,11 @@ def test_panda_projection_bridge_acquires_renders_and_releases_both_eyes(monkeyp
     assert left_image.texture == "tex0"
     assert right_image.texture == "tex1"
     assert left_image.session_generation == 5
+    assert viewer._panda_render_last_bridge_mode == "test"
+    assert viewer._panda_render_last_target_size == ((100, 120), (101, 121))
+    assert viewer._panda_render_last_image_indices == (0, 0)
+    assert viewer._panda_render_success_count == 1
+    assert viewer._panda_render_error == ""
     assert calls == [("openxr_projection_panda_present", 1), "presented"]
 
 
@@ -3830,6 +3835,7 @@ def test_panda_projection_bridge_failure_releases_and_falls_back(monkeypatch):
     assert ("release", "sc1") in events
     assert ("openxr_projection_panda_failed", 1) in calls
     assert "presented" not in calls
+    assert viewer._panda_render_failure_count == 1
     assert "bridge down" in viewer._panda_render_error
     assert viewer._panda_render_error_logged is True
 
