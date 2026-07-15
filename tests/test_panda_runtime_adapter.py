@@ -89,10 +89,16 @@ class _FakeControllerRayTarget:
         self.controller_ray = controller_ray
 
 
+class _FakeAnimationRuntime:
+    channel_count = 38
+    bound_node_count = 19
+
+
 class _FakeAnimationPlayer:
     def __init__(self):
         self.loop = True
         self.times = []
+        self.runtime = _FakeAnimationRuntime()
 
     def set_time_seconds(self, time_seconds):
         self.times.append(float(time_seconds))
@@ -296,6 +302,12 @@ def test_panda_scene_graph_can_own_panda_loaded_environment_root():
     assert scene.frame_state.animation_time_seconds == pytest.approx(7.5)
     assert scene._environment_animation_player.time_seconds == pytest.approx(7.5)
     assert scene.snapshot.frame_index == 22
+    assert scene.snapshot.animation_time_seconds == pytest.approx(7.5)
+    assert scene.snapshot.animation_sample_count == 1
+    assert scene.snapshot.animation_applied_player_count == 1
+    assert scene.snapshot.animation_player_count == 1
+    assert scene.snapshot.animation_channel_count == 38
+    assert scene.snapshot.animation_bound_node_count == 19
     assert scene.snapshot.controller_hands == ("left", "right")
     assert scene.snapshot.screen_pose_present is True
     assert scene.snapshot.screen_texture_present is True
@@ -634,6 +646,12 @@ def test_panda_runtime_diagnostics_snapshot_summarizes_assets_targets_and_bridge
     assert snapshot.frame_controller_count == 2
     assert snapshot.frame_controller_ray_count == 1
     assert snapshot.frame_screen_pose_present is True
+    assert snapshot.scene_animation_time_seconds == pytest.approx(1.5)
+    assert snapshot.scene_animation_sample_count == 0
+    assert snapshot.scene_animation_applied_player_count == 0
+    assert snapshot.scene_animation_player_count == 0
+    assert snapshot.scene_animation_channel_count == 0
+    assert snapshot.scene_animation_bound_node_count == 0
     assert snapshot.scene_controller_hands == ("left", "right")
     assert snapshot.scene_controller_ray_hands == ("left",)
     assert snapshot.scene_applied_controller_ray_hands == ()
@@ -660,6 +678,7 @@ def test_panda_runtime_diagnostics_snapshot_summarizes_assets_targets_and_bridge
     assert snapshot.bridge_resource_keys == ("session=5:eye=0:image=2:size=64x72:format=rgba8",)
     assert '"bridge_resource_count": 1' in snapshot_json
     assert '"frame_animation_time_seconds": 1.5' in snapshot_json
+    assert '"scene_animation_time_seconds": 1.5' in snapshot_json
     assert '"frame_eye_view_count": 2' in snapshot_json
     assert '"scene_controller_hands": [' in snapshot_json
     assert '"scene_assets"' in snapshot_json
@@ -849,18 +868,30 @@ def test_panda_scene_renderer_configures_animation_runtime_controls():
 
     state = renderer.configure_animation(playback_speed=0.5, paused=True, fixed_time_seconds=3.0, loop=False)
     renderer.update_frame_state(PandaFrameState(predicted_display_time=10.0))
+    renderer.update_frame_state(PandaFrameState(predicted_display_time=12.0))
 
     assert state.playback_speed == pytest.approx(0.5)
     assert state.paused is True
     assert state.fixed_time_seconds == pytest.approx(3.0)
     assert state.loop is False
     assert player.loop is False
-    assert player.times == [pytest.approx(3.0)]
+    assert player.times == [pytest.approx(3.0), pytest.approx(3.0)]
+    assert renderer.scene.snapshot.animation_sample_count == 2
+    assert renderer.scene.snapshot.animation_applied_player_count == 1
+    assert renderer.scene.snapshot.animation_player_count == 1
+    assert renderer.scene.snapshot.animation_channel_count == 38
+    assert renderer.scene.snapshot.animation_bound_node_count == 19
     snapshot = renderer.diagnostics_snapshot()
     assert snapshot.animation_playback_speed == pytest.approx(0.5)
     assert snapshot.animation_paused is True
     assert snapshot.animation_fixed_time_seconds == pytest.approx(3.0)
     assert snapshot.animation_loop is False
+    assert snapshot.scene_animation_time_seconds == pytest.approx(3.0)
+    assert snapshot.scene_animation_sample_count == 2
+    assert snapshot.scene_animation_applied_player_count == 1
+    assert snapshot.scene_animation_player_count == 1
+    assert snapshot.scene_animation_channel_count == 38
+    assert snapshot.scene_animation_bound_node_count == 19
     assert "animation_configured" in snapshot.events
 
 

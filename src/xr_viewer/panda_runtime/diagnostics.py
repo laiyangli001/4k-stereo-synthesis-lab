@@ -36,6 +36,12 @@ class PandaRuntimeSnapshot:
     animation_paused: bool
     animation_fixed_time_seconds: float | None
     animation_loop: bool
+    scene_animation_time_seconds: float | None
+    scene_animation_sample_count: int
+    scene_animation_applied_player_count: int
+    scene_animation_player_count: int
+    scene_animation_channel_count: int
+    scene_animation_bound_node_count: int
     scene_controller_hands: tuple[str, ...]
     scene_controller_ray_hands: tuple[str, ...]
     scene_applied_controller_ray_hands: tuple[str, ...]
@@ -104,6 +110,12 @@ class PandaRuntimeDiagnostics:
             animation_paused=_animation_paused(renderer),
             animation_fixed_time_seconds=_animation_fixed_time_seconds(renderer),
             animation_loop=bool(getattr(renderer, "_animation_loop", True)),
+            scene_animation_time_seconds=_scene_optional_float(scene, "animation_time_seconds"),
+            scene_animation_sample_count=_scene_int(scene, "animation_sample_count"),
+            scene_animation_applied_player_count=_scene_int(scene, "animation_applied_player_count"),
+            scene_animation_player_count=_scene_int(scene, "animation_player_count"),
+            scene_animation_channel_count=_scene_int(scene, "animation_channel_count"),
+            scene_animation_bound_node_count=_scene_int(scene, "animation_bound_node_count"),
             scene_controller_hands=_scene_controller_hands(scene),
             scene_controller_ray_hands=_scene_controller_ray_hands(scene),
             scene_applied_controller_ray_hands=_scene_applied_controller_ray_hands(scene),
@@ -191,6 +203,13 @@ def _scene_bool(scene: Any, name: str) -> bool:
 
 def _scene_int(scene: Any, name: str) -> int:
     return int(getattr(_scene_snapshot(scene), name, 0) or 0)
+
+
+def _scene_optional_float(scene: Any, name: str) -> float | None:
+    value = getattr(_scene_snapshot(scene), name, None)
+    if value is None:
+        return None
+    return float(value)
 
 
 def _scene_str(scene: Any, name: str) -> str:

@@ -23,6 +23,12 @@ class PandaAssetRef:
 @dataclass(frozen=True)
 class PandaSceneSnapshot:
     frame_index: int | None = None
+    animation_time_seconds: float | None = None
+    animation_sample_count: int = 0
+    animation_applied_player_count: int = 0
+    animation_player_count: int = 0
+    animation_channel_count: int = 0
+    animation_bound_node_count: int = 0
     controller_hands: tuple[str, ...] = ()
     controller_ray_hands: tuple[str, ...] = ()
     applied_controller_ray_hands: tuple[str, ...] = ()
@@ -56,6 +62,8 @@ class PandaSceneGraph:
     _environment_animation_player: Any | None = field(default=None, init=False, repr=False)
     _controller_animation_players: dict[str, Any] = field(default_factory=dict, init=False, repr=False)
     _animation_loop: bool = field(default=True, init=False, repr=False)
+    _animation_sample_count: int = field(default=0, init=False, repr=False)
+    _last_animation_time_seconds: float | None = field(default=None, init=False, repr=False)
     _last_render_base: Any | None = field(default=None, init=False, repr=False)
 
     def load_environment(self, asset_path: str) -> None:
@@ -90,16 +98,24 @@ class PandaSceneGraph:
         applied_controller_ray_hands = self._apply_controller_rays(frame_state)
         screen_pose_applied = self._apply_screen_pose(frame_state)
         screen_texture_applied = self._apply_screen_texture(frame_state)
+        animation_time = getattr(frame_state, "animation_time_seconds", None)
+        animation_time_seconds = None if animation_time is None else float(animation_time)
+        animation_applied_player_count = 0
+        if animation_time_seconds is not None:
+            animation_applied_player_count = self._apply_animation_time(animation_time_seconds)
         self.snapshot = _snapshot_from_frame_state(
             frame_state,
             applied_controller_hands,
             applied_controller_ray_hands,
             screen_pose_applied,
             screen_texture_applied,
+            animation_time_seconds=animation_time_seconds,
+            animation_applied_player_count=animation_applied_player_count,
+            animation_player_count=self._animation_player_count(),
+            animation_channel_count=self._animation_channel_count(),
+            animation_bound_node_count=self._animation_bound_node_count(),
+            animation_sample_count=self._animation_sample_count,
         )
-        animation_time = getattr(frame_state, "animation_time_seconds", None)
-        if animation_time is not None:
-            self._apply_animation_time(float(animation_time))
 
     def loaded_assets(self) -> tuple[PandaAssetRef, ...]:
         assets = []
@@ -179,16 +195,38 @@ class PandaSceneGraph:
         self._environment_animation_player = None
         self._controller_animation_players.clear()
         self._animation_loop = True
+        self._animation_sample_count = 0
+        self._last_animation_time_seconds = None
         self._last_render_base = None
         self.frame_state = None
         self.snapshot = PandaSceneSnapshot()
         self.released = True
 
-    def _apply_animation_time(self, time_seconds: float) -> None:
-        if self._environment_animation_player is not None:
-            self._environment_animation_player.set_time_seconds(time_seconds)
-        for player in self._controller_animation_players.values():
+    def _apply_animation_time(self, time_seconds: float) -> int:
+        applied = 0
+        for player in self._animation_players():
             player.set_time_seconds(time_seconds)
+            applied += 1
+        self._last_animation_time_seconds = time_seconds
+        if applied > 0:
+            self._animation_sample_count += 1
+        return applied
+
+    def _animation_players(self) -> tuple[Any, ...]:
+        players: list[Any] = []
+        if self._environment_animation_player is not None:
+            players.append(self._environment_animation_player)
+        players.extend(self._controller_animation_players[key] for key in sorted(self._controller_animation_players))
+        return tuple(players)
+
+    def _animation_player_count(self) -> int:
+        return len(self._animation_players())
+
+    def _animation_channel_count(self) -> int:
+        return sum(_animation_runtime_int(player, "channel_count") for player in self._animation_players())
+
+    def _animation_bound_node_count(self) -> int:
+        return sum(_animation_runtime_int(player, "bound_node_count") for player in self._animation_players())
 
     def _apply_controller_poses(self, frame_state: Any) -> tuple[str, ...]:
         controller_poses = getattr(frame_state, "controller_poses", {}) or {}
@@ -285,6 +323,13 @@ def _snapshot_from_frame_state(
     applied_controller_ray_hands: tuple[str, ...] = (),
     screen_pose_applied: bool = False,
     screen_texture_applied: bool = False,
+    *,
+    animation_time_seconds: float | None = None,
+    animation_applied_player_count: int = 0,
+    animation_player_count: int = 0,
+    animation_channel_count: int = 0,
+    animation_bound_node_count: int = 0,
+    animation_sample_count: int = 0,
 ) -> PandaSceneSnapshot:
     eye_views = getattr(frame_state, "eye_views", ()) or ()
     controller_poses = getattr(frame_state, "controller_poses", {}) or {}
@@ -292,6 +337,12 @@ def _snapshot_from_frame_state(
     screen_texture = getattr(frame_state, "screen_texture", None)
     return PandaSceneSnapshot(
         frame_index=getattr(frame_state, "frame_index", None),
+        animation_time_seconds=animation_time_seconds,
+        animation_sample_count=int(animation_sample_count),
+        animation_applied_player_count=int(animation_applied_player_count),
+        animation_player_count=int(animation_player_count),
+        animation_channel_count=int(animation_channel_count),
+        animation_bound_node_count=int(animation_bound_node_count),
         controller_hands=tuple(sorted(str(hand) for hand in controller_poses)),
         controller_ray_hands=tuple(sorted(str(hand) for hand in controller_rays)),
         applied_controller_ray_hands=applied_controller_ray_hands,
@@ -313,6 +364,11 @@ def _snapshot_from_frame_state(
 def _set_animation_player_loop(player: Any | None, loop: bool) -> None:
     if player is not None and hasattr(player, "loop"):
         player.loop = bool(loop)
+
+
+def _animation_runtime_int(player: Any, name: str) -> int:
+    runtime = getattr(player, "runtime", None)
+    return int(getattr(runtime, name, 0) or 0)
 
 
 def _iter_scene_roots(
