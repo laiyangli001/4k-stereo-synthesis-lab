@@ -84,6 +84,15 @@ class _FakeControllerRayTarget:
         self.controller_ray = controller_ray
 
 
+class _FakeAnimationPlayer:
+    def __init__(self):
+        self.loop = True
+        self.times = []
+
+    def set_time_seconds(self, time_seconds):
+        self.times.append(float(time_seconds))
+
+
 def test_gltf_renderer_selector_defaults_to_native():
     config = resolve_gltf_renderer_mode({})
 
@@ -552,6 +561,47 @@ def test_panda_animation_clock_uses_xr_predicted_display_time_monotonically():
     clock.reset()
     assert clock.origin_predicted_display_time is None
     assert clock.sample(10.0) == pytest.approx(0.0)
+
+
+def test_panda_animation_clock_supports_runtime_controls():
+    clock = PandaAnimationClock()
+
+    assert clock.sample(100.0) == pytest.approx(0.0)
+    assert clock.configure(playback_speed=2.0).playback_speed == pytest.approx(2.0)
+    assert clock.sample(100.5) == pytest.approx(1.0)
+    assert clock.configure(paused=True).paused is True
+    assert clock.sample(101.5) == pytest.approx(1.0)
+    assert clock.configure(paused=False, fixed_time_seconds=7.5).fixed_time_seconds == pytest.approx(7.5)
+    assert clock.sample(110.0) == pytest.approx(7.5)
+    assert clock.configure(fixed_time_seconds=None).fixed_time_seconds is None
+    assert clock.sample(111.0) == pytest.approx(9.5)
+
+    with pytest.raises(PandaRuntimeUnavailable, match="playback_speed"):
+        clock.configure(playback_speed=-1.0)
+    with pytest.raises(PandaRuntimeUnavailable, match="fixed_time_seconds"):
+        clock.configure(fixed_time_seconds=float("nan"))
+
+
+def test_panda_scene_renderer_configures_animation_runtime_controls():
+    renderer = PandaSceneRenderer()
+    player = _FakeAnimationPlayer()
+    renderer.scene._environment_animation_player = player
+
+    state = renderer.configure_animation(playback_speed=0.5, paused=True, fixed_time_seconds=3.0, loop=False)
+    renderer.update_frame_state(PandaFrameState(predicted_display_time=10.0))
+
+    assert state.playback_speed == pytest.approx(0.5)
+    assert state.paused is True
+    assert state.fixed_time_seconds == pytest.approx(3.0)
+    assert state.loop is False
+    assert player.loop is False
+    assert player.times == [pytest.approx(3.0)]
+    snapshot = renderer.diagnostics_snapshot()
+    assert snapshot.animation_playback_speed == pytest.approx(0.5)
+    assert snapshot.animation_paused is True
+    assert snapshot.animation_fixed_time_seconds == pytest.approx(3.0)
+    assert snapshot.animation_loop is False
+    assert "animation_configured" in snapshot.events
 
 
 def test_panda_scene_renderer_facade_contract():

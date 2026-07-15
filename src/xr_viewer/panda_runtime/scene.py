@@ -55,6 +55,7 @@ class PandaSceneGraph:
     _screen_texture_target: Any | None = field(default=None, init=False, repr=False)
     _environment_animation_player: Any | None = field(default=None, init=False, repr=False)
     _controller_animation_players: dict[str, Any] = field(default_factory=dict, init=False, repr=False)
+    _animation_loop: bool = field(default=True, init=False, repr=False)
 
     def load_environment(self, asset_path: str) -> None:
         self._ensure_live()
@@ -62,6 +63,7 @@ class PandaSceneGraph:
         self.environment = asset
         self._environment_root = root
         self._environment_animation_player = animation_player
+        _set_animation_player_loop(animation_player, self._animation_loop)
 
     def load_controller(self, hand: str, asset_path: str) -> None:
         self._ensure_live()
@@ -75,6 +77,7 @@ class PandaSceneGraph:
         else:
             self._controller_roots.pop(key, None)
         if animation_player is not None:
+            _set_animation_player_loop(animation_player, self._animation_loop)
             self._controller_animation_players[key] = animation_player
         else:
             self._controller_animation_players.pop(key, None)
@@ -122,6 +125,13 @@ class PandaSceneGraph:
         self._ensure_live()
         self._screen_texture_target = target
 
+    def set_animation_looping(self, loop: bool) -> None:
+        self._ensure_live()
+        self._animation_loop = bool(loop)
+        _set_animation_player_loop(self._environment_animation_player, self._animation_loop)
+        for player in self._controller_animation_players.values():
+            _set_animation_player_loop(player, self._animation_loop)
+
     def release(self) -> None:
         self.environment = None
         self.controllers.clear()
@@ -132,6 +142,7 @@ class PandaSceneGraph:
         self._screen_texture_target = None
         self._environment_animation_player = None
         self._controller_animation_players.clear()
+        self._animation_loop = True
         self.frame_state = None
         self.snapshot = PandaSceneSnapshot()
         self.released = True
@@ -244,6 +255,11 @@ def _snapshot_from_frame_state(
         applied_controller_hands=applied_controller_hands,
         screen_pose_applied=screen_pose_applied,
     )
+
+
+def _set_animation_player_loop(player: Any | None, loop: bool) -> None:
+    if player is not None and hasattr(player, "loop"):
+        player.loop = bool(loop)
 
 
 def _apply_controller_ray_to_target(target: Any, ray: Any) -> bool:

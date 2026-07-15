@@ -32,6 +32,10 @@ class PandaRuntimeSnapshot:
     frame_controller_count: int
     frame_controller_ray_count: int
     frame_screen_pose_present: bool
+    animation_playback_speed: float
+    animation_paused: bool
+    animation_fixed_time_seconds: float | None
+    animation_loop: bool
     scene_controller_hands: tuple[str, ...]
     scene_controller_ray_hands: tuple[str, ...]
     scene_applied_controller_ray_hands: tuple[str, ...]
@@ -96,6 +100,10 @@ class PandaRuntimeDiagnostics:
             frame_controller_count=len(getattr(frame_state, "controller_poses", {}) or {}),
             frame_controller_ray_count=len(getattr(frame_state, "controller_rays", {}) or {}),
             frame_screen_pose_present=getattr(frame_state, "screen_pose", None) is not None,
+            animation_playback_speed=_animation_playback_speed(renderer),
+            animation_paused=_animation_paused(renderer),
+            animation_fixed_time_seconds=_animation_fixed_time_seconds(renderer),
+            animation_loop=bool(getattr(renderer, "_animation_loop", True)),
             scene_controller_hands=_scene_controller_hands(scene),
             scene_controller_ray_hands=_scene_controller_ray_hands(scene),
             scene_applied_controller_ray_hands=_scene_applied_controller_ray_hands(scene),
@@ -139,6 +147,26 @@ def _eye_view_count(frame_state: Any) -> int:
 
 def _scene_snapshot(scene: Any) -> Any:
     return getattr(scene, "snapshot", None)
+
+
+def _animation_playback_state(renderer: Any) -> Any:
+    clock = getattr(renderer, "animation_clock", None)
+    return getattr(clock, "playback_state", None)
+
+
+def _animation_playback_speed(renderer: Any) -> float:
+    return float(getattr(_animation_playback_state(renderer), "playback_speed", 1.0) or 0.0)
+
+
+def _animation_paused(renderer: Any) -> bool:
+    return bool(getattr(_animation_playback_state(renderer), "paused", False))
+
+
+def _animation_fixed_time_seconds(renderer: Any) -> float | None:
+    fixed = getattr(_animation_playback_state(renderer), "fixed_time_seconds", None)
+    if fixed is None:
+        return None
+    return float(fixed)
 
 
 def _scene_controller_hands(scene: Any) -> tuple[str, ...]:

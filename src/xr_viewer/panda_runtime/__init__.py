@@ -12,6 +12,7 @@ from .frame_source import PandaFrameSourceError, PandaFrameSourceInput, build_pa
 from .runtime import (
     GLTF_RENDERER_ENV_VAR,
     PandaAnimationClock,
+    PandaAnimationPlaybackState,
     PandaControllerRay,
     PandaEyeView,
     PandaFrameState,
@@ -27,6 +28,7 @@ from .screen_texture import PandaScreenTextureUploadError, PandaScreenTextureUpl
 __all__ = [
     "GLTF_RENDERER_ENV_VAR",
     "PandaAnimationClock",
+    "PandaAnimationPlaybackState",
     "PandaBridgeUnavailable",
     "PandaControllerRay",
     "PandaControllerRayGeometryError",

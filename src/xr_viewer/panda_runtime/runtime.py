@@ -131,12 +131,26 @@ def validate_frame_state(frame_state: PandaFrameState) -> None:
             )
 
 
+@dataclass(frozen=True)
+class PandaAnimationPlaybackState:
+    """Runtime controls for glTF node animation sampling."""
+
+    playback_speed: float = 1.0
+    paused: bool = False
+    fixed_time_seconds: float | None = None
+    loop: bool = True
+
+
 class PandaAnimationClock:
-    """Derive a monotonic glTF animation clock from XR predicted display time."""
+    """Derive a controlled glTF animation clock from XR predicted display time."""
 
     def __init__(self) -> None:
         self._origin_predicted_display_time: float | None = None
+        self._last_predicted_display_time: float | None = None
         self._last_animation_time_seconds = 0.0
+        self._playback_speed = 1.0
+        self._paused = False
+        self._fixed_time_seconds: float | None = None
 
     @property
     def origin_predicted_display_time(self) -> float | None:
@@ -146,17 +160,59 @@ class PandaAnimationClock:
     def last_animation_time_seconds(self) -> float:
         return self._last_animation_time_seconds
 
+    @property
+    def playback_state(self) -> PandaAnimationPlaybackState:
+        return PandaAnimationPlaybackState(
+            playback_speed=self._playback_speed,
+            paused=self._paused,
+            fixed_time_seconds=self._fixed_time_seconds,
+        )
+
+    def configure(
+        self,
+        *,
+        playback_speed: float | None = None,
+        paused: bool | None = None,
+        fixed_time_seconds: float | None | object = ...,
+    ) -> PandaAnimationPlaybackState:
+        if playback_speed is not None:
+            speed = float(playback_speed)
+            if not math.isfinite(speed) or speed < 0.0:
+                raise PandaRuntimeUnavailable("animation playback_speed must be finite and non-negative")
+            self._playback_speed = speed
+        if paused is not None:
+            self._paused = bool(paused)
+        if fixed_time_seconds is not ...:
+            if fixed_time_seconds is None:
+                self._fixed_time_seconds = None
+            else:
+                fixed = float(fixed_time_seconds)
+                if not math.isfinite(fixed) or fixed < 0.0:
+                    raise PandaRuntimeUnavailable("animation fixed_time_seconds must be finite and non-negative")
+                self._fixed_time_seconds = fixed
+                self._last_animation_time_seconds = fixed
+        return self.playback_state
+
     def sample(self, predicted_display_time: float) -> float:
         predicted = float(predicted_display_time)
+        if not math.isfinite(predicted):
+            raise PandaRuntimeUnavailable("predicted_display_time must be finite")
+        if self._fixed_time_seconds is not None:
+            self._last_predicted_display_time = predicted
+            return self._fixed_time_seconds
         if self._origin_predicted_display_time is None:
             self._origin_predicted_display_time = predicted
+            self._last_predicted_display_time = predicted
             self._last_animation_time_seconds = 0.0
             return 0.0
-        elapsed = max(0.0, predicted - self._origin_predicted_display_time)
-        if elapsed < self._last_animation_time_seconds:
-            elapsed = self._last_animation_time_seconds
-        self._last_animation_time_seconds = elapsed
-        return elapsed
+        if self._last_predicted_display_time is None:
+            self._last_predicted_display_time = predicted
+        delta_seconds = max(0.0, predicted - self._last_predicted_display_time)
+        if predicted > self._last_predicted_display_time:
+            self._last_predicted_display_time = predicted
+        if not self._paused:
+            self._last_animation_time_seconds += delta_seconds * self._playback_speed
+        return self._last_animation_time_seconds
 
     def bind(self, frame_state: PandaFrameState) -> PandaFrameState:
         return replace(
@@ -166,7 +222,9 @@ class PandaAnimationClock:
 
     def reset(self) -> None:
         self._origin_predicted_display_time = None
+        self._last_predicted_display_time = None
         self._last_animation_time_seconds = 0.0
+        self._fixed_time_seconds = None
 
 
 def resolve_gltf_renderer_mode(
@@ -220,6 +278,7 @@ class PandaSceneRenderer:
         self.bridge = bridge or PandaBridge()
         self.diagnostics = diagnostics or PandaRuntimeDiagnostics()
         self.animation_clock = PandaAnimationClock()
+        self._animation_loop = True
         self._released = False
         self._last_frame_state: PandaFrameState | None = None
 
@@ -236,6 +295,27 @@ class PandaSceneRenderer:
         self._ensure_live()
         self.scene.load_controller(hand, asset_path)
         self.diagnostics.record_event(f"controller_{hand}_loaded", asset_path)
+
+    def configure_animation(
+        self,
+        *,
+        playback_speed: float | None = None,
+        paused: bool | None = None,
+        fixed_time_seconds: float | None | object = ...,
+        loop: bool | None = None,
+    ) -> PandaAnimationPlaybackState:
+        self._ensure_live()
+        state = self.animation_clock.configure(
+            playback_speed=playback_speed,
+            paused=paused,
+            fixed_time_seconds=fixed_time_seconds,
+        )
+        if loop is not None:
+            self._animation_loop = bool(loop)
+            self.scene.set_animation_looping(self._animation_loop)
+        state = replace(state, loop=self._animation_loop)
+        self.diagnostics.record_event("animation_configured", _animation_state_detail(state))
+        return state
 
     def update_frame_state(self, frame_state: PandaFrameState) -> None:
         self._ensure_live()
@@ -280,12 +360,23 @@ class PandaSceneRenderer:
         self.targets.release()
         self.scene.release()
         self.animation_clock.reset()
+        self._animation_loop = True
         self._released = True
         self.diagnostics.record_event("released", "PandaSceneRenderer")
 
     def _ensure_live(self) -> None:
         if self._released:
             raise PandaRuntimeUnavailable("PandaSceneRenderer has been released")
+
+
+def _animation_state_detail(state: PandaAnimationPlaybackState) -> str:
+    fixed = "none" if state.fixed_time_seconds is None else f"{state.fixed_time_seconds:.6f}"
+    return (
+        f"speed={state.playback_speed:.6f};"
+        f"paused={int(state.paused)};"
+        f"fixed={fixed};"
+        f"loop={int(state.loop)}"
+    )
 
 
 def log_renderer_selection(config: PandaRuntimeConfig, logger: _Logger = print) -> None:
