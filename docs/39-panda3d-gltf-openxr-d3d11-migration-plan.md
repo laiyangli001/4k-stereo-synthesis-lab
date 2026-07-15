@@ -134,12 +134,12 @@ CUDA bridge 的 POC 需逐项证明：同 adapter、RGBA 格式、行方向、MS
 
 ### Phase 0：可行性闸门
 
-当前状态（2026-07-15）：已新增 `src/tools/panda3d_gltf_probe.py`、`src/tools/panda3d_offscreen_probe.py`、`xr_viewer.panda3d_probe`、`xr_viewer.panda3d_node_animation` 和 `xr_viewer.panda3d_offscreen_probe`。本机使用 Panda3D 1.10.15、panda3d-gltf 1.3.0 检查当前 Artemis `environment.glb`，发现 GLB 本身有 **19** 个 animation、**38** 条 channel、**19** 个 animation target node，且这 **19** 个 target 全部属于 active scene。`panda3d-gltf` 原生载入结果仍为 **0** 个 `Character`、**0** 个 `AnimBundleNode`，但自定义 glTF node animation runtime 已能绑定 **19/19** 个 target node、采样 **38** 条 channel，并确认动画时长为 **15.0 秒**；`--strict-animation` 返回退出码 0。Panda OpenGL offscreen 子闸门也已通过：`pandagl` 创建 64×64 render target，实际驱动为 **NVIDIA GeForce RTX 2060/PCIe/SSE2**，OpenGL **4.6.0 NVIDIA 596.36**，framebuffer 为 RGBA8 + depth24。Phase 0 仍需继续验证 OpenGL→D3D11 互操作。
+当前状态（2026-07-15）：已新增 `src/tools/panda3d_gltf_probe.py`、`src/tools/panda3d_offscreen_probe.py`、`src/tools/panda3d_d3d11_interop_probe.py`、`xr_viewer.panda3d_probe`、`xr_viewer.panda3d_node_animation`、`xr_viewer.panda3d_offscreen_probe` 和 `xr_viewer.panda3d_d3d11_interop_probe`。本机使用 Panda3D 1.10.15、panda3d-gltf 1.3.0 检查当前 Artemis `environment.glb`，发现 GLB 本身有 **19** 个 animation、**38** 条 channel、**19** 个 animation target node，且这 **19** 个 target 全部属于 active scene。`panda3d-gltf` 原生载入结果仍为 **0** 个 `Character`、**0** 个 `AnimBundleNode`，但自定义 glTF node animation runtime 已能绑定 **19/19** 个 target node、采样 **38** 条 channel，并确认动画时长为 **15.0 秒**；`--strict-animation` 返回退出码 0。Panda OpenGL offscreen 子闸门也已通过：`pandagl` 创建 64×64 render target，实际驱动为 **NVIDIA GeForce RTX 2060/PCIe/SSE2**，OpenGL **4.6.0 NVIDIA 596.36**，framebuffer 为 RGBA8 + depth24。Panda GL context 下的 D3D11/NV_DX readiness 已通过：D3D11 feature level **0xb000**，`WGL_NV_DX_interop2` 函数可加载，`wglDXOpenDeviceNV` 可打开并关闭 D3D11 device。Phase 0 仍需继续验证真实 OpenXR swapchain texture 注册、lock、FBO complete 和 acquire-render-release。
 
 - 安装锁定版本的 `panda3d` 与 `panda3d-gltf`，记录 Python ABI、GPU driver、Panda 版本和插件版本。
 - 运行 `src/tools/panda3d_gltf_probe.py`：加载 Artemis/控制器并验证 glTF animation target 是否属于 active scene，以及 Panda runtime node 是否可驱动这些动画；Artemis 已由自定义 node animation runtime 通过，控制器和后续资产仍需按同一探针补验。
-- 记录 Panda OpenGL vendor/renderer、Panda texture native handle 的可获取性、实际 offscreen texture format、同 adapter CUDA/D3D11 枚举结果；当前已记录 vendor/renderer/version 与 RGBA8/depth24 offscreen RT，native handle 与 adapter 枚举仍待验证。
-- 使用现有 D3D11 OpenXR session 做 NV_DX interop POC；只画测试色块和一个三角形，先不加载真实 GLB。
+- 记录 Panda OpenGL vendor/renderer、Panda texture native handle 的可获取性、实际 offscreen texture format、同 adapter CUDA/D3D11 枚举结果；当前已记录 vendor/renderer/version、RGBA8/depth24 offscreen RT、D3D11 feature level 和 NV_DX device open/close，native handle 与 adapter 枚举仍待验证。
+- 使用现有 D3D11 OpenXR session 做 NV_DX interop POC；当前只验证到 D3D11 device open/close，下一步需注册真实 swapchain texture，只画测试色块和一个三角形，先不加载真实 GLB。
 
 闸门：任何一个 asset 的加载/动画/透明正确性失败，或 GL→D3D11 不能完成单帧 acquire-render-release，则保留当前 renderer，先修 POC，不开始替换。
 
