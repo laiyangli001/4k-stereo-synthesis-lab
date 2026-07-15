@@ -297,7 +297,7 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
         self._runtime_eye_pbo_size = None
         self._runtime_eye_pbo_nbytes = 0
         self._openxr_perf_log = str(
-            kwargs.get('openxr_perf_log', os.environ.get('D2S_OPENXR_PERF_LOG', '0')) or '0'
+            kwargs.get('openxr_perf_log', os.environ.get('D2S_OPENXR_PERF_LOG', '1')) or '1'
         ).strip().lower() in ('1', 'true', 'yes', 'on')
 
         self._screen_grab_local_l = None

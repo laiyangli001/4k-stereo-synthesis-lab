@@ -491,6 +491,7 @@ def test_openxr_backend_defaults_to_opengl():
     implementation = (SRC / "xr_viewer" / "implementation.py").read_text(encoding="utf-8")
 
     assert "os.environ.get('D2S_OPENXR_BACKEND', 'opengl')" in implementation
+    assert "os.environ.get('D2S_OPENXR_PERF_LOG', '1')" in implementation
     assert "os.environ.get('D2S_OPENXR_CONTROLLER_RENDERER', 'opengl')" in implementation
     assert "Controller renderer override: opengl (forcing OpenXR backend: opengl)" in implementation
     assert "forced_backend = 'opengl'" in implementation
