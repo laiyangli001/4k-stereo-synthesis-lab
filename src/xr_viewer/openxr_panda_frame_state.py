@@ -9,6 +9,7 @@ from .panda_runtime.frame_source import (
     build_panda_frame_state,
     controller_ray_from_vectors,
 )
+from .panda_runtime.scene_bindings import sync_panda_scene_assets_from_viewer
 
 
 def update_panda_frame_state_from_viewer(
@@ -44,6 +45,7 @@ def update_panda_frame_state_from_viewer(
     renderer = getattr(viewer, "_panda_scene_renderer", None)
     if renderer is not None:
         try:
+            sync_panda_scene_assets_from_viewer(viewer)
             renderer.update_frame_state(frame_state)
         except Exception as exc:
             viewer._panda_frame_state_error = f"{type(exc).__name__}: {exc}"

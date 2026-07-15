@@ -4044,6 +4044,14 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
 
         self._cleanup_interop()
 
+        panda_renderer = getattr(self, '_panda_scene_renderer', None)
+        if panda_renderer is not None:
+            try:
+                panda_renderer.release()
+            except Exception:
+                pass
+            self._panda_scene_renderer = None
+
         for _, mgl_fbo in self._fbo_cache.values():
             try:
                 mgl_fbo.release()

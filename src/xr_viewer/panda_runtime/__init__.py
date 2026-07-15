@@ -23,6 +23,7 @@ from .runtime import (
     PandaScreenTextureFrame,
     resolve_gltf_renderer_mode,
 )
+from .scene_bindings import PandaSceneBindingResult, sync_panda_scene_assets_from_viewer
 from .screen_texture import PandaScreenTextureUploadError, PandaScreenTextureUploadTarget
 
 __all__ = [
@@ -40,6 +41,7 @@ __all__ = [
     "PandaPose",
     "PandaRuntimeConfig",
     "PandaRuntimeSnapshot",
+    "PandaSceneBindingResult",
     "PandaRuntimeUnavailable",
     "PandaSceneRenderer",
     "PandaScreenTextureFrame",
@@ -48,4 +50,5 @@ __all__ = [
     "SwapchainResourceKey",
     "build_panda_frame_state",
     "resolve_gltf_renderer_mode",
+    "sync_panda_scene_assets_from_viewer",
 ]

@@ -19,6 +19,7 @@ from xr_viewer.panda_runtime.frame_source import (
     controller_ray_from_vectors,
     mat4_to_panda_pose,
 )
+from xr_viewer.panda_runtime.scene_bindings import sync_panda_scene_assets_from_viewer
 from xr_viewer.panda_runtime.runtime import (
     GLTF_RENDERER_ENV_VAR,
     PandaAnimationClock,
@@ -91,6 +92,24 @@ class _FakeAnimationPlayer:
 
     def set_time_seconds(self, time_seconds):
         self.times.append(float(time_seconds))
+
+
+class _FakePandaSceneForBindings:
+    def __init__(self):
+        self.load_panda_assets = False
+
+
+class _FakePandaRendererForBindings:
+    def __init__(self):
+        self.scene = _FakePandaSceneForBindings()
+        self.environments = []
+        self.controllers = []
+
+    def load_environment(self, path):
+        self.environments.append(path)
+
+    def load_controller(self, hand, path):
+        self.controllers.append((hand, path))
 
 
 def test_gltf_renderer_selector_defaults_to_native():
@@ -602,6 +621,35 @@ def test_panda_scene_renderer_configures_animation_runtime_controls():
     assert snapshot.animation_fixed_time_seconds == pytest.approx(3.0)
     assert snapshot.animation_loop is False
     assert "animation_configured" in snapshot.events
+
+
+def test_panda_scene_binding_loads_active_environment_and_controllers(tmp_path):
+    env_path = tmp_path / "environment.glb"
+    env_path.write_bytes(b"glb")
+    controllers = tmp_path / "controllers" / "pico"
+    controllers.mkdir(parents=True)
+    left = controllers / "left.glb"
+    right = controllers / "right.glb"
+    left.write_bytes(b"left")
+    right.write_bytes(b"right")
+    renderer = _FakePandaRendererForBindings()
+    viewer = type("Viewer", (), {})()
+    viewer._panda_scene_renderer = renderer
+    viewer._gltf_renderer_config = type("Config", (), {"panda3d_requested": True})()
+    viewer._env_model_path = str(env_path)
+    viewer._controllers_root = str(tmp_path / "controllers")
+    viewer._current_brand = "pico"
+    viewer._controller_model = "fallback"
+
+    result = sync_panda_scene_assets_from_viewer(viewer)
+    second = sync_panda_scene_assets_from_viewer(viewer)
+
+    assert result is second
+    assert result.loaded is True
+    assert renderer.scene.load_panda_assets is True
+    assert renderer.environments == [str(env_path)]
+    assert renderer.controllers == [("left", str(left)), ("right", str(right))]
+    assert viewer._panda_scene_binding_error == ""
 
 
 def test_panda_scene_renderer_facade_contract():
