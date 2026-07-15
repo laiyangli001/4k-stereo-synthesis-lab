@@ -2,6 +2,8 @@ from pathlib import Path
 
 import pytest
 
+from pygltflib import GLTF2
+
 from xr_viewer.panda3d_node_animation import GltfNodeAnimationRuntime
 from xr_viewer.panda3d_probe import (
     _runtime_status,
@@ -14,6 +16,44 @@ from xr_viewer.panda3d_probe import (
 ROOT = Path(__file__).resolve().parents[1]
 ARTEMIS = ROOT / "src" / "xr_viewer" / "environments" / "Artemis" / "environment.glb"
 CONTROLLER_ASSETS = tuple(sorted((ROOT / "src" / "xr_viewer" / "controllers").glob("*/*.glb")))
+XR_GLB_ASSETS = tuple(sorted((ROOT / "src" / "xr_viewer").glob("**/*.glb")))
+
+
+def _invalid_node_refs(asset: Path):
+    gltf = GLTF2().load(str(asset))
+    node_count = len(gltf.nodes or [])
+    invalid = []
+    for scene_index, scene in enumerate(gltf.scenes or []):
+        for node in scene.nodes or []:
+            if node < 0 or node >= node_count:
+                invalid.append(("scene", scene_index, node))
+    for node_index, node in enumerate(gltf.nodes or []):
+        for child in node.children or []:
+            if child < 0 or child >= node_count:
+                invalid.append(("child", node_index, child))
+    for skin_index, skin in enumerate(gltf.skins or []):
+        if skin.skeleton is not None and (skin.skeleton < 0 or skin.skeleton >= node_count):
+            invalid.append(("skin_skeleton", skin_index, skin.skeleton))
+        for joint in skin.joints or []:
+            if joint < 0 or joint >= node_count:
+                invalid.append(("skin_joint", skin_index, joint))
+    for animation_index, animation in enumerate(gltf.animations or []):
+        for channel_index, channel in enumerate(animation.channels or []):
+            target = channel.target
+            if target and target.node is not None and (target.node < 0 or target.node >= node_count):
+                invalid.append(("animation_target", animation_index, channel_index, target.node))
+    return invalid
+
+
+def test_xr_glb_assets_do_not_reference_missing_nodes():
+    assert XR_GLB_ASSETS
+    failures = {}
+    for asset in XR_GLB_ASSETS:
+        invalid = _invalid_node_refs(asset)
+        if invalid:
+            failures[asset.relative_to(ROOT).as_posix()] = invalid
+
+    assert failures == {}
 
 
 def test_panda_probe_marks_animated_asset_without_runtime_nodes_as_blocked():
