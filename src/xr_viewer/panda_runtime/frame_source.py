@@ -20,6 +20,7 @@ class PandaFrameSourceInput:
     predicted_display_time: float
     frame_index: int | None = None
     eye_pose_mats: tuple[Any | None, Any | None] = (None, None)
+    eye_fovs: tuple[Any | None, Any | None] = (None, None)
     controller_pose_mats: Mapping[str, Any] = field(default_factory=dict)
     controller_rays: Mapping[str, PandaControllerRay] = field(default_factory=dict)
     screen_pose_mat: Any | None = None
@@ -29,7 +30,11 @@ class PandaFrameSourceInput:
 def build_panda_frame_state(source: PandaFrameSourceInput) -> PandaFrameState:
     """Convert one existing OpenXR frame snapshot into Panda runtime contracts."""
     eye_views = tuple(
-        PandaEyeView(index, pose=mat4_to_panda_pose(pose_mat) if pose_mat is not None else None)
+        PandaEyeView(
+            index,
+            pose=mat4_to_panda_pose(pose_mat) if pose_mat is not None else None,
+            fov=source.eye_fovs[index] if index < len(source.eye_fovs) else None,
+        )
         for index, pose_mat in enumerate(source.eye_pose_mats)
     )
     if len(eye_views) != 2:

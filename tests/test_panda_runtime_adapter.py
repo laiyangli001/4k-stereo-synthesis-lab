@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from xr_viewer.openxr_panda_frame_state import _eye_fovs
 from xr_viewer.panda_runtime import scene as panda_scene_module
 from xr_viewer.panda_runtime.bridge import (
     PandaBridge,
@@ -171,6 +172,32 @@ class _FakeReparentableRoot:
 class _FakeModernGlFramebuffer:
     def __init__(self, glo):
         self.glo = glo
+
+
+class _FakeLens:
+    def __init__(self):
+        self.fov = None
+
+    def set_fov(self, horizontal, vertical):
+        self.fov = (horizontal, vertical)
+
+
+class _FakeCameraNode:
+    def __init__(self, lens):
+        self._lens = lens
+
+    def get_lens(self):
+        return self._lens
+
+
+class _FakeEyeCamera(_FakePoseRoot):
+    def __init__(self):
+        super().__init__()
+        self.lens = _FakeLens()
+        self._node = _FakeCameraNode(self.lens)
+
+    def node(self):
+        return self._node
 
 
 def test_gltf_renderer_selector_defaults_to_native():
@@ -390,6 +417,8 @@ def test_stereo_targets_can_create_panda_offscreen_targets():
     assert right.texture_native_id_available
     assert left.buffer_name == "d2s-panda-eye-0"
     assert right.buffer_name == "d2s-panda-eye-1"
+    assert len(targets._panda_cameras) == 2
+    assert len(targets._panda_display_regions) == 2
 
     targets.release()
     assert targets.released
@@ -420,6 +449,11 @@ def test_panda_scene_graph_renders_panda_targets_then_blits_to_framebuffers(monk
         "_blit_panda_texture_to_framebuffer",
         lambda texture, framebuffer, width, height: blits.append((texture, framebuffer.glo, width, height)),
     )
+    monkeypatch.setattr(
+        panda_scene_module,
+        "_apply_pose_to_node_path",
+        lambda node, pose: setattr(node, "pos_quat", (pose.position, pose.orientation)) or True,
+    )
     scene = PandaSceneGraph()
     environment_root = _FakeReparentableRoot()
     controller_root = _FakeReparentableRoot()
@@ -434,12 +468,28 @@ def test_panda_scene_graph_renders_panda_targets_then_blits_to_framebuffers(monk
     targets.right = StereoTargetSpec(101, 121, "rgba8")
     targets._panda_base = _FakePandaBase()
     targets._panda_textures = ["left-texture", "right-texture"]
+    left_camera = _FakeEyeCamera()
+    right_camera = _FakeEyeCamera()
+    targets._panda_cameras = [left_camera, right_camera]
     left_resource = type("Resource", (), {"key": SwapchainResourceKey(2, 0, 3, 100, 120, "rgba8")})()
     right_resource = type("Resource", (), {"key": SwapchainResourceKey(2, 1, 4, 101, 121, "rgba8")})()
 
     scene.render_to_framebuffers(
         targets=targets,
-        frame_state=object(),
+        frame_state=PandaFrameState(
+            eye_views=(
+                PandaEyeView(
+                    0,
+                    pose=PandaPose((1.0, 2.0, 3.0), (0.0, 0.0, 0.0, 1.0)),
+                    fov={"angle_left": -0.5, "angle_right": 0.5, "angle_up": 0.4, "angle_down": -0.4},
+                ),
+                PandaEyeView(
+                    1,
+                    pose=PandaPose((4.0, 5.0, 6.0), (0.0, 0.0, 0.0, 1.0)),
+                    fov={"angle_left": -0.6, "angle_right": 0.6, "angle_up": 0.3, "angle_down": -0.3},
+                ),
+            )
+        ),
         left_framebuffer=_FakeModernGlFramebuffer(31),
         right_framebuffer=_FakeModernGlFramebuffer(32),
         left_resource=left_resource,
@@ -447,7 +497,7 @@ def test_panda_scene_graph_renders_panda_targets_then_blits_to_framebuffers(monk
     )
     scene.render_to_framebuffers(
         targets=targets,
-        frame_state=object(),
+        frame_state=PandaFrameState(),
         left_framebuffer=_FakeModernGlFramebuffer(33),
         right_framebuffer=_FakeModernGlFramebuffer(34),
         left_resource=left_resource,
@@ -459,6 +509,10 @@ def test_panda_scene_graph_renders_panda_targets_then_blits_to_framebuffers(monk
     assert controller_root.parents == [targets._panda_base.render]
     assert screen_root.parents == [targets._panda_base.render]
     assert ray_root.parents == [targets._panda_base.render]
+    assert left_camera.pos_quat is not None
+    assert right_camera.pos_quat is not None
+    assert left_camera.lens.fov == pytest.approx((57.2958, 45.8366), rel=1e-4)
+    assert right_camera.lens.fov == pytest.approx((68.7549, 34.3775), rel=1e-4)
     assert blits == [
         ("left-texture", 31, 100, 120),
         ("right-texture", 32, 101, 121),
@@ -702,6 +756,7 @@ def test_panda_frame_source_converts_matrices_and_rays_to_frame_state():
             predicted_display_time=12.5,
             frame_index=99,
             eye_pose_mats=(eye_mat, None),
+            eye_fovs=({"angle_left": -0.5, "angle_right": 0.5, "angle_up": 0.4, "angle_down": -0.4}, None),
             controller_pose_mats={"left": screen_mat},
             controller_rays={"left": ray},
             screen_pose_mat=screen_mat,
@@ -712,6 +767,7 @@ def test_panda_frame_source_converts_matrices_and_rays_to_frame_state():
     assert frame_state.predicted_display_time == pytest.approx(12.5)
     assert frame_state.frame_index == 99
     assert frame_state.eye_views[0].pose.position == pytest.approx((0.1, 0.2, 0.3))
+    assert frame_state.eye_views[0].fov["angle_right"] == pytest.approx(0.5)
     assert frame_state.eye_views[1].pose is None
     assert frame_state.controller_poses["left"].position == pytest.approx((4.0, 5.0, 6.0))
     assert frame_state.controller_rays["left"] is ray
@@ -720,6 +776,15 @@ def test_panda_frame_source_converts_matrices_and_rays_to_frame_state():
 
     pose = mat4_to_panda_pose(screen_mat)
     assert pose.orientation == pytest.approx((0.0, 0.0, 0.0, 1.0))
+
+
+def test_openxr_panda_frame_state_carries_eye_fovs():
+    left_fov = object()
+    right_fov = object()
+    views = [type("View", (), {"fov": left_fov})(), type("View", (), {"fov": right_fov})()]
+
+    assert _eye_fovs(views) == (left_fov, right_fov)
+    assert _eye_fovs([]) == (None, None)
 
 
 def test_panda_frame_state_validates_same_frame_eye_views():

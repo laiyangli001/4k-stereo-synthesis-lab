@@ -29,6 +29,7 @@ def update_panda_frame_state_from_viewer(
                 predicted_display_time=predicted_display_time,
                 frame_index=getattr(viewer, "_frame_count", None),
                 eye_pose_mats=_eye_pose_mats(viewer, views),
+                eye_fovs=_eye_fovs(views),
                 controller_pose_mats=_controller_pose_mats(viewer),
                 controller_rays=_controller_rays(viewer),
                 screen_pose_mat=viewer._screen_pose_mat4()
@@ -62,6 +63,16 @@ def _eye_pose_mats(viewer: Any, views: Any) -> tuple[Any | None, Any | None]:
     for index in range(2):
         view = views[index] if index < len(views) else None
         converted.append(converter(view) if view is not None else None)
+    return (converted[0], converted[1])
+
+
+def _eye_fovs(views: Any) -> tuple[Any | None, Any | None]:
+    if not views:
+        return (None, None)
+    converted = []
+    for index in range(2):
+        view = views[index] if index < len(views) else None
+        converted.append(getattr(view, "fov", None) if view is not None else None)
     return (converted[0], converted[1])
 
 

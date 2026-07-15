@@ -152,6 +152,7 @@ class PandaSceneGraph:
         if len(targets._panda_textures) < 2:
             raise RuntimeError("Panda stereo targets must contain both eye textures")
         self._attach_roots_to_base(base)
+        _update_eye_cameras(getattr(targets, "_panda_cameras", ()), frame_state)
         base.graphicsEngine.render_frame()
         base.graphicsEngine.render_frame()
         _blit_panda_texture_to_framebuffer(
@@ -430,6 +431,49 @@ def _blit_panda_texture_to_framebuffer(texture: Any, framebuffer: Any, width: in
         glBindFramebuffer(GL_FRAMEBUFFER, 0)
         if read_fbo:
             glDeleteFramebuffers(1, [read_fbo])
+
+
+def _update_eye_cameras(cameras: Any, frame_state: Any) -> None:
+    eye_views = getattr(frame_state, "eye_views", ()) or ()
+    for eye_index, camera in enumerate(tuple(cameras)[:2]):
+        if camera is None or eye_index >= len(eye_views):
+            continue
+        eye_view = eye_views[eye_index]
+        if eye_view is None:
+            continue
+        pose = getattr(eye_view, "pose", None)
+        if pose is not None:
+            _apply_pose_to_node_path(camera, pose)
+        fov = getattr(eye_view, "fov", None)
+        if fov is not None:
+            _apply_fov_to_camera(camera, fov)
+
+
+def _apply_fov_to_camera(camera: Any, fov: Any) -> bool:
+    node_getter = getattr(camera, "node", None)
+    node = node_getter() if callable(node_getter) else None
+    lens_getter = getattr(node, "get_lens", None)
+    lens = lens_getter() if callable(lens_getter) else None
+    if lens is None or not hasattr(lens, "set_fov"):
+        return False
+    left = _fov_value(fov, "angle_left", "left")
+    right = _fov_value(fov, "angle_right", "right")
+    up = _fov_value(fov, "angle_up", "up")
+    down = _fov_value(fov, "angle_down", "down")
+    if None in (left, right, up, down):
+        return False
+    import math
+
+    lens.set_fov(math.degrees(abs(left) + abs(right)), math.degrees(abs(up) + abs(down)))
+    return True
+
+
+def _fov_value(fov: Any, attr_name: str, mapping_name: str) -> float | None:
+    if isinstance(fov, Mapping):
+        value = fov.get(attr_name, fov.get(mapping_name))
+    else:
+        value = getattr(fov, attr_name, None)
+    return None if value is None else float(value)
 
 
 def _apply_controller_ray_to_target(target: Any, ray: Any) -> bool:

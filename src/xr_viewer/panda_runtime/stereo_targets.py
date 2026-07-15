@@ -45,6 +45,8 @@ class StereoTargets:
     _panda_base: Any | None = field(default=None, init=False, repr=False)
     _panda_buffers: list[Any] = field(default_factory=list, init=False, repr=False)
     _panda_textures: list[Any] = field(default_factory=list, init=False, repr=False)
+    _panda_cameras: list[Any] = field(default_factory=list, init=False, repr=False)
+    _panda_display_regions: list[Any] = field(default_factory=list, init=False, repr=False)
 
     @property
     def ready(self) -> bool:
@@ -83,12 +85,14 @@ class StereoTargets:
     ) -> tuple[StereoTargetRef, StereoTargetRef]:
         base = _create_panda_base()
         self._panda_base = base
-        left_buffer, left_texture, left_native_id = _create_panda_offscreen_target(base, 0, left)
-        right_buffer, right_texture, right_native_id = _create_panda_offscreen_target(base, 1, right)
+        left_buffer, left_texture, left_native_id, left_camera, left_region = _create_panda_offscreen_target(base, 0, left)
+        right_buffer, right_texture, right_native_id, right_camera, right_region = _create_panda_offscreen_target(base, 1, right)
         base.graphicsEngine.render_frame()
         base.graphicsEngine.render_frame()
         self._panda_buffers.extend([left_buffer, right_buffer])
         self._panda_textures.extend([left_texture, right_texture])
+        self._panda_cameras.extend([left_camera, right_camera])
+        self._panda_display_regions.extend([left_region, right_region])
         return (
             StereoTargetRef(0, left, True, left_native_id, "d2s-panda-eye-0"),
             StereoTargetRef(1, right, True, right_native_id, "d2s-panda-eye-1"),
@@ -97,6 +101,8 @@ class StereoTargets:
     def _release_panda_handles(self) -> None:
         self._panda_buffers.clear()
         self._panda_textures.clear()
+        self._panda_cameras.clear()
+        self._panda_display_regions.clear()
         if self._panda_base is not None:
             self._panda_base.destroy()
             self._panda_base = None
@@ -133,8 +139,8 @@ def _create_panda_offscreen_target(
     base: Any,
     eye_index: int,
     spec: StereoTargetSpec,
-) -> tuple[Any, Any, int]:
-    from panda3d.core import FrameBufferProperties, GraphicsPipe, Texture, WindowProperties
+) -> tuple[Any, Any, int, Any, Any]:
+    from panda3d.core import Camera, FrameBufferProperties, GraphicsPipe, PerspectiveLens, Texture, WindowProperties
 
     gsg = base.win.get_gsg()
     texture = Texture(f"d2s-panda-eye-{eye_index}-color")
@@ -160,10 +166,17 @@ def _create_panda_offscreen_target(
         getattr(buffer, "RTMCopyTexture", buffer.RTMCopyRam),
     )
     buffer.add_render_texture(texture, render_texture_mode)
+    lens = PerspectiveLens()
+    lens.set_near_far(0.01, 1000.0)
+    lens.set_fov(90.0, 90.0)
+    camera = base.render.attach_new_node(Camera(f"d2s-panda-eye-{eye_index}-camera"))
+    camera.node().set_lens(lens)
+    display_region = buffer.make_display_region()
+    display_region.set_camera(camera)
     texture_context = texture.prepare_now(0, gsg.get_prepared_objects(), gsg)
     native_id = int(texture_context.get_native_id()) if texture_context is not None else 0
     try:
         texture._d2s_native_id = native_id
     except Exception:
         pass
-    return buffer, texture, native_id
+    return buffer, texture, native_id, camera, display_region
