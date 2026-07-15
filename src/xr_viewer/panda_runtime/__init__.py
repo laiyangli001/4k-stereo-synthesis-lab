@@ -9,6 +9,7 @@ from .bridge import PandaBridgeUnavailable, SwapchainResourceKey
 from .diagnostics import PandaRuntimeSnapshot
 from .runtime import (
     GLTF_RENDERER_ENV_VAR,
+    PandaAnimationClock,
     PandaFrameState,
     PandaRuntimeConfig,
     PandaRuntimeUnavailable,
@@ -18,6 +19,7 @@ from .runtime import (
 
 __all__ = [
     "GLTF_RENDERER_ENV_VAR",
+    "PandaAnimationClock",
     "PandaBridgeUnavailable",
     "PandaFrameState",
     "PandaRuntimeConfig",

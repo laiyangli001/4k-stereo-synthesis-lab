@@ -25,6 +25,8 @@ class PandaRuntimeSnapshot:
     bridge_mode: str
     bridge_resource_count: int
     bridge_resource_keys: tuple[str, ...]
+    frame_predicted_display_time: float | None
+    frame_animation_time_seconds: float | None
     event_count: int
     events: tuple[str, ...]
 
@@ -55,6 +57,7 @@ class PandaRuntimeDiagnostics:
         scene = getattr(renderer, "scene", None)
         targets = getattr(renderer, "targets", None)
         bridge = getattr(renderer, "bridge", None)
+        frame_state = getattr(renderer, "_last_frame_state", None)
         return PandaRuntimeSnapshot(
             released=bool(getattr(renderer, "released", False)),
             scene_assets=_scene_asset_summary(scene),
@@ -64,12 +67,24 @@ class PandaRuntimeDiagnostics:
             bridge_mode=str(getattr(bridge, "bridge_mode", "")),
             bridge_resource_count=len(getattr(bridge, "resources", {}) or {}),
             bridge_resource_keys=_bridge_resource_key_summary(bridge),
+            frame_predicted_display_time=_optional_float(
+                getattr(frame_state, "predicted_display_time", None)
+            ),
+            frame_animation_time_seconds=_optional_float(
+                getattr(frame_state, "animation_time_seconds", None)
+            ),
             event_count=len(self.events),
             events=tuple(event.name for event in self.events),
         )
 
     def snapshot_json(self, renderer: Any) -> str:
         return json.dumps(self.snapshot(renderer).to_dict(), ensure_ascii=False, indent=2, sort_keys=True)
+
+
+def _optional_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    return float(value)
 
 
 def _scene_asset_summary(scene: Any) -> tuple[Mapping[str, object], ...]:

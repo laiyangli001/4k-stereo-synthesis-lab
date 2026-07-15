@@ -11,6 +11,7 @@ from xr_viewer.panda_runtime.bridge import (
 )
 from xr_viewer.panda_runtime.runtime import (
     GLTF_RENDERER_ENV_VAR,
+    PandaAnimationClock,
     PandaFrameState,
     PandaRuntimeUnavailable,
     PandaSceneRenderer,
@@ -202,10 +203,14 @@ def test_panda_runtime_diagnostics_snapshot_summarizes_assets_targets_and_bridge
         StereoTargetSpec(64, 72, "rgba8"),
         StereoTargetSpec(64, 72, "rgba8"),
     )
+    renderer.update_frame_state(PandaFrameState(predicted_display_time=100.25))
+    renderer.update_frame_state(PandaFrameState(predicted_display_time=101.75))
     snapshot = renderer.diagnostics_snapshot()
     snapshot_json = renderer.diagnostics_json()
 
     assert snapshot.released is False
+    assert snapshot.frame_predicted_display_time == pytest.approx(101.75)
+    assert snapshot.frame_animation_time_seconds == pytest.approx(1.5)
     assert snapshot.event_count == 2
     assert snapshot.events == ("environment_loaded", "stereo_targets_rebuilt")
     assert snapshot.scene_assets[0]["role"] == "environment"
@@ -216,7 +221,23 @@ def test_panda_runtime_diagnostics_snapshot_summarizes_assets_targets_and_bridge
     assert snapshot.bridge_resource_count == 1
     assert snapshot.bridge_resource_keys == ("session=5:eye=0:image=2:size=64x72:format=rgba8",)
     assert '"bridge_resource_count": 1' in snapshot_json
+    assert '"frame_animation_time_seconds": 1.5' in snapshot_json
     assert '"scene_assets"' in snapshot_json
+
+
+def test_panda_animation_clock_uses_xr_predicted_display_time_monotonically():
+    clock = PandaAnimationClock()
+
+    assert clock.sample(50.0) == pytest.approx(0.0)
+    assert clock.sample(50.25) == pytest.approx(0.25)
+    assert clock.sample(50.10) == pytest.approx(0.25)
+    assert clock.sample(52.0) == pytest.approx(2.0)
+    assert clock.origin_predicted_display_time == pytest.approx(50.0)
+    assert clock.last_animation_time_seconds == pytest.approx(2.0)
+
+    clock.reset()
+    assert clock.origin_predicted_display_time is None
+    assert clock.sample(10.0) == pytest.approx(0.0)
 
 
 def test_panda_scene_renderer_facade_contract():
@@ -230,6 +251,7 @@ def test_panda_scene_renderer_facade_contract():
         StereoTargetSpec(100, 120, "rgba8"),
     )
     renderer.update_frame_state(PandaFrameState(predicted_display_time=123.0))
+    renderer.update_frame_state(PandaFrameState(predicted_display_time=123.5))
     result = renderer.render_eyes(
         SwapchainImageRef(0, 0, object(), 100, 120, "rgba8"),
         SwapchainImageRef(1, 0, object(), 100, 120, "rgba8"),
@@ -238,6 +260,10 @@ def test_panda_scene_renderer_facade_contract():
     assert result.rendered
     assert result.bridge_mode == "test"
     assert len(bridge.calls) == 1
+    frame_state = bridge.calls[0][2]
+    assert frame_state.predicted_display_time == pytest.approx(123.5)
+    assert frame_state.animation_time_seconds == pytest.approx(0.5)
+    assert renderer.scene.frame_state is frame_state
     assert [asset.role for asset in renderer.scene.loaded_assets()] == ["environment", "controller:left"]
     assert renderer.targets.ready
     assert "environment_loaded" in renderer.diagnostics.summary()["events"]

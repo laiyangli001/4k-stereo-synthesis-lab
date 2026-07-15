@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import os
 from typing import Any, Mapping, Protocol
 
@@ -48,11 +48,50 @@ class PandaFrameState:
     """Frame snapshot passed from the existing OpenXR state machine."""
 
     predicted_display_time: float = 0.0
+    animation_time_seconds: float | None = None
     head_pose: Any | None = None
     eye_poses: tuple[Any | None, Any | None] = (None, None)
     controller_poses: Mapping[str, Any] = field(default_factory=dict)
     screen_pose: Any | None = None
     screen_texture: Any | None = None
+
+
+class PandaAnimationClock:
+    """Derive a monotonic glTF animation clock from XR predicted display time."""
+
+    def __init__(self) -> None:
+        self._origin_predicted_display_time: float | None = None
+        self._last_animation_time_seconds = 0.0
+
+    @property
+    def origin_predicted_display_time(self) -> float | None:
+        return self._origin_predicted_display_time
+
+    @property
+    def last_animation_time_seconds(self) -> float:
+        return self._last_animation_time_seconds
+
+    def sample(self, predicted_display_time: float) -> float:
+        predicted = float(predicted_display_time)
+        if self._origin_predicted_display_time is None:
+            self._origin_predicted_display_time = predicted
+            self._last_animation_time_seconds = 0.0
+            return 0.0
+        elapsed = max(0.0, predicted - self._origin_predicted_display_time)
+        if elapsed < self._last_animation_time_seconds:
+            elapsed = self._last_animation_time_seconds
+        self._last_animation_time_seconds = elapsed
+        return elapsed
+
+    def bind(self, frame_state: PandaFrameState) -> PandaFrameState:
+        return replace(
+            frame_state,
+            animation_time_seconds=self.sample(frame_state.predicted_display_time),
+        )
+
+    def reset(self) -> None:
+        self._origin_predicted_display_time = None
+        self._last_animation_time_seconds = 0.0
 
 
 def resolve_gltf_renderer_mode(
@@ -105,6 +144,7 @@ class PandaSceneRenderer:
         self.targets = targets or StereoTargets()
         self.bridge = bridge or PandaBridge()
         self.diagnostics = diagnostics or PandaRuntimeDiagnostics()
+        self.animation_clock = PandaAnimationClock()
         self._released = False
         self._last_frame_state: PandaFrameState | None = None
 
@@ -124,8 +164,9 @@ class PandaSceneRenderer:
 
     def update_frame_state(self, frame_state: PandaFrameState) -> None:
         self._ensure_live()
-        self._last_frame_state = frame_state
-        self.scene.update_frame_state(frame_state)
+        bound_frame_state = self.animation_clock.bind(frame_state)
+        self._last_frame_state = bound_frame_state
+        self.scene.update_frame_state(bound_frame_state)
 
     def rebuild_targets(self, left: StereoTargetSpec, right: StereoTargetSpec) -> None:
         self._ensure_live()
@@ -162,6 +203,7 @@ class PandaSceneRenderer:
         self.bridge.release()
         self.targets.release()
         self.scene.release()
+        self.animation_clock.reset()
         self._released = True
         self.diagnostics.record_event("released", "PandaSceneRenderer")
 
