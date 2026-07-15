@@ -6,6 +6,7 @@ context.
 """
 
 from .bridge import PandaBridgeUnavailable, SwapchainResourceKey
+from .controller_ray import PandaControllerRayGeometryError, PandaControllerRayGeometryTarget
 from .diagnostics import PandaRuntimeSnapshot
 from .runtime import (
     GLTF_RENDERER_ENV_VAR,
@@ -27,6 +28,8 @@ __all__ = [
     "PandaAnimationClock",
     "PandaBridgeUnavailable",
     "PandaControllerRay",
+    "PandaControllerRayGeometryError",
+    "PandaControllerRayGeometryTarget",
     "PandaEyeView",
     "PandaFrameState",
     "PandaPose",

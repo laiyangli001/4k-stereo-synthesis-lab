@@ -9,6 +9,10 @@ from xr_viewer.panda_runtime.bridge import (
     SwapchainImageRef,
     SwapchainResourceKey,
 )
+from xr_viewer.panda_runtime.controller_ray import (
+    PandaControllerRayGeometryError,
+    PandaControllerRayGeometryTarget,
+)
 from xr_viewer.panda_runtime.runtime import (
     GLTF_RENDERER_ENV_VAR,
     PandaAnimationClock,
@@ -394,6 +398,30 @@ def test_panda_runtime_diagnostics_snapshot_summarizes_assets_targets_and_bridge
     assert '"frame_eye_view_count": 2' in snapshot_json
     assert '"scene_controller_hands": [' in snapshot_json
     assert '"scene_assets"' in snapshot_json
+
+
+def test_panda_controller_ray_geometry_target_builds_line_segments():
+    pytest.importorskip("panda3d")
+    from panda3d.core import NodePath
+
+    parent = NodePath("controller-ray-root")
+    target = PandaControllerRayGeometryTarget(parent)
+    visible_ray = PandaControllerRay((1.0, 2.0, 3.0), (0.0, 0.0, -2.0), length=4.0)
+
+    ray_node = target.set_controller_ray(visible_ray)
+
+    assert ray_node is not None
+    assert target.ray_node is ray_node
+    assert target.last_ray is visible_ray
+    assert parent.get_num_children() == 1
+
+    hidden_ray = PandaControllerRay((0.0, 0.0, 0.0), (0.0, 0.0, -1.0), visible=False)
+    assert target.set_controller_ray(hidden_ray) is None
+    assert target.ray_node is None
+    assert parent.get_num_children() == 0
+
+    with pytest.raises(PandaControllerRayGeometryError, match="non-zero"):
+        target.set_controller_ray(PandaControllerRay((0.0, 0.0, 0.0), (0.0, 0.0, 0.0)))
 
 
 def test_panda_screen_texture_upload_target_binds_payload_to_node_path():
