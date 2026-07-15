@@ -12,11 +12,14 @@ from xr_viewer.panda_runtime.bridge import (
 from xr_viewer.panda_runtime.runtime import (
     GLTF_RENDERER_ENV_VAR,
     PandaAnimationClock,
+    PandaEyeView,
     PandaFrameState,
+    PandaPose,
     PandaRuntimeUnavailable,
     PandaSceneRenderer,
     log_renderer_selection,
     resolve_gltf_renderer_mode,
+    validate_frame_state,
 )
 from xr_viewer.panda_runtime.scene import PandaSceneGraph
 from xr_viewer.panda_runtime.stereo_targets import StereoTargetSpec, StereoTargets
@@ -211,14 +214,27 @@ def test_panda_runtime_diagnostics_snapshot_summarizes_assets_targets_and_bridge
         StereoTargetSpec(64, 72, "rgba8"),
         StereoTargetSpec(64, 72, "rgba8"),
     )
-    renderer.update_frame_state(PandaFrameState(predicted_display_time=100.25))
-    renderer.update_frame_state(PandaFrameState(predicted_display_time=101.75))
+    pose = PandaPose((0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))
+    renderer.update_frame_state(PandaFrameState(predicted_display_time=100.25, frame_index=10))
+    renderer.update_frame_state(
+        PandaFrameState(
+            predicted_display_time=101.75,
+            frame_index=11,
+            eye_views=(PandaEyeView(0, pose=pose), PandaEyeView(1, pose=pose)),
+            controller_poses={"left": pose, "right": pose},
+            screen_pose=pose,
+        )
+    )
     snapshot = renderer.diagnostics_snapshot()
     snapshot_json = renderer.diagnostics_json()
 
     assert snapshot.released is False
     assert snapshot.frame_predicted_display_time == pytest.approx(101.75)
     assert snapshot.frame_animation_time_seconds == pytest.approx(1.5)
+    assert snapshot.frame_index == 11
+    assert snapshot.frame_eye_view_count == 2
+    assert snapshot.frame_controller_count == 2
+    assert snapshot.frame_screen_pose_present is True
     assert snapshot.event_count == 2
     assert snapshot.events == ("environment_loaded", "stereo_targets_rebuilt")
     assert snapshot.scene_assets[0]["role"] == "environment"
@@ -232,7 +248,29 @@ def test_panda_runtime_diagnostics_snapshot_summarizes_assets_targets_and_bridge
     assert snapshot.bridge_resource_keys == ("session=5:eye=0:image=2:size=64x72:format=rgba8",)
     assert '"bridge_resource_count": 1' in snapshot_json
     assert '"frame_animation_time_seconds": 1.5' in snapshot_json
+    assert '"frame_eye_view_count": 2' in snapshot_json
     assert '"scene_assets"' in snapshot_json
+
+
+def test_panda_frame_state_validates_same_frame_eye_views():
+    pose = PandaPose((0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))
+    validate_frame_state(
+        PandaFrameState(
+            predicted_display_time=1.0,
+            eye_views=(PandaEyeView(0, pose=pose), PandaEyeView(1, pose=pose)),
+        )
+    )
+
+    with pytest.raises(PandaRuntimeUnavailable, match="mismatched eye_index"):
+        validate_frame_state(
+            PandaFrameState(
+                predicted_display_time=1.0,
+                eye_views=(PandaEyeView(1, pose=pose), PandaEyeView(0, pose=pose)),
+            )
+        )
+
+    with pytest.raises(PandaRuntimeUnavailable, match="predicted_display_time"):
+        validate_frame_state(PandaFrameState(predicted_display_time=float("inf")))
 
 
 def test_panda_animation_clock_uses_xr_predicted_display_time_monotonically():

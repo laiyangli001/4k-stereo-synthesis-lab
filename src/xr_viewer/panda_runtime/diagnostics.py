@@ -27,6 +27,10 @@ class PandaRuntimeSnapshot:
     bridge_resource_keys: tuple[str, ...]
     frame_predicted_display_time: float | None
     frame_animation_time_seconds: float | None
+    frame_index: int | None
+    frame_eye_view_count: int
+    frame_controller_count: int
+    frame_screen_pose_present: bool
     event_count: int
     events: tuple[str, ...]
 
@@ -73,6 +77,10 @@ class PandaRuntimeDiagnostics:
             frame_animation_time_seconds=_optional_float(
                 getattr(frame_state, "animation_time_seconds", None)
             ),
+            frame_index=_optional_int(getattr(frame_state, "frame_index", None)),
+            frame_eye_view_count=_eye_view_count(frame_state),
+            frame_controller_count=len(getattr(frame_state, "controller_poses", {}) or {}),
+            frame_screen_pose_present=getattr(frame_state, "screen_pose", None) is not None,
             event_count=len(self.events),
             events=tuple(event.name for event in self.events),
         )
@@ -85,6 +93,17 @@ def _optional_float(value: Any) -> float | None:
     if value is None:
         return None
     return float(value)
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    return int(value)
+
+
+def _eye_view_count(frame_state: Any) -> int:
+    eye_views = getattr(frame_state, "eye_views", ()) or ()
+    return sum(1 for eye_view in eye_views if eye_view is not None)
 
 
 def _scene_asset_summary(scene: Any) -> tuple[Mapping[str, object], ...]:

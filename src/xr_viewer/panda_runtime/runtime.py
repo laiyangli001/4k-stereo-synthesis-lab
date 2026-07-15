@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+import math
 import os
 from typing import Any, Mapping, Protocol
 
@@ -44,16 +45,52 @@ class PandaRuntimeConfig:
 
 
 @dataclass(frozen=True)
+class PandaPose:
+    """Pose value object for a single XR-frame snapshot."""
+
+    position: tuple[float, float, float]
+    orientation: tuple[float, float, float, float]
+
+
+@dataclass(frozen=True)
+class PandaEyeView:
+    """Per-eye view state captured from the same xrLocateViews result."""
+
+    eye_index: int
+    pose: PandaPose | None = None
+    fov: Mapping[str, float] | None = None
+    projection: Any | None = None
+
+
+@dataclass(frozen=True)
 class PandaFrameState:
     """Frame snapshot passed from the existing OpenXR state machine."""
 
     predicted_display_time: float = 0.0
     animation_time_seconds: float | None = None
+    frame_index: int | None = None
     head_pose: Any | None = None
+    eye_views: tuple[PandaEyeView | None, PandaEyeView | None] = (None, None)
     eye_poses: tuple[Any | None, Any | None] = (None, None)
     controller_poses: Mapping[str, Any] = field(default_factory=dict)
     screen_pose: Any | None = None
     screen_texture: Any | None = None
+
+
+def validate_frame_state(frame_state: PandaFrameState) -> None:
+    """Validate that both eyes share one XR frame snapshot."""
+    predicted = float(frame_state.predicted_display_time)
+    if not math.isfinite(predicted):
+        raise PandaRuntimeUnavailable("PandaFrameState.predicted_display_time must be finite")
+    if len(frame_state.eye_views) != 2:
+        raise PandaRuntimeUnavailable("PandaFrameState.eye_views must contain exactly two eyes")
+    for expected_eye, eye_view in enumerate(frame_state.eye_views):
+        if eye_view is None:
+            continue
+        if int(eye_view.eye_index) != expected_eye:
+            raise PandaRuntimeUnavailable(
+                f"PandaFrameState eye {expected_eye} has mismatched eye_index={eye_view.eye_index}"
+            )
 
 
 class PandaAnimationClock:
@@ -164,6 +201,7 @@ class PandaSceneRenderer:
 
     def update_frame_state(self, frame_state: PandaFrameState) -> None:
         self._ensure_live()
+        validate_frame_state(frame_state)
         bound_frame_state = self.animation_clock.bind(frame_state)
         self._last_frame_state = bound_frame_state
         self.scene.update_frame_state(bound_frame_state)
