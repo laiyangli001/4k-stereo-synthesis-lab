@@ -13,6 +13,7 @@ from xr_viewer.panda3d_probe import (
 
 ROOT = Path(__file__).resolve().parents[1]
 ARTEMIS = ROOT / "src" / "xr_viewer" / "environments" / "Artemis" / "environment.glb"
+CONTROLLER_ASSETS = tuple(sorted((ROOT / "src" / "xr_viewer" / "controllers").glob("*/*.glb")))
 
 
 def test_panda_probe_marks_animated_asset_without_runtime_nodes_as_blocked():
@@ -91,3 +92,28 @@ def test_custom_node_animation_runtime_samples_artemis_transforms():
 
     assert matrix_75 != matrix_0
     assert matrix_15 == matrix_0
+
+
+def test_panda_probe_loads_all_controller_fixtures():
+    pytest.importorskip("gltf")
+    if not panda3d_probe_available():
+        pytest.skip("Panda3D probe dependencies are not installed")
+
+    assert len(CONTROLLER_ASSETS) == 12
+    reports = [inspect_panda3d_asset(asset) for asset in CONTROLLER_ASSETS]
+
+    assert {asset.parent.name for asset in CONTROLLER_ASSETS} == {
+        "HP",
+        "INDEX",
+        "PICO",
+        "QUEST",
+        "VIVE",
+        "YVR",
+    }
+    for report in reports:
+        assert report.gltf_animation_count == 0
+        assert report.gltf_animation_channel_count == 0
+        assert report.panda_node_count > 0
+        assert report.panda_geom_count > 0
+        assert report.animation_runtime_ready
+        assert report.animation_runtime_reason == "asset has no glTF animations"
