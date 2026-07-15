@@ -2995,7 +2995,28 @@ def test_openxr_frame_renderer_builds_layers_from_latest_screen_frame():
         def _breakdown_inc(self, name, amount=1):
             self.calls.append(("inc", name, amount))
 
+        def _screen_pose_mat4(self):
+            return [
+                [1.0, 0.0, 0.0, 4.0],
+                [0.0, 1.0, 0.0, 5.0],
+                [0.0, 0.0, 1.0, 6.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ]
+
     viewer = Viewer()
+    viewer._gltf_renderer_config = SimpleNamespace(panda3d_requested=True)
+    viewer._frame_count = 44
+    viewer._grip_mat_l = viewer._screen_pose_mat4()
+    viewer._grip_mat_r = None
+    viewer._get_smoothed_ray = lambda is_left: (
+        ((1.0, 2.0, 3.0), (0.0, 0.0, -1.0)) if is_left else (None, None)
+    )
+    viewer._view_pose_mat4 = lambda _view: [
+        [1.0, 0.0, 0.0, 0.1],
+        [0.0, 1.0, 0.0, 0.2],
+        [0.0, 0.0, 1.0, 0.3],
+        [0.0, 0.0, 0.0, 1.0],
+    ]
     renderer = OpenXRFrameRenderer(viewer)
     renderer.view_tracker = SimpleNamespace(
         locate_views=lambda *, display_time: viewer.calls.append(("locate", display_time)) or (["view"], True)
@@ -3028,6 +3049,11 @@ def test_openxr_frame_renderer_builds_layers_from_latest_screen_frame():
     assert composition_layers == ["layer"]
     assert viewer.calls[0] == ("poll", True)
     assert viewer.calls[1] == ("locate", 123)
+    assert viewer._panda_frame_state.predicted_display_time == 123
+    assert viewer._panda_frame_state.frame_index == 44
+    assert viewer._panda_frame_state.screen_pose.position == pytest.approx((4.0, 5.0, 6.0))
+    assert viewer._panda_frame_state.controller_poses["left"].position == pytest.approx((4.0, 5.0, 6.0))
+    assert viewer._panda_frame_state.controller_rays["left"].direction == pytest.approx((0.0, 0.0, -1.0))
     assert viewer.calls[2] == ("prepare", True)
     assert viewer.calls[3][0] == "projection"
     assert viewer.calls[3][1]["enabled"] is True
@@ -3540,10 +3566,11 @@ def test_quad_layer_update_is_not_nested_under_projection_layer_views():
     render_frame = frame_renderer.split("def render_frame", 1)[1]
     poll_idx = render_frame.index("self.screen_presenter.poll_screen_frame()")
     locate_idx = render_frame.index("self.view_tracker.locate_views(")
+    panda_idx = render_frame.index("update_panda_frame_state_from_viewer(")
     prepare_idx = render_frame.index("self.screen_presenter.prepare_frame_layers(")
     render_idx = render_frame.index("self.projection_presenter.render_projection(")
     append_idx = render_frame.index("self.screen_presenter.append_frame_layers(")
-    assert poll_idx < locate_idx < prepare_idx < render_idx < append_idx
+    assert poll_idx < locate_idx < panda_idx < prepare_idx < render_idx < append_idx
     frame_pipeline = (SRC / "xr_viewer" / "openxr_frame_pipeline.py").read_text(encoding="utf-8")
     assert "from .openxr_frame_pipeline import OpenXRFramePipeline" in implementation
     assert "from .openxr_frame_renderer import OpenXRFrameRenderer" in frame_pipeline

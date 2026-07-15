@@ -3,6 +3,7 @@ import time
 from .projection_layer_presenter import ProjectionLayerPresenter
 from .screen_layer_presenter import ScreenLayerPresenter
 from .overlay_quad_presenter import QuadOverlayPresenter
+from .openxr_panda_frame_state import update_panda_frame_state_from_viewer
 from .view_pose_tracker import ViewPoseTracker
 
 
@@ -23,6 +24,12 @@ class OpenXRFrameRenderer:
             ensure_env("Active")
         screen_frame_uploaded = self.screen_presenter.poll_screen_frame()
         views, view_pose_adjusted = self.view_tracker.locate_views(display_time=display_time)
+        update_panda_frame_state_from_viewer(
+            viewer,
+            predicted_display_time=display_time,
+            views=views,
+            screen_frame_uploaded=screen_frame_uploaded,
+        )
 
         quad_update_start = time.perf_counter()
         _quad_layers, quad_layer_headers, updated_quad_eyes, render_projection_layer, background_layer_headers = (
