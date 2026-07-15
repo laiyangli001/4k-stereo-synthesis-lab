@@ -3826,6 +3826,34 @@ def test_panda_projection_bridge_acquires_renders_and_releases_both_eyes(monkeyp
     assert calls == [("openxr_projection_panda_present", 1), "presented"]
 
 
+def test_panda_bridge_diagnostics_log_includes_runtime_fields_and_is_limited(capsys):
+    from xr_viewer.projection_layer_presenter import _log_panda_bridge_diagnostics
+
+    viewer = SimpleNamespace(
+        _panda_render_success_count=7,
+        _panda_render_failure_count=0,
+        _panda_render_last_bridge_mode="nv_dx",
+        _panda_render_last_target_size=((100, 120), (101, 121)),
+        _panda_render_last_image_indices=(2, 3),
+        _panda_render_error="",
+        _panda_render_last_timing={"acquire_wait": 0.001, "total": 0.0123},
+    )
+
+    for _ in range(6):
+        _log_panda_bridge_diagnostics(viewer)
+
+    output = capsys.readouterr().out
+    assert output.count("[OpenXRViewer] Panda3D projection bridge diagnostics") == 5
+    assert "viewer._panda_render_success_count=7" in output
+    assert "viewer._panda_render_failure_count=0" in output
+    assert "viewer._panda_render_last_bridge_mode='nv_dx'" in output
+    assert "viewer._panda_render_last_target_size=((100, 120), (101, 121))" in output
+    assert "viewer._panda_render_last_image_indices=(2, 3)" in output
+    assert "viewer._panda_render_error=''" in output
+    assert "viewer._panda_render_last_timing={acquire_wait=1.00ms,total=12.30ms}" in output
+    assert viewer._panda_render_diagnostic_log_count == 5
+
+
 def test_panda_projection_bridge_failure_releases_and_falls_back(monkeypatch):
     import xr_viewer.projection_layer_presenter as presenter_module
     from xr_viewer.projection_layer_presenter import ProjectionLayerPresenter

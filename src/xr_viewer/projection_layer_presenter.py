@@ -35,6 +35,25 @@ def _record_panda_bridge_timing(viewer, timing):
         recorder(f'openxr_projection_panda_{name}', seconds)
 
 
+def _log_panda_bridge_diagnostics(viewer):
+    log_count = int(getattr(viewer, '_panda_render_diagnostic_log_count', 0) or 0)
+    if log_count >= 5:
+        return
+    viewer._panda_render_diagnostic_log_count = log_count + 1
+    timing = getattr(viewer, '_panda_render_last_timing', {}) or {}
+    timing_text = ','.join(f'{name}={seconds * 1000.0:.2f}ms' for name, seconds in timing.items())
+    print(
+        '[OpenXRViewer] Panda3D projection bridge diagnostics '
+        f'viewer._panda_render_success_count={int(getattr(viewer, "_panda_render_success_count", 0) or 0)} '
+        f'viewer._panda_render_failure_count={int(getattr(viewer, "_panda_render_failure_count", 0) or 0)} '
+        f'viewer._panda_render_last_bridge_mode={getattr(viewer, "_panda_render_last_bridge_mode", "")!r} '
+        f'viewer._panda_render_last_target_size={getattr(viewer, "_panda_render_last_target_size", None)!r} '
+        f'viewer._panda_render_last_image_indices={getattr(viewer, "_panda_render_last_image_indices", None)!r} '
+        f'viewer._panda_render_error={getattr(viewer, "_panda_render_error", "")!r} '
+        f'viewer._panda_render_last_timing={{{timing_text}}}'
+    )
+
+
 class ProjectionLayerPresenter:
     def __init__(self, viewer):
         self.viewer = viewer
@@ -156,6 +175,7 @@ class ProjectionLayerPresenter:
             timing['release'] += time.perf_counter() - release_start
             timing['total'] = time.perf_counter() - total_start
             _record_panda_bridge_timing(viewer, timing)
+            _log_panda_bridge_diagnostics(viewer)
             viewer._breakdown_inc('openxr_projection_panda_present')
             viewer._record_projection_screen_presented()
             return eye_layer_views
