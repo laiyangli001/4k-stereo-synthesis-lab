@@ -19,6 +19,12 @@ class Panda3DD3D11InteropProbeReport:
     driver_version: str
     d3d11_device_created: bool
     d3d11_feature_level: str
+    d3d11_adapter_description: str
+    d3d11_adapter_vendor_id: str
+    d3d11_adapter_device_id: str
+    d3d11_adapter_luid: str
+    d3d11_adapter_dedicated_video_memory: int
+    gl_d3d_adapter_name_match: bool
     nv_dx_interop_loaded: bool
     nv_dx_device_opened: bool
     nv_dx_device_closed: bool
@@ -63,6 +69,104 @@ def _com_fn(obj: Any, index: int, restype: Any, *argtypes: Any) -> Any:
         ctypes.POINTER(ctypes.c_void_p),
     ).contents.value
     return ctypes.CFUNCTYPE(restype, ctypes.c_void_p, *argtypes)(fn_ptr)
+
+
+class _GUID(ctypes.Structure):
+    _fields_ = [
+        ("Data1", ctypes.c_uint32),
+        ("Data2", ctypes.c_uint16),
+        ("Data3", ctypes.c_uint16),
+        ("Data4", ctypes.c_ubyte * 8),
+    ]
+
+
+class _LUID(ctypes.Structure):
+    _fields_ = [("LowPart", ctypes.c_uint32), ("HighPart", ctypes.c_int32)]
+
+
+class _DXGIAdapterDesc(ctypes.Structure):
+    _fields_ = [
+        ("Description", ctypes.c_wchar * 128),
+        ("VendorId", ctypes.c_uint),
+        ("DeviceId", ctypes.c_uint),
+        ("SubSysId", ctypes.c_uint),
+        ("Revision", ctypes.c_uint),
+        ("DedicatedVideoMemory", ctypes.c_size_t),
+        ("DedicatedSystemMemory", ctypes.c_size_t),
+        ("SharedSystemMemory", ctypes.c_size_t),
+        ("AdapterLuid", _LUID),
+    ]
+
+
+_GUID_DATA4 = ctypes.c_ubyte * 8
+_IID_IDXGI_DEVICE = _GUID(
+    0x54EC77FA,
+    0x1377,
+    0x44E6,
+    _GUID_DATA4(0x8C, 0x32, 0x88, 0xFD, 0x5F, 0x44, 0xC8, 0x4C),
+)
+
+
+def _adapter_luid_text(luid: _LUID) -> str:
+    return f"{luid.HighPart & 0xFFFFFFFF:08x}:{luid.LowPart:08x}"
+
+
+def _d3d11_adapter_desc(device: Any) -> _DXGIAdapterDesc:
+    idxgi_device = ctypes.c_void_p()
+    adapter = ctypes.c_void_p()
+    try:
+        query_interface = _com_fn(
+            device,
+            0,
+            ctypes.c_long,
+            ctypes.POINTER(_GUID),
+            ctypes.POINTER(ctypes.c_void_p),
+        )
+        hr = query_interface(
+            getattr(device, "value", device),
+            ctypes.byref(_IID_IDXGI_DEVICE),
+            ctypes.byref(idxgi_device),
+        )
+        if hr != 0:
+            raise Panda3DD3D11InteropProbeError(
+                f"ID3D11Device QueryInterface(IDXGIDevice) failed: hr=0x{hr & 0xFFFFFFFF:08x}"
+            )
+        get_adapter = _com_fn(
+            idxgi_device,
+            7,
+            ctypes.c_long,
+            ctypes.POINTER(ctypes.c_void_p),
+        )
+        hr = get_adapter(idxgi_device.value, ctypes.byref(adapter))
+        if hr != 0:
+            raise Panda3DD3D11InteropProbeError(
+                f"IDXGIDevice.GetAdapter failed: hr=0x{hr & 0xFFFFFFFF:08x}"
+            )
+        desc = _DXGIAdapterDesc()
+        get_desc = _com_fn(
+            adapter,
+            8,
+            ctypes.c_long,
+            ctypes.POINTER(_DXGIAdapterDesc),
+        )
+        hr = get_desc(adapter.value, ctypes.byref(desc))
+        if hr != 0:
+            raise Panda3DD3D11InteropProbeError(
+                f"IDXGIAdapter.GetDesc failed: hr=0x{hr & 0xFFFFFFFF:08x}"
+            )
+        return desc
+    finally:
+        for ptr in (adapter, idxgi_device):
+            try:
+                _release_com_ptr(ptr)
+            except Exception:
+                pass
+
+
+def _adapter_name_matches_gl_renderer(adapter_description: str, gl_renderer: str) -> bool:
+    adapter_tokens = [token for token in adapter_description.lower().replace("/", " ").split() if token]
+    renderer = gl_renderer.lower()
+    return bool(adapter_tokens) and all(token in renderer for token in adapter_tokens)
 
 
 def _create_probe_texture(device: Any, width: int, height: int) -> Any:
@@ -171,6 +275,9 @@ def inspect_panda3d_d3d11_interop() -> Panda3DD3D11InteropProbeReport:
             raise Panda3DD3D11InteropProbeError("Panda3D offscreen window has no GSG")
 
         device, context, feature_level = d3d_interop._create_d3d11_device()
+        adapter_desc = _d3d11_adapter_desc(device)
+        adapter_description = str(adapter_desc.Description).rstrip("\x00")
+        gl_renderer = str(gsg.get_driver_renderer())
         nv_loaded = bool(d3d_interop._load_nv_dx_interop())
         if nv_loaded:
             nv_handle = d3d_interop._wglDXOpenDeviceNV(device)
@@ -224,6 +331,15 @@ def inspect_panda3d_d3d11_interop() -> Panda3DD3D11InteropProbeReport:
             driver_version=str(gsg.get_driver_version()),
             d3d11_device_created=True,
             d3d11_feature_level=f"0x{feature_level:04x}",
+            d3d11_adapter_description=adapter_description,
+            d3d11_adapter_vendor_id=f"0x{adapter_desc.VendorId:04x}",
+            d3d11_adapter_device_id=f"0x{adapter_desc.DeviceId:04x}",
+            d3d11_adapter_luid=_adapter_luid_text(adapter_desc.AdapterLuid),
+            d3d11_adapter_dedicated_video_memory=int(adapter_desc.DedicatedVideoMemory),
+            gl_d3d_adapter_name_match=_adapter_name_matches_gl_renderer(
+                adapter_description,
+                gl_renderer,
+            ),
             nv_dx_interop_loaded=nv_loaded,
             nv_dx_device_opened=nv_opened,
             nv_dx_device_closed=nv_closed,

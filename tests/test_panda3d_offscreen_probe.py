@@ -21,6 +21,8 @@ def test_panda3d_offscreen_probe_reports_render_target():
     assert report.texture_width == 64
     assert report.texture_height == 64
     assert report.texture_has_ram_image
+    assert report.texture_native_id_available
+    assert report.texture_native_id > 0
     assert report.driver_vendor
     assert report.driver_renderer
     assert report.driver_version
@@ -28,3 +30,4 @@ def test_panda3d_offscreen_probe_reports_render_target():
     report_json = offscreen_report_as_json(report)
     assert '"buffer_created": true' in report_json
     assert '"texture_has_ram_image": true' in report_json
+    assert '"texture_native_id_available": true' in report_json

@@ -21,6 +21,8 @@ class Panda3DOffscreenProbeReport:
     texture_format: int
     texture_component_type: int
     texture_has_ram_image: bool
+    texture_native_id_available: bool
+    texture_native_id: int
     framebuffer_properties: str
     driver_vendor: str
     driver_renderer: str
@@ -100,6 +102,9 @@ def inspect_panda3d_offscreen(width: int = 64, height: int = 64) -> Panda3DOffsc
             raise Panda3DOffscreenProbeError("Panda3D did not create an offscreen buffer")
         buffer.add_render_texture(texture, buffer.RTMCopyRam)
         base.graphicsEngine.render_frame()
+        base.graphicsEngine.render_frame()
+        texture_context = texture.prepare_now(0, gsg.get_prepared_objects(), gsg)
+        texture_native_id = int(texture_context.get_native_id()) if texture_context is not None else 0
 
         fb_props = buffer.get_fb_properties()
         return Panda3DOffscreenProbeReport(
@@ -114,6 +119,8 @@ def inspect_panda3d_offscreen(width: int = 64, height: int = 64) -> Panda3DOffsc
             texture_format=int(texture.get_format()),
             texture_component_type=int(texture.get_component_type()),
             texture_has_ram_image=texture.has_ram_image(),
+            texture_native_id_available=texture_native_id > 0,
+            texture_native_id=texture_native_id,
             framebuffer_properties=str(fb_props),
             driver_vendor=str(gsg.get_driver_vendor()),
             driver_renderer=str(gsg.get_driver_renderer()),
