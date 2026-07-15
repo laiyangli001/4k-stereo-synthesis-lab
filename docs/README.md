@@ -43,6 +43,7 @@
 | [33-quality-buffered-output-feasibility-report.md](33-quality-buffered-output-feasibility-report.md) | 高画质缓冲输出技术可行性报告 |
 | [34-visiondepth3d-comparison-and-offline-workflow-report.md](34-visiondepth3d-comparison-and-offline-workflow-report.md) | VisionDepth3D 架构与离线工作流对比报告 |
 | [38-gltf-2-renderer-compliance-layer-plan.md](38-gltf-2-renderer-compliance-layer-plan.md) | glTF 2.0 renderer compliance layer 计划，统一 parser、mesh/material contract、render pass 和 OpenGL/D3D11 行为 |
+| [39-panda3d-gltf-openxr-d3d11-migration-plan.md](39-panda3d-gltf-openxr-d3d11-migration-plan.md) | Panda3D 接管 glTF 场景、OpenGL 离屏渲染并桥接至 D3D11 OpenXR 的可行性闸门与迁移计划 |
 | [python-project-designguide.md](python-project-designguide.md) | Python 项目结构、依赖管理、测试和发布参考指南 |
 
 ## Benchmark 与优化记录
