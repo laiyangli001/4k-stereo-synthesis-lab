@@ -201,8 +201,12 @@ class CoreOpenXRD3D11Mixin:
             print(f"[OpenXRViewer] Quad layer D3D11 lazy swapchains armed max={max_w}x{max_h}")
 
         # 10. Try NV_DX interop for projection overlays when native D3D11
-        # rendering is not available.
-        if self._d3d11_native_renderer is None:
+        # rendering is not available. Phase-0 Panda3D migration probes may also
+        # request it explicitly to validate real OpenXR swapchain registration.
+        if self._panda3d_phase0_swapchain_probe_enabled:
+            print("[OpenXRViewer] Panda3D Phase-0 swapchain probe enabled")
+            self._setup_gpu_interop_d3d11()
+        elif self._d3d11_native_renderer is None:
             self._setup_gpu_interop_d3d11()
 
         # 11. Controller actions (best-effort)

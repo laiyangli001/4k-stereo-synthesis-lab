@@ -113,6 +113,19 @@ class CoreCleanupMixin:
                 pass
         self._offscreen_fbo_cache.clear()
 
+        for attr in (
+            '_panda3d_phase0_probe_vao',
+            '_panda3d_phase0_probe_vbo',
+            '_panda3d_phase0_probe_prog',
+        ):
+            obj = getattr(self, attr, None)
+            if obj is not None:
+                try:
+                    obj.release()
+                except Exception:
+                    pass
+                setattr(self, attr, None)
+
     def _release_d3d11_device(self):
         if self._d3d11_native_renderer is not None:
             try:

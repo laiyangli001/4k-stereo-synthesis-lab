@@ -45,6 +45,14 @@ class ProjectionLayerPresenter:
                 default_proj,
                 updated_quad_eyes=updated_quad_eyes,
             )
+        phase0_probe = bool(getattr(viewer, '_panda3d_phase0_swapchain_probe_enabled', False))
+        if phase0_probe and viewer._interop_mode == 'nv_dx':
+            return self.render_nv_dx_interop(
+                views,
+                default_fov,
+                default_proj,
+                phase0_probe=True,
+            )
         if viewer._d3d11_native_renderer is not None:
             return self.render_d3d11_native(
                 views,
@@ -140,7 +148,58 @@ class ProjectionLayerPresenter:
         viewer._record_projection_screen_presented()
         return eye_layer_views
 
-    def render_nv_dx_interop(self, views, default_fov, default_proj):
+    def _render_phase0_swapchain_probe(self, mgl_fbo, eye_index, sc_w, sc_h):
+        viewer = self.viewer
+        if not getattr(viewer, '_panda3d_phase0_swapchain_probe_logged', False):
+            print("[OpenXRViewer] Panda3D Phase-0 probe rendering into acquired D3D11 swapchain")
+            viewer._panda3d_phase0_swapchain_probe_logged = True
+
+        ctx = viewer.ctx
+        previous_viewport = ctx.viewport
+        mgl_fbo.use()
+        ctx.viewport = (0, 0, int(sc_w), int(sc_h))
+        try:
+            clear = (0.08, 0.04, 0.14, 1.0) if eye_index == 0 else (0.04, 0.08, 0.14, 1.0)
+            ctx.clear(*clear)
+            if viewer._panda3d_phase0_probe_prog is None:
+                viewer._panda3d_phase0_probe_prog = ctx.program(
+                    vertex_shader="""
+                    #version 330
+                    in vec2 in_pos;
+                    in vec3 in_color;
+                    out vec3 v_color;
+                    void main() {
+                        gl_Position = vec4(in_pos, 0.0, 1.0);
+                        v_color = in_color;
+                    }
+                    """,
+                    fragment_shader="""
+                    #version 330
+                    in vec3 v_color;
+                    out vec4 fragColor;
+                    void main() {
+                        fragColor = vec4(v_color, 1.0);
+                    }
+                    """,
+                )
+                vertices = np.array(
+                    [
+                        -0.72, -0.62, 1.0, 0.20, 0.12,
+                         0.72, -0.62, 0.10, 0.85, 1.0,
+                         0.00,  0.64, 1.0, 0.95, 0.10,
+                    ],
+                    dtype='f4',
+                )
+                viewer._panda3d_phase0_probe_vbo = ctx.buffer(vertices.tobytes())
+                viewer._panda3d_phase0_probe_vao = ctx.vertex_array(
+                    viewer._panda3d_phase0_probe_prog,
+                    [(viewer._panda3d_phase0_probe_vbo, '2f 3f', 'in_pos', 'in_color')],
+                )
+            viewer._panda3d_phase0_probe_vao.render()
+        finally:
+            ctx.viewport = previous_viewport
+
+    def render_nv_dx_interop(self, views, default_fov, default_proj, *, phase0_probe=False):
         viewer = self.viewer
         near, far = self._projection_clip_planes()
         eye_layer_views = []
@@ -162,7 +221,10 @@ class ProjectionLayerPresenter:
                 _, _, dx_obj = viewer._nv_dx_objects[(eye_index, img_index)]
                 _d3d_interop._wglDXLockObjectsNV(viewer._nv_dx_device, 1, ctypes.byref(dx_obj))
                 try:
-                    viewer._render_eye(eye_index, mgl_fbo, view_mat, proj_mat, flip_y=True)
+                    if phase0_probe:
+                        self._render_phase0_swapchain_probe(mgl_fbo, eye_index, sc_w, sc_h)
+                    else:
+                        viewer._render_eye(eye_index, mgl_fbo, view_mat, proj_mat, flip_y=True)
                 finally:
                     _d3d_interop._wglDXUnlockObjectsNV(viewer._nv_dx_device, 1, ctypes.byref(dx_obj))
 

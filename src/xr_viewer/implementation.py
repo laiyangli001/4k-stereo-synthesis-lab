@@ -1072,6 +1072,16 @@ class OpenXRViewerCore(CoreOpenXROpenGLMixin, CoreOpenXRD3D11Mixin, CoreOpenXRLi
         self._d3d11_native_requested = str(
             kwargs.get('d3d11_native_renderer', os.environ.get('D2S_D3D11_NATIVE', '1')) or '1'
         ).strip().lower() not in ('0', 'false', 'no', 'off')
+        self._panda3d_phase0_swapchain_probe_enabled = str(
+            kwargs.get(
+                'panda3d_phase0_swapchain_probe',
+                os.environ.get('D2S_PANDA3D_PHASE0_SWAPCHAIN_PROBE', '0'),
+            ) or '0'
+        ).strip().lower() in ('1', 'true', 'yes', 'on')
+        self._panda3d_phase0_swapchain_probe_logged = False
+        self._panda3d_phase0_probe_prog = None
+        self._panda3d_phase0_probe_vbo = None
+        self._panda3d_phase0_probe_vao = None
         # Offscreen GL FBOs used when rendering for D3D11 swapchain images.
         # Key: (eye_index, img_index) ->(mgl_fbo, mgl_tex, raw_fbo_id, w, h)
         self._offscreen_fbo_cache   = {}

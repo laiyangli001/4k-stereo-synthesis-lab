@@ -3675,6 +3675,10 @@ def test_projection_layer_presenter_owns_backend_selection(monkeypatch):
     assert presenter.render_projection(enabled=True, updated_quad_eyes=(), **kwargs) == ["opengl"]
     viewer._use_d3d11 = True
     viewer._d3d11_native_renderer = Renderer()
+    viewer._interop_mode = "nv_dx"
+    viewer._panda3d_phase0_swapchain_probe_enabled = True
+    assert presenter.render_projection(enabled=True, updated_quad_eyes=(), **kwargs) == ["nv_dx"]
+    viewer._panda3d_phase0_swapchain_probe_enabled = False
     assert presenter.render_projection(enabled=True, updated_quad_eyes=(), **kwargs) == ["d3d11"]
     viewer._d3d11_native_renderer = None
     viewer._interop_mode = "nv_dx"
@@ -3682,7 +3686,7 @@ def test_projection_layer_presenter_owns_backend_selection(monkeypatch):
     viewer._interop_mode = "none"
     assert presenter.render_projection(enabled=True, updated_quad_eyes=(0,), **kwargs) == []
     assert presenter.render_projection(enabled=True, updated_quad_eyes=(), **kwargs) == []
-    assert calls == ["opengl", "d3d11", "nv_dx"]
+    assert calls == ["opengl", "nv_dx", "d3d11", "nv_dx"]
     assert viewer.inc_calls == [("openxr_projection_d3d11_no_interop_skip", 1)] * 2
 
 
@@ -3819,6 +3823,16 @@ def test_d3d11_projection_path_uses_native_renderer():
     frame_input = (SRC / "xr_viewer" / "openxr_frame_input.py").read_text(encoding="utf-8")
 
     assert "The native path renders the virtual screen into Projection layer" in d3d11
+    assert "D2S_PANDA3D_PHASE0_SWAPCHAIN_PROBE" in implementation
+    assert "self._panda3d_phase0_swapchain_probe_enabled" in implementation
+    assert "Panda3D Phase-0 swapchain probe enabled" in d3d11
+    assert "if self._panda3d_phase0_swapchain_probe_enabled:" in d3d11
+    assert "phase0_probe = bool(getattr(viewer, '_panda3d_phase0_swapchain_probe_enabled', False))" in presenter
+    assert "if phase0_probe and viewer._interop_mode == 'nv_dx':" in presenter
+    assert "phase0_probe=True" in presenter
+    assert "def _render_phase0_swapchain_probe" in presenter
+    assert "Panda3D Phase-0 probe rendering into acquired D3D11 swapchain" in presenter
+    assert "viewer._panda3d_phase0_probe_vao.render()" in presenter
     assert "if viewer._d3d11_native_renderer is not None:" in presenter
     assert "return self.render_d3d11_native(" in presenter
     assert "model = viewer._build_model_mat4()" in presenter
