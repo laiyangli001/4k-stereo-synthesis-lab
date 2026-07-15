@@ -61,7 +61,7 @@ Panda3D 的职责只到“画出当前帧的左右眼场景”。OpenXR 的 acqu
 
 ```python
 load_prc_file_data("d2s-panda", """
-window-type none
+window-type offscreen
 load-display pandagl
 audio-library-name null
 sync-video false
@@ -134,8 +134,10 @@ CUDA bridge 的 POC 需逐项证明：同 adapter、RGBA 格式、行方向、MS
 
 ### Phase 0：可行性闸门
 
+当前状态（2026-07-15）：已新增 `src/tools/panda3d_gltf_probe.py` 和 `xr_viewer.panda3d_probe`。本机使用 Panda3D 1.10.15、panda3d-gltf 1.3.0 检查当前 Artemis `environment.glb`，发现 GLB 本身有 **19** 个 animation、**38** 条 channel、**19** 个 animation target node，且这 **19** 个 target 全部属于 active scene；但 Panda3D 载入结果为 **0** 个 `Character`、**0** 个 `AnimBundleNode`。因此当前缺口不是 Unity 导出的动画目标断链，而是 `panda3d-gltf` 未暴露可驱动的 Panda runtime animation node；Artemis 动画的首个闸门尚未通过，不能接入 OpenXR。该探针会以 `--strict-animation` 返回退出码 2，作为此缺口的可重复证据。
+
 - 安装锁定版本的 `panda3d` 与 `panda3d-gltf`，记录 Python ABI、GPU driver、Panda 版本和插件版本。
-- 创建独立 `panda3d_probe.py`：加载 Artemis/控制器，离屏渲染两眼 PNG，播放 15 秒卫星动画。
+- 运行 `src/tools/panda3d_gltf_probe.py`：加载 Artemis/控制器并验证 glTF animation target 是否属于 active scene，以及 Panda runtime node 是否可驱动这些动画；离屏两眼 PNG 与 15 秒卫星动画只在这个闸门通过后实施。
 - 记录 Panda OpenGL vendor/renderer、Panda texture native handle 的可获取性、实际 offscreen texture format、同 adapter CUDA/D3D11 枚举结果。
 - 使用现有 D3D11 OpenXR session 做 NV_DX interop POC；只画测试色块和一个三角形，先不加载真实 GLB。
 
