@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
+
+
+class PandaBridgeUnavailable(RuntimeError):
+    """Raised when no concrete Panda3D-to-OpenXR bridge is active."""
 
 
 @dataclass(frozen=True)
@@ -14,6 +18,7 @@ class SwapchainImageRef:
     width: int
     height: int
     format: int | str
+    session_generation: int = 0
 
     def __post_init__(self) -> None:
         if self.eye_index not in (0, 1):
@@ -22,6 +27,36 @@ class SwapchainImageRef:
             raise ValueError("image_index must be non-negative")
         if self.width <= 0 or self.height <= 0:
             raise ValueError("swapchain image dimensions must be positive")
+        if self.session_generation < 0:
+            raise ValueError("session_generation must be non-negative")
+
+
+@dataclass(frozen=True)
+class SwapchainResourceKey:
+    session_generation: int
+    eye_index: int
+    image_index: int
+    width: int
+    height: int
+    format: int | str
+
+    @classmethod
+    def from_image(cls, image: SwapchainImageRef) -> "SwapchainResourceKey":
+        return cls(
+            session_generation=image.session_generation,
+            eye_index=image.eye_index,
+            image_index=image.image_index,
+            width=image.width,
+            height=image.height,
+            format=image.format,
+        )
+
+
+@dataclass(frozen=True)
+class CachedSwapchainResource:
+    key: SwapchainResourceKey
+    bridge_mode: str
+    handle: Any | None = None
 
 
 @dataclass(frozen=True)
@@ -35,10 +70,38 @@ class RenderEyesResult:
         return self.left_rendered and self.right_rendered
 
 
+@dataclass
 class PandaBridge:
-    """Abstract bridge placeholder for NV_DX or CUDA implementations."""
+    """Bridge facade for future NV_DX or CUDA implementations.
 
-    bridge_mode = "unimplemented"
+    This base class owns the cache-key policy required by the migration plan.
+    Concrete subclasses can populate resource handles after the real OpenXR
+    swapchain gate is validated.
+    """
+
+    bridge_mode: str = "unimplemented"
+    resources: dict[SwapchainResourceKey, CachedSwapchainResource] = field(default_factory=dict)
+    released: bool = False
+
+    def resource_key(self, image: SwapchainImageRef) -> SwapchainResourceKey:
+        return SwapchainResourceKey.from_image(image)
+
+    def ensure_resource(self, image: SwapchainImageRef) -> CachedSwapchainResource:
+        if self.released:
+            raise PandaBridgeUnavailable("PandaBridge has been released")
+        key = self.resource_key(image)
+        resource = self.resources.get(key)
+        if resource is None:
+            resource = CachedSwapchainResource(key=key, bridge_mode=self.bridge_mode)
+            self.resources[key] = resource
+        return resource
+
+    def invalidate_session(self, session_generation: int) -> None:
+        self.resources = {
+            key: resource
+            for key, resource in self.resources.items()
+            if key.session_generation != session_generation
+        }
 
     def render_eyes(
         self,
@@ -49,7 +112,12 @@ class PandaBridge:
         left_image: SwapchainImageRef,
         right_image: SwapchainImageRef,
     ) -> RenderEyesResult:
-        raise NotImplementedError("PandaBridge.render_eyes is not implemented yet")
+        self.ensure_resource(left_image)
+        self.ensure_resource(right_image)
+        raise PandaBridgeUnavailable(
+            "PandaBridge has no concrete NV_DX or CUDA implementation enabled yet"
+        )
 
     def release(self) -> None:
-        return None
+        self.resources.clear()
+        self.released = True

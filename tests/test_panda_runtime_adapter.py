@@ -2,7 +2,13 @@ from pathlib import Path
 
 import pytest
 
-from xr_viewer.panda_runtime.bridge import PandaBridge, RenderEyesResult, SwapchainImageRef
+from xr_viewer.panda_runtime.bridge import (
+    PandaBridge,
+    PandaBridgeUnavailable,
+    RenderEyesResult,
+    SwapchainImageRef,
+    SwapchainResourceKey,
+)
 from xr_viewer.panda_runtime.runtime import (
     GLTF_RENDERER_ENV_VAR,
     PandaFrameState,
@@ -148,6 +154,42 @@ def test_stereo_targets_can_create_panda_offscreen_targets():
     targets.release()
     assert targets.released
     assert targets.target_refs() == ()
+
+
+def test_panda_bridge_cache_key_includes_session_eye_image_size_and_format():
+    bridge = PandaBridge()
+    left = SwapchainImageRef(0, 3, object(), 100, 120, "rgba8", session_generation=2)
+    right = SwapchainImageRef(1, 4, object(), 100, 120, "rgba8", session_generation=2)
+
+    left_resource = bridge.ensure_resource(left)
+    right_resource = bridge.ensure_resource(right)
+
+    assert left_resource.key == SwapchainResourceKey(2, 0, 3, 100, 120, "rgba8")
+    assert right_resource.key == SwapchainResourceKey(2, 1, 4, 100, 120, "rgba8")
+    assert bridge.ensure_resource(left) is left_resource
+    assert len(bridge.resources) == 2
+
+    bridge.invalidate_session(2)
+    assert bridge.resources == {}
+
+
+def test_unimplemented_panda_bridge_fails_explicitly_after_caching_resources():
+    bridge = PandaBridge()
+
+    try:
+        bridge.render_eyes(
+            scene=object(),
+            targets=object(),
+            frame_state=object(),
+            left_image=SwapchainImageRef(0, 0, object(), 64, 64, "rgba8"),
+            right_image=SwapchainImageRef(1, 0, object(), 64, 64, "rgba8"),
+        )
+    except PandaBridgeUnavailable as exc:
+        assert "no concrete NV_DX or CUDA implementation" in str(exc)
+    else:
+        raise AssertionError("unimplemented PandaBridge must fail explicitly")
+
+    assert len(bridge.resources) == 2
 
 
 def test_panda_scene_renderer_facade_contract():
