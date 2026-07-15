@@ -17,7 +17,7 @@ https://github.com/laiyangli001/4k-stereo-synthesis-lab
 Current focus:
 
 ```text
-OpenXR projection-main stereo presentation, glTF 2.0 renderer compliance layer, Traditional/Cinema runtime output contracts, GUI/runtime progress visibility, render-size defaults, and real-device presentation/runtime handoff follow-ups
+OpenXR projection-main stereo presentation, Panda3D glTF OpenXR D3D11 migration, glTF 2.0 renderer compliance layer, Traditional/Cinema runtime output contracts, GUI/runtime progress visibility, render-size defaults, and real-device presentation/runtime handoff follow-ups
 ```
 
 Latest pushed task commit:
@@ -33,6 +33,7 @@ Canonical specs for current work:
 - `docs/35-OpenXR_Asynchronous_Decoupled_Rendering_Architecture_Report.md` - target OpenXR asynchronous decoupled rendering architecture.
 - `docs/36-OpenXR_Asynchronous_Decoupled_Rendering_Implementation_Plan.md` - implementation plan for the OpenXR asynchronous refactor; use it as the current plan for projection-layer main-screen presentation, optional Quad diagnostics/overlays, panorama background, GPU Glow, and wall reflection work.
 - `docs/38-gltf-2-renderer-compliance-layer-plan.md` - current plan for the OpenXR/local glTF 2.0 core renderer compliance layer: static mesh/material/texture/render-pass contracts plus runtime animation, skinning, morph targets, sparse/interleaved/normalized accessors, cameras/multi-scene, diagnostics, and mature runtime reuse evaluation.
+- `docs/39-panda3d-gltf-openxr-d3d11-migration-plan.md` - active Panda3D migration plan for replacing the self-authored glTF scene renderer with Panda3D OpenGL offscreen rendering bridged into the existing D3D11 OpenXR Projection swapchains; Phase 0/1 are code-backed, but real headset/OpenXR visibility is still the blocking gate.
 - `prompts/codex-refactor-prompt.md`
 - This file: `docs/00-api-handoff-progress.md`
 
@@ -56,6 +57,7 @@ Canonical specs for current work:
 - OpenXR Quad layer is not a reliable VDXR main stereo display path. The latest logs prove runtime left/right eye tensors differ, OpenGL shared-array Quad swapchains are created, and Quad headers submit `eye0 array=0` / `eye1 array=1`; however the headset still shows no useful 3D. Projection layer remains the known-good OpenXR stereo path because it uses standard per-eye projection views. Current code should keep the main screen off the Quad path.
 - OpenXR Glow / screen-light sampling must follow `docs/20-openxr-gpu-glow-guide.md`: use GPU source texture, low-resolution glow texture, shader/compute sampling, or future D3D/Vulkan GPU passes. Do not reintroduce realtime `.cpu()`, `.numpy()`, `glReadPixels()`, or `tex.read()` as screen-light sampling sources.
 - glTF environment/controller rendering now has a shared static compliance package, stable primitive/material/color/render-pass contracts, and OpenGL/D3D11/preview consumers for that current contract. It is not yet full glTF 2.0 core compliance: runtime animation, skinning, morph targets, sparse/interleaved/normalized accessor coverage, cameras, and multi-scene behavior remain open. Animated Artemis GLB exports prove this gap because external viewers can play the node animation while the current loader still bakes static node transforms into uploaded primitives.
+- Panda3D migration is an opt-in path, not the default renderer. Current code has Panda3D asset probes, node-animation sampling, screen/controller/ray frame-state adapters, Panda offscreen targets, NV_DX bridge plumbing, and Panda projection bridge diagnostics. The hard gate remains real headset/OpenXR runtime proof that `D2S_GLTF_RENDERER=panda3d` + D3D11/NV_DX renders visibly with correct eye pose, no sync/device errors, and no fallback to native.
 
 ## Future Work
 
@@ -73,10 +75,48 @@ Current task queue:
 8. Remove remaining compatibility redundancy after all consumers use the docs/01 contract: old snapshot/API aliases and debug-only fallback keys. Legacy parallax multiplier fields and historical render-scale numeric thresholds have been cleaned from the current runtime/config path and should now be guarded against regressions.
 9. Continue network_stream encoder transport work, especially RTMP / low-latency paths, without redefining stereo synthesis semantics.
 10. Keep `docs/02-desktop2stereo-engineering-design-specification.md` aligned to the `docs/01-Realtime-2d-to-3d-specification.md` eleven-step runtime flow.
-11. Execute the expanded `docs/38` glTF 2.0 core roadmap: keep validating the implemented static contract, then add TRS animation sampling, per-frame node matrices, per-primitive model matrices for animated nodes, and follow with skinning, morph targets, accessor completeness, cameras/multi-scene, and mature runtime reuse evaluation.
-12. Continue `docs/36` phase 2: harden the OpenXR frame loop so the headset presenter keeps refreshing from the last good Projection screen frame when runtime/capture/effects are slow, without backpressuring capture/runtime.
+11. Execute the expanded `docs/38` glTF 2.0 core roadmap while using `docs/39` as the active mature-runtime candidate: keep the self-authored static contract stable, but prioritize proving Panda3D can own glTF scene graph, animation, material, skybox, controller, and screen rendering before adding more custom renderer surface area.
+12. Continue `docs/39` Panda3D migration gate: run the real headset/OpenXR D3D11/NV_DX path and confirm the Panda diagnostics show success count > 0, failure count 0, bridge mode `nv_dx`, correct per-eye target sizes/image indices, empty error string, and useful timing fields.
+13. Continue `docs/36` phase 2: harden the OpenXR frame loop so the headset presenter keeps refreshing from the last good Projection screen frame when runtime/capture/effects are slow, without backpressuring capture/runtime.
 
 ## Current Status
+
+### 2026-07-15 Panda3D glTF OpenXR D3D11 Migration Progress
+
+Implemented locally in the current worktree for `docs/39-panda3d-gltf-openxr-d3d11-migration-plan.md`:
+
+- Added Panda3D Phase 0 probes for glTF load, node animation sampling, material semantics, offscreen OpenGL, and D3D11/NV_DX interop readiness.
+- Confirmed the Artemis GLB asset side exposes standard glTF animation data: 19 animations, 38 channels, 19 active-scene target nodes, and a 15 second satellite/spaceship animation runtime sample window through the custom `GltfNodeAnimationPlayer` boundary.
+- Added the `src/xr_viewer/panda_runtime/` adapter layer: `PandaSceneRenderer`, scene ownership, stereo target specs, screen texture target, controller ray target, frame-state snapshots, animation clock, diagnostics, and bridge contracts.
+- Added opt-in renderer selection through `D2S_GLTF_RENDERER=panda3d`; default remains native. Panda initialization or bridge failure must fall back with an explicit reason instead of producing silent black output.
+- Wired Panda frame-state update after `xrLocateViews` so the same frame snapshot carries eye views, controller poses, controller rays, screen pose, screen texture, and animation time.
+- Wired Panda projection bridge into `ProjectionLayerPresenter` behind the Panda renderer gate. The bridge acquires/waits OpenXR D3D11 swapchain images, calls `PandaSceneRenderer.render_eyes()`, records success/failure/timing diagnostics, and releases acquired images on both success and failure.
+- Added diagnostics for Panda bridge success count, failure count, last bridge mode, target sizes, image indices, last error, and CPU timing sections. The `Panda3D projection bridge diagnostics` log is capped to five successful reports; the general OpenXR `loop segments` performance log is also capped to five reports.
+- Kept OpenGL as the active test/default path for now. The earlier D3D11/Panda defaults were not made global; Panda/D3D11 must still be enabled deliberately for migration-gate testing.
+
+Verification run during this pass:
+
+```powershell
+src\python3\python.exe -m py_compile src\xr_viewer\openxr_frame_pipeline.py tests\test_openxr_runtime.py
+src\python3\python.exe -m pytest tests\test_openxr_runtime.py -q -p no:cacheprovider
+src\python3\python.exe -m py_compile src\xr_viewer\projection_layer_presenter.py tests\test_openxr_runtime.py
+src\python3\python.exe -m pytest tests\test_openxr_runtime.py -q -p no:cacheprovider
+```
+
+Result:
+
+```text
+OpenXR runtime focused suite: 132 passed, 2 warnings
+Latest local commits include:
+- b13a4b2 chore(openxr): cap loop segment perf logs
+- 4309bae chore(openxr): log panda bridge diagnostics
+```
+
+Remaining validation target:
+
+- Run a real headset/OpenXR runtime test with the Panda path enabled and confirm the bridge diagnostics show: `_panda_render_success_count > 0`, `_panda_render_failure_count == 0`, `_panda_render_last_bridge_mode == "nv_dx"`, expected per-eye target sizes, valid image indices, empty `_panda_render_error`, and populated `_panda_render_last_timing`.
+- Confirm Panda-rendered Artemis is actually visible in-headset, with correct head pose, controller/ray alignment, skybox/star/Saturn-ring visibility, and continuous satellite/spaceship animation.
+- Do not mark `docs/39` Phase 0 complete until the real OpenXR swapchain acquire/render/unlock/release path is visible and stable on target hardware.
 
 ### 2026-07-15 glTF 2.0 Core Compliance Plan Expansion
 
