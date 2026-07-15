@@ -3693,6 +3693,7 @@ def test_projection_layer_presenter_owns_backend_selection(monkeypatch):
     presenter.render_opengl = lambda *args, **kwargs: calls.append("opengl") or ["opengl"]
     presenter.render_d3d11_native = lambda *args, **kwargs: calls.append("d3d11") or ["d3d11"]
     presenter.render_nv_dx_interop = lambda *args, **kwargs: calls.append("nv_dx") or ["nv_dx"]
+    presenter.render_panda_bridge = lambda *args, **kwargs: calls.append("panda") or ["panda"]
     kwargs = dict(
         views=[],
         default_fov=object(),
@@ -3711,14 +3712,126 @@ def test_projection_layer_presenter_owns_backend_selection(monkeypatch):
     assert presenter.render_projection(enabled=True, updated_quad_eyes=(), **kwargs) == ["nv_dx"]
     viewer._panda3d_phase0_swapchain_probe_enabled = False
     assert presenter.render_projection(enabled=True, updated_quad_eyes=(), **kwargs) == ["d3d11"]
+    viewer._gltf_renderer_config = SimpleNamespace(panda3d_enabled=True)
+    viewer._panda_scene_renderer = object()
+    assert presenter.render_projection(enabled=True, updated_quad_eyes=(), **kwargs) == ["panda"]
+    viewer._gltf_renderer_config = None
+    viewer._panda_scene_renderer = None
     viewer._d3d11_native_renderer = None
     viewer._interop_mode = "nv_dx"
     assert presenter.render_projection(enabled=True, updated_quad_eyes=(), **kwargs) == ["nv_dx"]
     viewer._interop_mode = "none"
     assert presenter.render_projection(enabled=True, updated_quad_eyes=(0,), **kwargs) == []
     assert presenter.render_projection(enabled=True, updated_quad_eyes=(), **kwargs) == []
-    assert calls == ["opengl", "nv_dx", "d3d11", "nv_dx"]
+    assert calls == ["opengl", "nv_dx", "d3d11", "panda", "nv_dx"]
     assert viewer.inc_calls == [("openxr_projection_d3d11_no_interop_skip", 1)] * 2
+
+
+def test_panda_projection_bridge_acquires_renders_and_releases_both_eyes(monkeypatch):
+    import xr_viewer.projection_layer_presenter as presenter_module
+    from xr_viewer.projection_layer_presenter import ProjectionLayerPresenter
+
+    events = []
+
+    class FakeXr:
+        @staticmethod
+        def acquire_swapchain_image(swapchain, _info):
+            events.append(("acquire", swapchain))
+            return 0
+
+        @staticmethod
+        def release_swapchain_image(swapchain, _info):
+            events.append(("release", swapchain))
+
+    class Renderer:
+        def __init__(self):
+            self.rebuilds = []
+            self.images = []
+
+        def rebuild_targets(self, left, right):
+            self.rebuilds.append((left, right))
+
+        def render_eyes(self, left_image, right_image):
+            self.images.append((left_image, right_image))
+            return SimpleNamespace(rendered=True, bridge_mode="test")
+
+    monkeypatch.setattr(presenter_module, "xr", FakeXr)
+    renderer = Renderer()
+    calls = []
+    viewer = SimpleNamespace(
+        _panda_scene_renderer=renderer,
+        _xr_swapchains={0: "sc0", 1: "sc1"},
+        _xr_sc_acquire_info=object(),
+        _xr_sc_release_info=object(),
+        _swapchain_images={0: [SimpleNamespace(texture="tex0")], 1: [SimpleNamespace(texture="tex1")]},
+        _swapchain_sizes={0: (100, 120), 1: (101, 121)},
+        _d3d11_swapchain_fmt=87,
+        _panda_swapchain_session_generation=5,
+        _wait_swapchain_image=lambda swapchain: events.append(("wait", swapchain)),
+        _breakdown_inc=lambda name, amount=1: calls.append((name, amount)),
+        _record_projection_screen_presented=lambda: calls.append("presented"),
+    )
+    presenter = ProjectionLayerPresenter(viewer)
+    presenter._projection_view = lambda swapchain, width, height, view, _fov: (swapchain, width, height, view)
+
+    result = presenter.render_panda_bridge(["view0", "view1"], default_fov=object())
+
+    assert result == [("sc0", 100, 120, "view0"), ("sc1", 101, 121, "view1")]
+    assert events == [("acquire", "sc0"), ("wait", "sc0"), ("acquire", "sc1"), ("wait", "sc1"), ("release", "sc0"), ("release", "sc1")]
+    assert renderer.rebuilds[0][0].width == 100
+    assert renderer.rebuilds[0][1].height == 121
+    left_image, right_image = renderer.images[0]
+    assert left_image.texture == "tex0"
+    assert right_image.texture == "tex1"
+    assert left_image.session_generation == 5
+    assert calls == [("openxr_projection_panda_present", 1), "presented"]
+
+
+def test_panda_projection_bridge_failure_releases_and_falls_back(monkeypatch):
+    import xr_viewer.projection_layer_presenter as presenter_module
+    from xr_viewer.projection_layer_presenter import ProjectionLayerPresenter
+
+    events = []
+
+    class FakeXr:
+        @staticmethod
+        def acquire_swapchain_image(swapchain, _info):
+            events.append(("acquire", swapchain))
+            return 0
+
+        @staticmethod
+        def release_swapchain_image(swapchain, _info):
+            events.append(("release", swapchain))
+
+    class Renderer:
+        def rebuild_targets(self, _left, _right):
+            return None
+
+        def render_eyes(self, _left_image, _right_image):
+            raise RuntimeError("bridge down")
+
+    monkeypatch.setattr(presenter_module, "xr", FakeXr)
+    calls = []
+    viewer = SimpleNamespace(
+        _panda_scene_renderer=Renderer(),
+        _xr_swapchains={0: "sc0", 1: "sc1"},
+        _xr_sc_acquire_info=object(),
+        _xr_sc_release_info=object(),
+        _swapchain_images={0: [SimpleNamespace(texture="tex0")], 1: [SimpleNamespace(texture="tex1")]},
+        _swapchain_sizes={0: (100, 100), 1: (100, 100)},
+        _d3d11_swapchain_fmt=87,
+        _wait_swapchain_image=lambda swapchain: events.append(("wait", swapchain)),
+        _breakdown_inc=lambda name, amount=1: calls.append((name, amount)),
+        _record_projection_screen_presented=lambda: calls.append("presented"),
+    )
+
+    assert ProjectionLayerPresenter(viewer).render_panda_bridge([None, None], object()) == []
+    assert ("release", "sc0") in events
+    assert ("release", "sc1") in events
+    assert ("openxr_projection_panda_failed", 1) in calls
+    assert "presented" not in calls
+    assert "bridge down" in viewer._panda_render_error
+    assert viewer._panda_render_error_logged is True
 
 
 def test_d3d11_projection_failure_does_not_mark_screen_presented(monkeypatch):

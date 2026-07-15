@@ -14,6 +14,8 @@ from OpenGL.GL import (
 )
 
 from . import d3d_interop as _d3d_interop
+from .panda_runtime.bridge import SwapchainImageRef
+from .panda_runtime.stereo_targets import StereoTargetSpec
 from .xr_math import _fov_to_proj_mat4, _fov_to_proj_mat4_d3d, _pose_to_view_mat4
 
 try:
@@ -53,6 +55,13 @@ class ProjectionLayerPresenter:
                 default_proj,
                 phase0_probe=True,
             )
+        if self._panda_bridge_enabled():
+            panda_views = self.render_panda_bridge(
+                views,
+                default_fov,
+            )
+            if panda_views:
+                return panda_views
         if viewer._d3d11_native_renderer is not None:
             return self.render_d3d11_native(
                 views,
@@ -67,6 +76,70 @@ class ProjectionLayerPresenter:
             )
         viewer._breakdown_inc('openxr_projection_d3d11_no_interop_skip')
         return []
+
+    def _panda_bridge_enabled(self):
+        viewer = self.viewer
+        config = getattr(viewer, '_gltf_renderer_config', None)
+        return bool(
+            getattr(config, 'panda3d_enabled', False)
+            and getattr(viewer, '_panda_scene_renderer', None) is not None
+            and getattr(viewer, '_use_d3d11', False)
+        )
+
+    def render_panda_bridge(self, views, default_fov):
+        viewer = self.viewer
+        renderer = getattr(viewer, '_panda_scene_renderer', None)
+        if renderer is None:
+            return []
+        acquired = []
+        released = set()
+        try:
+            for eye_index in range(2):
+                swapchain = viewer._xr_swapchains[eye_index]
+                img_index = xr.acquire_swapchain_image(swapchain, viewer._xr_sc_acquire_info)
+                viewer._wait_swapchain_image(swapchain)
+                sc_image = viewer._swapchain_images[eye_index][img_index]
+                sc_w, sc_h = viewer._swapchain_sizes[eye_index]
+                view = views[eye_index] if views and views[eye_index] else None
+                acquired.append((eye_index, swapchain, img_index, sc_image, sc_w, sc_h, view))
+
+            left = acquired[0]
+            right = acquired[1]
+            fmt = getattr(viewer, '_d3d11_swapchain_fmt', 'rgba8')
+            generation = int(getattr(viewer, '_panda_swapchain_session_generation', 0) or 0)
+            renderer.rebuild_targets(
+                StereoTargetSpec(left[4], left[5], fmt),
+                StereoTargetSpec(right[4], right[5], fmt),
+            )
+            result = renderer.render_eyes(
+                SwapchainImageRef(left[0], left[2], left[3].texture, left[4], left[5], fmt, generation),
+                SwapchainImageRef(right[0], right[2], right[3].texture, right[4], right[5], fmt, generation),
+            )
+            if not result.rendered:
+                raise RuntimeError(f"Panda bridge did not render both eyes: {result.bridge_mode}")
+
+            eye_layer_views = []
+            for eye_index, swapchain, _img_index, _sc_image, sc_w, sc_h, view in acquired:
+                xr.release_swapchain_image(swapchain, viewer._xr_sc_release_info)
+                released.add(eye_index)
+                eye_layer_views.append(self._projection_view(swapchain, sc_w, sc_h, view, default_fov))
+            viewer._breakdown_inc('openxr_projection_panda_present')
+            viewer._record_projection_screen_presented()
+            return eye_layer_views
+        except Exception as exc:
+            for eye_index, swapchain, *_rest in acquired:
+                if eye_index in released:
+                    continue
+                try:
+                    xr.release_swapchain_image(swapchain, viewer._xr_sc_release_info)
+                except Exception:
+                    pass
+            viewer._breakdown_inc('openxr_projection_panda_failed')
+            viewer._panda_render_error = f"{type(exc).__name__}: {exc}"
+            if not getattr(viewer, '_panda_render_error_logged', False):
+                print(f"[OpenXRViewer] Panda3D projection bridge failed, falling back to native: {type(exc).__name__}: {exc}")
+                viewer._panda_render_error_logged = True
+            return []
 
     def render_d3d11_native(self, views, default_fov, default_proj_d3d):
         viewer = self.viewer
