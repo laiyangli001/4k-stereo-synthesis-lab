@@ -15,6 +15,8 @@ from typing import Any
 
 from pygltflib import GLTF2
 
+from xr_viewer.panda3d_node_animation import GltfNodeAnimationRuntime
+
 
 @dataclass(frozen=True)
 class Panda3DProbeReport:
@@ -28,6 +30,9 @@ class Panda3DProbeReport:
     panda_character_count: int
     panda_animation_bundle_count: int
     panda_animation_names: tuple[str, ...]
+    custom_node_animation_channel_count: int
+    custom_node_animation_bound_count: int
+    custom_node_animation_duration_seconds: float
     animation_runtime_ready: bool
     animation_runtime_reason: str
 
@@ -85,11 +90,18 @@ def _runtime_status(
     gltf_animation_count: int,
     panda_character_count: int,
     panda_animation_bundle_count: int,
+    custom_node_animation_bound_count: int = 0,
+    gltf_animation_target_node_count: int = 0,
 ) -> tuple[bool, str]:
     if not gltf_animation_count:
         return True, "asset has no glTF animations"
     if panda_character_count or panda_animation_bundle_count:
         return True, "Panda3D loader exposed animation runtime nodes"
+    if (
+        gltf_animation_target_node_count
+        and custom_node_animation_bound_count >= gltf_animation_target_node_count
+    ):
+        return True, "custom glTF node animation runtime can drive all target nodes"
     return False, "glTF animations exist but Panda3D exposed no runtime animation nodes"
 
 
@@ -134,11 +146,14 @@ def inspect_panda3d_asset(asset_path: str | Path) -> Panda3DProbeReport:
         get_names = getattr(character.node(), "get_anim_names", None)
         if callable(get_names):
             animation_names.extend(str(name) for name in get_names())
+    custom_runtime = GltfNodeAnimationRuntime(gltf_document, root)
 
     ready, reason = _runtime_status(
         animation_count,
         character_nodes.get_num_paths(),
         len(bundle_nodes),
+        custom_runtime.bound_node_count,
+        len(animation_target_ids),
     )
     return Panda3DProbeReport(
         asset_path=str(path),
@@ -151,6 +166,9 @@ def inspect_panda3d_asset(asset_path: str | Path) -> Panda3DProbeReport:
         panda_character_count=character_nodes.get_num_paths(),
         panda_animation_bundle_count=len(bundle_nodes),
         panda_animation_names=tuple(sorted(set(animation_names))),
+        custom_node_animation_channel_count=custom_runtime.channel_count,
+        custom_node_animation_bound_count=custom_runtime.bound_node_count,
+        custom_node_animation_duration_seconds=custom_runtime.duration_seconds,
         animation_runtime_ready=ready,
         animation_runtime_reason=reason,
     )

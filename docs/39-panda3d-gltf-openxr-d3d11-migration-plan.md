@@ -134,10 +134,10 @@ CUDA bridge 的 POC 需逐项证明：同 adapter、RGBA 格式、行方向、MS
 
 ### Phase 0：可行性闸门
 
-当前状态（2026-07-15）：已新增 `src/tools/panda3d_gltf_probe.py` 和 `xr_viewer.panda3d_probe`。本机使用 Panda3D 1.10.15、panda3d-gltf 1.3.0 检查当前 Artemis `environment.glb`，发现 GLB 本身有 **19** 个 animation、**38** 条 channel、**19** 个 animation target node，且这 **19** 个 target 全部属于 active scene；但 Panda3D 载入结果为 **0** 个 `Character`、**0** 个 `AnimBundleNode`。因此当前缺口不是 Unity 导出的动画目标断链，而是 `panda3d-gltf` 未暴露可驱动的 Panda runtime animation node；Artemis 动画的首个闸门尚未通过，不能接入 OpenXR。该探针会以 `--strict-animation` 返回退出码 2，作为此缺口的可重复证据。
+当前状态（2026-07-15）：已新增 `src/tools/panda3d_gltf_probe.py`、`xr_viewer.panda3d_probe` 和 `xr_viewer.panda3d_node_animation`。本机使用 Panda3D 1.10.15、panda3d-gltf 1.3.0 检查当前 Artemis `environment.glb`，发现 GLB 本身有 **19** 个 animation、**38** 条 channel、**19** 个 animation target node，且这 **19** 个 target 全部属于 active scene。`panda3d-gltf` 原生载入结果仍为 **0** 个 `Character`、**0** 个 `AnimBundleNode`，但自定义 glTF node animation runtime 已能绑定 **19/19** 个 target node、采样 **38** 条 channel，并确认动画时长为 **15.0 秒**；`--strict-animation` 现在返回退出码 0。动画子闸门已通过，Phase 0 仍需继续验证离屏渲染和 OpenGL→D3D11 互操作。
 
 - 安装锁定版本的 `panda3d` 与 `panda3d-gltf`，记录 Python ABI、GPU driver、Panda 版本和插件版本。
-- 运行 `src/tools/panda3d_gltf_probe.py`：加载 Artemis/控制器并验证 glTF animation target 是否属于 active scene，以及 Panda runtime node 是否可驱动这些动画；离屏两眼 PNG 与 15 秒卫星动画只在这个闸门通过后实施。
+- 运行 `src/tools/panda3d_gltf_probe.py`：加载 Artemis/控制器并验证 glTF animation target 是否属于 active scene，以及 Panda runtime node 是否可驱动这些动画；Artemis 已由自定义 node animation runtime 通过，控制器和后续资产仍需按同一探针补验。
 - 记录 Panda OpenGL vendor/renderer、Panda texture native handle 的可获取性、实际 offscreen texture format、同 adapter CUDA/D3D11 枚举结果。
 - 使用现有 D3D11 OpenXR session 做 NV_DX interop POC；只画测试色块和一个三角形，先不加载真实 GLB。
 
