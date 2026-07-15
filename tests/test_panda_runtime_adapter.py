@@ -12,7 +12,7 @@ from xr_viewer.panda_runtime.runtime import (
     resolve_gltf_renderer_mode,
 )
 from xr_viewer.panda_runtime.scene import PandaSceneGraph
-from xr_viewer.panda_runtime.stereo_targets import StereoTargetSpec
+from xr_viewer.panda_runtime.stereo_targets import StereoTargetSpec, StereoTargets
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -114,6 +114,40 @@ def test_panda_scene_graph_can_own_panda_loaded_environment_root():
     scene.release()
     assert scene.released
     assert scene.loaded_assets() == ()
+
+
+def test_stereo_targets_default_mode_stays_import_light():
+    targets = StereoTargets()
+
+    targets.rebuild(StereoTargetSpec(64, 64, "rgba8"), StereoTargetSpec(64, 64, "rgba8"))
+
+    left, right = targets.target_refs()
+    assert targets.ready
+    assert targets.generation == 1
+    assert not left.created_with_panda
+    assert not right.created_with_panda
+    assert not left.texture_native_id_available
+    assert not right.texture_native_id_available
+
+
+def test_stereo_targets_can_create_panda_offscreen_targets():
+    pytest.importorskip("panda3d")
+    targets = StereoTargets(create_panda_targets=True)
+
+    targets.rebuild(StereoTargetSpec(64, 64, "rgba8"), StereoTargetSpec(64, 64, "rgba8"))
+
+    left, right = targets.target_refs()
+    assert targets.ready
+    assert left.created_with_panda
+    assert right.created_with_panda
+    assert left.texture_native_id_available
+    assert right.texture_native_id_available
+    assert left.buffer_name == "d2s-panda-eye-0"
+    assert right.buffer_name == "d2s-panda-eye-1"
+
+    targets.release()
+    assert targets.released
+    assert targets.target_refs() == ()
 
 
 def test_panda_scene_renderer_facade_contract():
