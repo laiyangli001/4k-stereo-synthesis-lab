@@ -13,6 +13,12 @@ from xr_viewer.panda_runtime.controller_ray import (
     PandaControllerRayGeometryError,
     PandaControllerRayGeometryTarget,
 )
+from xr_viewer.panda_runtime.frame_source import (
+    PandaFrameSourceInput,
+    build_panda_frame_state,
+    controller_ray_from_vectors,
+    mat4_to_panda_pose,
+)
 from xr_viewer.panda_runtime.runtime import (
     GLTF_RENDERER_ENV_VAR,
     PandaAnimationClock,
@@ -468,6 +474,47 @@ def test_panda_controller_ray_validates_vectors_and_length():
         PandaControllerRay((0.0, 0.0), (0.0, 0.0, -1.0))
     with pytest.raises(ValueError, match="positive"):
         PandaControllerRay((0.0, 0.0, 0.0), (0.0, 0.0, -1.0), length=0.0)
+
+
+def test_panda_frame_source_converts_matrices_and_rays_to_frame_state():
+    screen_mat = [
+        [1.0, 0.0, 0.0, 4.0],
+        [0.0, 1.0, 0.0, 5.0],
+        [0.0, 0.0, 1.0, 6.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ]
+    eye_mat = [
+        [1.0, 0.0, 0.0, 0.1],
+        [0.0, 1.0, 0.0, 0.2],
+        [0.0, 0.0, 1.0, 0.3],
+        [0.0, 0.0, 0.0, 1.0],
+    ]
+    screen_texture = PandaScreenTextureFrame(2, 2, payload=bytes(range(16)))
+    ray = controller_ray_from_vectors((1, 2, 3), (0, 0, -1), length=7.0, hit_target="screen")
+
+    frame_state = build_panda_frame_state(
+        PandaFrameSourceInput(
+            predicted_display_time=12.5,
+            frame_index=99,
+            eye_pose_mats=(eye_mat, None),
+            controller_pose_mats={"left": screen_mat},
+            controller_rays={"left": ray},
+            screen_pose_mat=screen_mat,
+            screen_texture=screen_texture,
+        )
+    )
+
+    assert frame_state.predicted_display_time == pytest.approx(12.5)
+    assert frame_state.frame_index == 99
+    assert frame_state.eye_views[0].pose.position == pytest.approx((0.1, 0.2, 0.3))
+    assert frame_state.eye_views[1].pose is None
+    assert frame_state.controller_poses["left"].position == pytest.approx((4.0, 5.0, 6.0))
+    assert frame_state.controller_rays["left"] is ray
+    assert frame_state.screen_pose.position == pytest.approx((4.0, 5.0, 6.0))
+    assert frame_state.screen_texture is screen_texture
+
+    pose = mat4_to_panda_pose(screen_mat)
+    assert pose.orientation == pytest.approx((0.0, 0.0, 0.0, 1.0))
 
 
 def test_panda_frame_state_validates_same_frame_eye_views():

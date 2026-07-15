@@ -8,6 +8,7 @@ context.
 from .bridge import PandaBridgeUnavailable, SwapchainResourceKey
 from .controller_ray import PandaControllerRayGeometryError, PandaControllerRayGeometryTarget
 from .diagnostics import PandaRuntimeSnapshot
+from .frame_source import PandaFrameSourceError, PandaFrameSourceInput, build_panda_frame_state
 from .runtime import (
     GLTF_RENDERER_ENV_VAR,
     PandaAnimationClock,
@@ -31,6 +32,8 @@ __all__ = [
     "PandaControllerRayGeometryError",
     "PandaControllerRayGeometryTarget",
     "PandaEyeView",
+    "PandaFrameSourceError",
+    "PandaFrameSourceInput",
     "PandaFrameState",
     "PandaPose",
     "PandaRuntimeConfig",
@@ -41,5 +44,6 @@ __all__ = [
     "PandaScreenTextureUploadError",
     "PandaScreenTextureUploadTarget",
     "SwapchainResourceKey",
+    "build_panda_frame_state",
     "resolve_gltf_renderer_mode",
 ]
