@@ -44,6 +44,14 @@ class _RecordingBridge(PandaBridge):
         self.released = True
 
 
+class _FakeControllerRoot:
+    def __init__(self):
+        self.pos_quat = None
+
+    def set_pos_quat(self, pos, quat):
+        self.pos_quat = (pos, quat)
+
+
 def test_gltf_renderer_selector_defaults_to_native():
     config = resolve_gltf_renderer_mode({})
 
@@ -143,10 +151,30 @@ def test_panda_scene_graph_can_own_panda_loaded_environment_root():
     assert scene.snapshot.screen_pose_present is True
     assert scene.snapshot.screen_texture_present is True
     assert scene.snapshot.eye_view_count == 2
+    assert scene.snapshot.applied_controller_hands == ()
 
     scene.release()
     assert scene.released
     assert scene.loaded_assets() == ()
+
+
+def test_panda_scene_graph_applies_controller_pose_to_loaded_roots():
+    pytest.importorskip("panda3d")
+    scene = PandaSceneGraph()
+    root = _FakeControllerRoot()
+    scene._controller_roots["left"] = root
+    pose = PandaPose((1.0, 2.0, 3.0), (0.0, 0.0, 0.0, 1.0))
+
+    scene.update_frame_state(PandaFrameState(controller_poses={"left": pose}))
+
+    assert scene.snapshot.applied_controller_hands == ("left",)
+    assert root.pos_quat is not None
+    pos, quat = root.pos_quat
+    assert tuple(round(pos[index], 4) for index in range(3)) == (1.0, 2.0, 3.0)
+    assert quat.get_r() == pytest.approx(1.0)
+    assert quat.get_i() == pytest.approx(0.0)
+    assert quat.get_j() == pytest.approx(0.0)
+    assert quat.get_k() == pytest.approx(0.0)
 
 
 def test_stereo_targets_default_mode_stays_import_light():
@@ -254,6 +282,7 @@ def test_panda_runtime_diagnostics_snapshot_summarizes_assets_targets_and_bridge
     assert snapshot.scene_screen_pose_present is True
     assert snapshot.scene_screen_texture_present is False
     assert snapshot.scene_eye_view_count == 2
+    assert snapshot.scene_applied_controller_hands == ()
     assert snapshot.event_count == 2
     assert snapshot.events == ("environment_loaded", "stereo_targets_rebuilt")
     assert snapshot.scene_assets[0]["role"] == "environment"

@@ -27,6 +27,7 @@ class PandaSceneSnapshot:
     screen_pose_present: bool = False
     screen_texture_present: bool = False
     eye_view_count: int = 0
+    applied_controller_hands: tuple[str, ...] = ()
 
 
 @dataclass
@@ -70,7 +71,8 @@ class PandaSceneGraph:
     def update_frame_state(self, frame_state: Any) -> None:
         self._ensure_live()
         self.frame_state = frame_state
-        self.snapshot = _snapshot_from_frame_state(frame_state)
+        applied_controller_hands = self._apply_controller_poses(frame_state)
+        self.snapshot = _snapshot_from_frame_state(frame_state, applied_controller_hands)
         animation_time = getattr(frame_state, "animation_time_seconds", None)
         if animation_time is not None:
             self._apply_animation_time(float(animation_time))
@@ -102,6 +104,17 @@ class PandaSceneGraph:
         for player in self._controller_animation_players.values():
             player.set_time_seconds(time_seconds)
 
+    def _apply_controller_poses(self, frame_state: Any) -> tuple[str, ...]:
+        controller_poses = getattr(frame_state, "controller_poses", {}) or {}
+        applied: list[str] = []
+        for hand, root in sorted(self._controller_roots.items()):
+            pose = controller_poses.get(hand)
+            if pose is None:
+                continue
+            if _apply_pose_to_node_path(root, pose):
+                applied.append(hand)
+        return tuple(applied)
+
     def _make_asset_ref(self, role: str, asset_path: str) -> tuple[PandaAssetRef, Any | None, Any | None]:
         path = str(Path(asset_path))
         if not self.load_panda_assets:
@@ -131,7 +144,10 @@ class PandaSceneGraph:
             raise RuntimeError("PandaSceneGraph has been released")
 
 
-def _snapshot_from_frame_state(frame_state: Any) -> PandaSceneSnapshot:
+def _snapshot_from_frame_state(
+    frame_state: Any,
+    applied_controller_hands: tuple[str, ...] = (),
+) -> PandaSceneSnapshot:
     eye_views = getattr(frame_state, "eye_views", ()) or ()
     controller_poses = getattr(frame_state, "controller_poses", {}) or {}
     return PandaSceneSnapshot(
@@ -140,7 +156,25 @@ def _snapshot_from_frame_state(frame_state: Any) -> PandaSceneSnapshot:
         screen_pose_present=getattr(frame_state, "screen_pose", None) is not None,
         screen_texture_present=getattr(frame_state, "screen_texture", None) is not None,
         eye_view_count=sum(1 for eye_view in eye_views if eye_view is not None),
+        applied_controller_hands=applied_controller_hands,
     )
+
+
+def _apply_pose_to_node_path(node_path: Any, pose: Any) -> bool:
+    position = getattr(pose, "position", None)
+    orientation = getattr(pose, "orientation", None)
+    if position is None or orientation is None:
+        return False
+    if len(position) != 3 or len(orientation) != 4:
+        return False
+    if not hasattr(node_path, "set_pos_quat"):
+        return False
+    from panda3d.core import LPoint3, LQuaternion
+
+    x, y, z = (float(value) for value in position)
+    qx, qy, qz, qw = (float(value) for value in orientation)
+    node_path.set_pos_quat(LPoint3(x, y, z), LQuaternion(qw, qx, qy, qz))
+    return True
 
 
 def _load_panda_root(asset_path: str) -> Any:
