@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+import json
 import time
+from typing import Any, Mapping
 
 
 @dataclass(frozen=True)
@@ -11,6 +13,23 @@ class PandaRuntimeEvent:
     name: str
     detail: str
     timestamp_seconds: float
+
+
+@dataclass(frozen=True)
+class PandaRuntimeSnapshot:
+    released: bool
+    scene_assets: tuple[Mapping[str, object], ...]
+    target_generation: int
+    target_ready: bool
+    target_refs: tuple[Mapping[str, object], ...]
+    bridge_mode: str
+    bridge_resource_count: int
+    bridge_resource_keys: tuple[str, ...]
+    event_count: int
+    events: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, object]:
+        return asdict(self)
 
 
 @dataclass
@@ -31,3 +50,74 @@ class PandaRuntimeDiagnostics:
             "event_count": len(self.events),
             "events": [event.name for event in self.events],
         }
+
+    def snapshot(self, renderer: Any) -> PandaRuntimeSnapshot:
+        scene = getattr(renderer, "scene", None)
+        targets = getattr(renderer, "targets", None)
+        bridge = getattr(renderer, "bridge", None)
+        return PandaRuntimeSnapshot(
+            released=bool(getattr(renderer, "released", False)),
+            scene_assets=_scene_asset_summary(scene),
+            target_generation=int(getattr(targets, "generation", 0) or 0),
+            target_ready=bool(getattr(targets, "ready", False)),
+            target_refs=_target_ref_summary(targets),
+            bridge_mode=str(getattr(bridge, "bridge_mode", "")),
+            bridge_resource_count=len(getattr(bridge, "resources", {}) or {}),
+            bridge_resource_keys=_bridge_resource_key_summary(bridge),
+            event_count=len(self.events),
+            events=tuple(event.name for event in self.events),
+        )
+
+    def snapshot_json(self, renderer: Any) -> str:
+        return json.dumps(self.snapshot(renderer).to_dict(), ensure_ascii=False, indent=2, sort_keys=True)
+
+
+def _scene_asset_summary(scene: Any) -> tuple[Mapping[str, object], ...]:
+    loaded_assets = getattr(scene, "loaded_assets", None)
+    if not callable(loaded_assets):
+        return ()
+    return tuple(
+        {
+            "role": getattr(asset, "role", ""),
+            "path": getattr(asset, "path", ""),
+            "loaded_with_panda": bool(getattr(asset, "loaded_with_panda", False)),
+            "node_count": int(getattr(asset, "node_count", 0) or 0),
+            "geom_count": int(getattr(asset, "geom_count", 0) or 0),
+        }
+        for asset in loaded_assets()
+    )
+
+
+def _target_ref_summary(targets: Any) -> tuple[Mapping[str, object], ...]:
+    target_refs = getattr(targets, "target_refs", None)
+    if not callable(target_refs):
+        return ()
+    refs = target_refs()
+    return tuple(
+        {
+            "eye_index": int(getattr(ref, "eye_index", -1)),
+            "width": int(getattr(getattr(ref, "spec", None), "width", 0) or 0),
+            "height": int(getattr(getattr(ref, "spec", None), "height", 0) or 0),
+            "format": getattr(getattr(ref, "spec", None), "format", ""),
+            "created_with_panda": bool(getattr(ref, "created_with_panda", False)),
+            "texture_native_id_available": bool(
+                getattr(ref, "texture_native_id_available", False)
+            ),
+            "buffer_name": getattr(ref, "buffer_name", ""),
+        }
+        for ref in refs
+    )
+
+
+def _bridge_resource_key_summary(bridge: Any) -> tuple[str, ...]:
+    resources = getattr(bridge, "resources", {}) or {}
+    keys = []
+    for key in resources:
+        keys.append(
+            f"session={getattr(key, 'session_generation', '')}:"
+            f"eye={getattr(key, 'eye_index', '')}:"
+            f"image={getattr(key, 'image_index', '')}:"
+            f"size={getattr(key, 'width', '')}x{getattr(key, 'height', '')}:"
+            f"format={getattr(key, 'format', '')}"
+        )
+    return tuple(sorted(keys))

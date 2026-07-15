@@ -192,6 +192,33 @@ def test_unimplemented_panda_bridge_fails_explicitly_after_caching_resources():
     assert len(bridge.resources) == 2
 
 
+def test_panda_runtime_diagnostics_snapshot_summarizes_assets_targets_and_bridge():
+    bridge = PandaBridge()
+    bridge.ensure_resource(SwapchainImageRef(0, 2, object(), 64, 72, "rgba8", session_generation=5))
+    renderer = PandaSceneRenderer(bridge=bridge)
+
+    renderer.load_environment("Artemis/environment.glb")
+    renderer.rebuild_targets(
+        StereoTargetSpec(64, 72, "rgba8"),
+        StereoTargetSpec(64, 72, "rgba8"),
+    )
+    snapshot = renderer.diagnostics_snapshot()
+    snapshot_json = renderer.diagnostics_json()
+
+    assert snapshot.released is False
+    assert snapshot.event_count == 2
+    assert snapshot.events == ("environment_loaded", "stereo_targets_rebuilt")
+    assert snapshot.scene_assets[0]["role"] == "environment"
+    assert snapshot.target_ready
+    assert snapshot.target_generation == 1
+    assert snapshot.target_refs[0]["eye_index"] == 0
+    assert snapshot.bridge_mode == "unimplemented"
+    assert snapshot.bridge_resource_count == 1
+    assert snapshot.bridge_resource_keys == ("session=5:eye=0:image=2:size=64x72:format=rgba8",)
+    assert '"bridge_resource_count": 1' in snapshot_json
+    assert '"scene_assets"' in snapshot_json
+
+
 def test_panda_scene_renderer_facade_contract():
     bridge = _RecordingBridge()
     renderer = PandaSceneRenderer(bridge=bridge)

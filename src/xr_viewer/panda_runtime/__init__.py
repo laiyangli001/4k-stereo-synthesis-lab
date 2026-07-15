@@ -6,6 +6,7 @@ context.
 """
 
 from .bridge import PandaBridgeUnavailable, SwapchainResourceKey
+from .diagnostics import PandaRuntimeSnapshot
 from .runtime import (
     GLTF_RENDERER_ENV_VAR,
     PandaFrameState,
@@ -20,6 +21,7 @@ __all__ = [
     "PandaBridgeUnavailable",
     "PandaFrameState",
     "PandaRuntimeConfig",
+    "PandaRuntimeSnapshot",
     "PandaRuntimeUnavailable",
     "PandaSceneRenderer",
     "SwapchainResourceKey",

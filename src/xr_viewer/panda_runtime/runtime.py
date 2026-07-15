@@ -150,6 +150,12 @@ class PandaSceneRenderer:
             right_image=right_image,
         )
 
+    def diagnostics_snapshot(self) -> Any:
+        return self.diagnostics.snapshot(self)
+
+    def diagnostics_json(self) -> str:
+        return self.diagnostics.snapshot_json(self)
+
     def release(self) -> None:
         if self._released:
             return
