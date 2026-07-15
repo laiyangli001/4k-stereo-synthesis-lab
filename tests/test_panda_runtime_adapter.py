@@ -132,6 +132,7 @@ def test_d3d11_init_resolves_gltf_renderer_selector_without_replacing_native_pat
 
     assert "resolve_gltf_renderer_mode()" in source
     assert "_gltf_renderer_config" in source
+    assert "PandaSceneRenderer() if self._gltf_renderer_config.panda3d_requested else None" in source
     assert "D3D11 native renderer active" in source
     assert "self._d3d11_native_renderer = D3D11NativeRenderer" in source
 

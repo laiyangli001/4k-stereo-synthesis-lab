@@ -41,6 +41,12 @@ def update_panda_frame_state_from_viewer(
         return None
     viewer._panda_frame_state = frame_state
     viewer._panda_frame_state_error = ""
+    renderer = getattr(viewer, "_panda_scene_renderer", None)
+    if renderer is not None:
+        try:
+            renderer.update_frame_state(frame_state)
+        except Exception as exc:
+            viewer._panda_frame_state_error = f"{type(exc).__name__}: {exc}"
     return frame_state
 
 

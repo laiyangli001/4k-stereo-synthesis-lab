@@ -178,12 +178,20 @@ class CoreOpenXRD3D11Mixin:
         # 9. Resolve the future glTF scene-renderer selector without changing
         # the default native path before the Panda3D OpenXR swapchain gate passes.
         try:
-            from .panda_runtime.runtime import log_renderer_selection, resolve_gltf_renderer_mode
+            from .panda_runtime.runtime import (
+                PandaSceneRenderer,
+                log_renderer_selection,
+                resolve_gltf_renderer_mode,
+            )
             self._gltf_renderer_config = resolve_gltf_renderer_mode()
             if self._gltf_renderer_config.requested_mode != 'native' or self._gltf_renderer_config.fallback_reason:
                 log_renderer_selection(self._gltf_renderer_config)
+            self._panda_scene_renderer = (
+                PandaSceneRenderer() if self._gltf_renderer_config.panda3d_requested else None
+            )
         except Exception as e:
             self._gltf_renderer_config = None
+            self._panda_scene_renderer = None
             print(f"[OpenXRViewer] glTF renderer selector unavailable: {e}")
 
         # 10. Prefer native D3D11 for runtime eye/RGB+depth -> Projection layer

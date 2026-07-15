@@ -3017,6 +3017,8 @@ def test_openxr_frame_renderer_builds_layers_from_latest_screen_frame():
         [0.0, 0.0, 1.0, 0.3],
         [0.0, 0.0, 0.0, 1.0],
     ]
+    panda_updates = []
+    viewer._panda_scene_renderer = SimpleNamespace(update_frame_state=panda_updates.append)
     renderer = OpenXRFrameRenderer(viewer)
     renderer.view_tracker = SimpleNamespace(
         locate_views=lambda *, display_time: viewer.calls.append(("locate", display_time)) or (["view"], True)
@@ -3054,6 +3056,8 @@ def test_openxr_frame_renderer_builds_layers_from_latest_screen_frame():
     assert viewer._panda_frame_state.screen_pose.position == pytest.approx((4.0, 5.0, 6.0))
     assert viewer._panda_frame_state.controller_poses["left"].position == pytest.approx((4.0, 5.0, 6.0))
     assert viewer._panda_frame_state.controller_rays["left"].direction == pytest.approx((0.0, 0.0, -1.0))
+    assert panda_updates == [viewer._panda_frame_state]
+    assert viewer._panda_frame_state_error == ""
     assert viewer.calls[2] == ("prepare", True)
     assert viewer.calls[3][0] == "projection"
     assert viewer.calls[3][1]["enabled"] is True
