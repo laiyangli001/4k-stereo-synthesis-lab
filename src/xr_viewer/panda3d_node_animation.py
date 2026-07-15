@@ -241,6 +241,10 @@ class GltfNodeAnimationRuntime:
         return len(self._target_ids)
 
     @property
+    def target_node_ids(self) -> tuple[int, ...]:
+        return self._target_ids
+
+    @property
     def bound_node_count(self) -> int:
         return len(self._bound_nodes)
 
@@ -304,3 +308,19 @@ class GltfNodeAnimationRuntime:
                 translation[2],
             )
             node_path.set_transform(TransformState.make_mat(csxform_inv * gltf_matrix * csxform))
+
+
+class GltfNodeAnimationPlayer:
+    """Small clock wrapper that advances a glTF node runtime on Panda NodePaths."""
+
+    def __init__(self, runtime: GltfNodeAnimationRuntime, *, loop: bool = True):
+        self.runtime = runtime
+        self.loop = loop
+        self.time_seconds = 0.0
+
+    def set_time_seconds(self, time_seconds: float) -> None:
+        self.time_seconds = float(time_seconds)
+        self.runtime.apply_sample(self.time_seconds, loop=self.loop)
+
+    def advance(self, delta_seconds: float) -> None:
+        self.set_time_seconds(self.time_seconds + float(delta_seconds))

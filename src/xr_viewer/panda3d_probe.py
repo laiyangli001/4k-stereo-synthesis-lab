@@ -15,7 +15,7 @@ from typing import Any
 
 from pygltflib import GLTF2
 
-from xr_viewer.panda3d_node_animation import GltfNodeAnimationRuntime
+from xr_viewer.panda3d_node_animation import GltfNodeAnimationPlayer, GltfNodeAnimationRuntime
 
 
 @dataclass(frozen=True)
@@ -33,6 +33,9 @@ class Panda3DProbeReport:
     custom_node_animation_channel_count: int
     custom_node_animation_bound_count: int
     custom_node_animation_duration_seconds: float
+    custom_node_animation_sample_times_seconds: tuple[float, ...]
+    custom_node_animation_sampled_node_name: str
+    custom_node_animation_transform_changed: bool
     animation_runtime_ready: bool
     animation_runtime_reason: str
 
@@ -105,6 +108,36 @@ def _runtime_status(
     return False, "glTF animations exist but Panda3D exposed no runtime animation nodes"
 
 
+def _matrix_fingerprint(node_path: Any) -> tuple[float, ...]:
+    matrix = node_path.get_mat()
+    return tuple(round(matrix.get_cell(row, col), 6) for row in range(4) for col in range(4))
+
+
+def _animation_sample_times(duration_seconds: float) -> tuple[float, ...]:
+    if duration_seconds <= 0.0:
+        return ()
+    return (0.0, duration_seconds / 2.0, duration_seconds)
+
+
+def _runtime_transform_sample_report(
+    runtime: GltfNodeAnimationRuntime,
+) -> tuple[tuple[float, ...], str, bool]:
+    sample_times = _animation_sample_times(runtime.duration_seconds)
+    if not sample_times:
+        return (), "", False
+    for target_node in runtime.target_node_ids:
+        node_path = runtime.get_bound_node_path(target_node)
+        if node_path is None:
+            continue
+        player = GltfNodeAnimationPlayer(runtime, loop=False)
+        fingerprints = []
+        for sample_time in sample_times:
+            player.set_time_seconds(sample_time)
+            fingerprints.append(_matrix_fingerprint(node_path))
+        return sample_times, node_path.get_name(), len(set(fingerprints)) > 1
+    return sample_times, "", False
+
+
 def inspect_panda3d_asset(asset_path: str | Path) -> Panda3DProbeReport:
     """Load one GLB through Panda3D and report its animation-runtime boundary.
 
@@ -147,6 +180,9 @@ def inspect_panda3d_asset(asset_path: str | Path) -> Panda3DProbeReport:
         if callable(get_names):
             animation_names.extend(str(name) for name in get_names())
     custom_runtime = GltfNodeAnimationRuntime(gltf_document, root)
+    sample_times, sampled_node_name, transform_changed = _runtime_transform_sample_report(
+        custom_runtime
+    )
 
     ready, reason = _runtime_status(
         animation_count,
@@ -169,6 +205,9 @@ def inspect_panda3d_asset(asset_path: str | Path) -> Panda3DProbeReport:
         custom_node_animation_channel_count=custom_runtime.channel_count,
         custom_node_animation_bound_count=custom_runtime.bound_node_count,
         custom_node_animation_duration_seconds=custom_runtime.duration_seconds,
+        custom_node_animation_sample_times_seconds=sample_times,
+        custom_node_animation_sampled_node_name=sampled_node_name,
+        custom_node_animation_transform_changed=transform_changed,
         animation_runtime_ready=ready,
         animation_runtime_reason=reason,
     )

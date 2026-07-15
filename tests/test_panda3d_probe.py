@@ -4,7 +4,7 @@ import pytest
 
 from pygltflib import GLTF2
 
-from xr_viewer.panda3d_node_animation import GltfNodeAnimationRuntime
+from xr_viewer.panda3d_node_animation import GltfNodeAnimationPlayer, GltfNodeAnimationRuntime
 from xr_viewer.panda3d_probe import (
     _runtime_status,
     inspect_panda3d_asset,
@@ -93,12 +93,17 @@ def test_panda_probe_json_is_stable_for_phase_zero_diagnostics():
     assert report.custom_node_animation_channel_count == 38
     assert report.custom_node_animation_bound_count == 19
     assert report.custom_node_animation_duration_seconds == 15.0
+    assert report.custom_node_animation_sample_times_seconds == (0.0, 7.5, 15.0)
+    assert report.custom_node_animation_sampled_node_name
+    assert report.custom_node_animation_transform_changed
     assert report.animation_runtime_ready
     assert "custom glTF node animation runtime" in report.animation_runtime_reason
     probe_json = report_as_json(report)
     assert '"gltf_animation_count": 19' in probe_json
     assert '"gltf_animation_targets_in_active_scene": 19' in probe_json
     assert '"custom_node_animation_bound_count": 19' in probe_json
+    assert '"custom_node_animation_sample_times_seconds": [' in probe_json
+    assert '"custom_node_animation_transform_changed": true' in probe_json
 
 
 def test_custom_node_animation_runtime_samples_artemis_transforms():
@@ -123,13 +128,15 @@ def test_custom_node_animation_runtime_samples_artemis_transforms():
         matrix = node.get_mat()
         return tuple(round(matrix.get_cell(row, col), 5) for row in range(4) for col in range(4))
 
-    runtime.apply_sample(0.0, loop=False)
+    player = GltfNodeAnimationPlayer(runtime, loop=False)
+    player.set_time_seconds(0.0)
     matrix_0 = matrix_values()
-    runtime.apply_sample(7.5, loop=False)
+    player.advance(7.5)
     matrix_75 = matrix_values()
-    runtime.apply_sample(15.0, loop=False)
+    player.advance(7.5)
     matrix_15 = matrix_values()
 
+    assert player.time_seconds == 15.0
     assert matrix_75 != matrix_0
     assert matrix_15 == matrix_0
 
