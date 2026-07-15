@@ -682,6 +682,7 @@ def test_panda_runtime_diagnostics_snapshot_summarizes_assets_targets_and_bridge
     assert snapshot.last_render_left_rendered is False
     assert snapshot.last_render_right_rendered is False
     assert snapshot.last_render_error == ""
+    assert snapshot.last_render_cpu_seconds == pytest.approx(0.0)
     assert '"bridge_resource_count": 1' in snapshot_json
     assert '"frame_animation_time_seconds": 1.5' in snapshot_json
     assert '"scene_animation_time_seconds": 1.5' in snapshot_json
@@ -978,6 +979,7 @@ def test_panda_scene_renderer_facade_contract():
     assert snapshot.last_render_left_rendered is True
     assert snapshot.last_render_right_rendered is True
     assert snapshot.last_render_error == ""
+    assert snapshot.last_render_cpu_seconds >= 0.0
     assert "render_eyes" in snapshot.events
     frame_state = bridge.calls[0][2]
     assert frame_state.predicted_display_time == pytest.approx(123.5)
@@ -1014,6 +1016,7 @@ def test_panda_scene_renderer_records_render_failure_diagnostics():
     assert snapshot.render_success_count == 0
     assert snapshot.render_failure_count == 1
     assert snapshot.last_render_error == "RuntimeError: bridge exploded"
+    assert snapshot.last_render_cpu_seconds >= 0.0
     assert "render_failed" in snapshot.events
 
 

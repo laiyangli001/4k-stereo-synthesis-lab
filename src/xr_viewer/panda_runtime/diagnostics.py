@@ -31,6 +31,7 @@ class PandaRuntimeSnapshot:
     last_render_left_rendered: bool
     last_render_right_rendered: bool
     last_render_error: str
+    last_render_cpu_seconds: float
     frame_predicted_display_time: float | None
     frame_animation_time_seconds: float | None
     frame_index: int | None
@@ -107,6 +108,7 @@ class PandaRuntimeDiagnostics:
             last_render_left_rendered=bool(getattr(renderer, "_last_render_left_rendered", False)),
             last_render_right_rendered=bool(getattr(renderer, "_last_render_right_rendered", False)),
             last_render_error=str(getattr(renderer, "_last_render_error", "") or ""),
+            last_render_cpu_seconds=float(getattr(renderer, "_last_render_cpu_seconds", 0.0) or 0.0),
             frame_predicted_display_time=_optional_float(
                 getattr(frame_state, "predicted_display_time", None)
             ),

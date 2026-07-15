@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 import math
 import os
+import time
 from typing import Any, Mapping, Protocol
 
 from .bridge import PandaBridge, RenderEyesResult, SwapchainImageRef
@@ -287,6 +288,7 @@ class PandaSceneRenderer:
         self._last_render_left_rendered = False
         self._last_render_right_rendered = False
         self._last_render_error = ""
+        self._last_render_cpu_seconds = 0.0
 
     @property
     def released(self) -> bool:
@@ -345,6 +347,7 @@ class PandaSceneRenderer:
             raise PandaRuntimeUnavailable("PandaSceneRenderer.update_frame_state must run before render_eyes")
         if not self.targets.ready:
             raise PandaRuntimeUnavailable("PandaSceneRenderer.rebuild_targets must run before render_eyes")
+        render_start = time.perf_counter()
         try:
             result = self.bridge.render_eyes(
                 scene=self.scene,
@@ -354,10 +357,12 @@ class PandaSceneRenderer:
                 right_image=right_image,
             )
         except Exception as exc:
+            self._last_render_cpu_seconds = time.perf_counter() - render_start
             self._render_failure_count += 1
             self._last_render_error = f"{type(exc).__name__}: {exc}"
             self.diagnostics.record_event("render_failed", self._last_render_error)
             raise
+        self._last_render_cpu_seconds = time.perf_counter() - render_start
         self._render_success_count += 1
         self._last_render_error = ""
         self._last_render_bridge_mode = str(result.bridge_mode)

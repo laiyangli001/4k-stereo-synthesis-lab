@@ -1,4 +1,5 @@
 import ctypes
+import time
 
 import glfw
 import numpy as np
@@ -22,6 +23,16 @@ try:
     import xr
 except ImportError:
     xr = None
+
+
+def _record_panda_bridge_timing(viewer, timing):
+    snapshot = {str(name): float(seconds) for name, seconds in timing.items()}
+    viewer._panda_render_last_timing = snapshot
+    recorder = getattr(viewer, '_breakdown_add_time', None)
+    if not callable(recorder):
+        return
+    for name, seconds in snapshot.items():
+        recorder(f'openxr_projection_panda_{name}', seconds)
 
 
 class ProjectionLayerPresenter:
@@ -93,8 +104,17 @@ class ProjectionLayerPresenter:
             return []
         acquired = []
         released = set()
+        total_start = time.perf_counter()
+        timing = {
+            'acquire_wait': 0.0,
+            'target_rebuild': 0.0,
+            'bridge_render': 0.0,
+            'release': 0.0,
+            'total': 0.0,
+        }
         try:
             for eye_index in range(2):
+                acquire_start = time.perf_counter()
                 swapchain = viewer._xr_swapchains[eye_index]
                 img_index = xr.acquire_swapchain_image(swapchain, viewer._xr_sc_acquire_info)
                 viewer._wait_swapchain_image(swapchain)
@@ -102,18 +122,23 @@ class ProjectionLayerPresenter:
                 sc_w, sc_h = viewer._swapchain_sizes[eye_index]
                 view = views[eye_index] if views and views[eye_index] else None
                 acquired.append((eye_index, swapchain, img_index, sc_image, sc_w, sc_h, view))
+                timing['acquire_wait'] += time.perf_counter() - acquire_start
 
             left = acquired[0]
             right = acquired[1]
             fmt = getattr(viewer, '_d3d11_swapchain_fmt', 'rgba8')
             generation = int(getattr(viewer, '_panda_swapchain_session_generation', 0) or 0)
+            rebuild_start = time.perf_counter()
             renderer.rebuild_targets(
                 StereoTargetSpec(left[4], left[5], fmt),
                 StereoTargetSpec(right[4], right[5], fmt),
             )
+            timing['target_rebuild'] = time.perf_counter() - rebuild_start
             left_image = SwapchainImageRef(left[0], left[2], left[3].texture, left[4], left[5], fmt, generation)
             right_image = SwapchainImageRef(right[0], right[2], right[3].texture, right[4], right[5], fmt, generation)
+            bridge_start = time.perf_counter()
             result = renderer.render_eyes(left_image, right_image)
+            timing['bridge_render'] = time.perf_counter() - bridge_start
             if not result.rendered:
                 raise RuntimeError(f"Panda bridge did not render both eyes: {result.bridge_mode}")
             viewer._panda_render_last_bridge_mode = str(result.bridge_mode)
@@ -123,14 +148,19 @@ class ProjectionLayerPresenter:
             viewer._panda_render_error = ""
 
             eye_layer_views = []
+            release_start = time.perf_counter()
             for eye_index, swapchain, _img_index, _sc_image, sc_w, sc_h, view in acquired:
                 xr.release_swapchain_image(swapchain, viewer._xr_sc_release_info)
                 released.add(eye_index)
                 eye_layer_views.append(self._projection_view(swapchain, sc_w, sc_h, view, default_fov))
+            timing['release'] += time.perf_counter() - release_start
+            timing['total'] = time.perf_counter() - total_start
+            _record_panda_bridge_timing(viewer, timing)
             viewer._breakdown_inc('openxr_projection_panda_present')
             viewer._record_projection_screen_presented()
             return eye_layer_views
         except Exception as exc:
+            release_start = time.perf_counter()
             for eye_index, swapchain, *_rest in acquired:
                 if eye_index in released:
                     continue
@@ -138,6 +168,9 @@ class ProjectionLayerPresenter:
                     xr.release_swapchain_image(swapchain, viewer._xr_sc_release_info)
                 except Exception:
                     pass
+            timing['release'] += time.perf_counter() - release_start
+            timing['total'] = time.perf_counter() - total_start
+            _record_panda_bridge_timing(viewer, timing)
             viewer._breakdown_inc('openxr_projection_panda_failed')
             viewer._panda_render_failure_count = int(getattr(viewer, '_panda_render_failure_count', 0) or 0) + 1
             viewer._panda_render_error = f"{type(exc).__name__}: {exc}"

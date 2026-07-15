@@ -3758,6 +3758,7 @@ def test_panda_projection_bridge_acquires_renders_and_releases_both_eyes(monkeyp
     monkeypatch.setattr(presenter_module, "xr", FakeXr)
     renderer = Renderer()
     calls = []
+    time_calls = []
     viewer = SimpleNamespace(
         _panda_scene_renderer=renderer,
         _xr_swapchains={0: "sc0", 1: "sc1"},
@@ -3769,6 +3770,7 @@ def test_panda_projection_bridge_acquires_renders_and_releases_both_eyes(monkeyp
         _panda_swapchain_session_generation=5,
         _wait_swapchain_image=lambda swapchain: events.append(("wait", swapchain)),
         _breakdown_inc=lambda name, amount=1: calls.append((name, amount)),
+        _breakdown_add_time=lambda name, seconds: time_calls.append((name, seconds)),
         _record_projection_screen_presented=lambda: calls.append("presented"),
     )
     presenter = ProjectionLayerPresenter(viewer)
@@ -3789,6 +3791,15 @@ def test_panda_projection_bridge_acquires_renders_and_releases_both_eyes(monkeyp
     assert viewer._panda_render_last_image_indices == (0, 0)
     assert viewer._panda_render_success_count == 1
     assert viewer._panda_render_error == ""
+    assert set(viewer._panda_render_last_timing) == {"acquire_wait", "target_rebuild", "bridge_render", "release", "total"}
+    assert all(seconds >= 0.0 for seconds in viewer._panda_render_last_timing.values())
+    assert [name for name, _seconds in time_calls] == [
+        "openxr_projection_panda_acquire_wait",
+        "openxr_projection_panda_target_rebuild",
+        "openxr_projection_panda_bridge_render",
+        "openxr_projection_panda_release",
+        "openxr_projection_panda_total",
+    ]
     assert calls == [("openxr_projection_panda_present", 1), "presented"]
 
 
@@ -3817,6 +3828,7 @@ def test_panda_projection_bridge_failure_releases_and_falls_back(monkeypatch):
 
     monkeypatch.setattr(presenter_module, "xr", FakeXr)
     calls = []
+    time_calls = []
     viewer = SimpleNamespace(
         _panda_scene_renderer=Renderer(),
         _xr_swapchains={0: "sc0", 1: "sc1"},
@@ -3827,6 +3839,7 @@ def test_panda_projection_bridge_failure_releases_and_falls_back(monkeypatch):
         _d3d11_swapchain_fmt=87,
         _wait_swapchain_image=lambda swapchain: events.append(("wait", swapchain)),
         _breakdown_inc=lambda name, amount=1: calls.append((name, amount)),
+        _breakdown_add_time=lambda name, seconds: time_calls.append((name, seconds)),
         _record_projection_screen_presented=lambda: calls.append("presented"),
     )
 
@@ -3838,6 +3851,9 @@ def test_panda_projection_bridge_failure_releases_and_falls_back(monkeypatch):
     assert viewer._panda_render_failure_count == 1
     assert "bridge down" in viewer._panda_render_error
     assert viewer._panda_render_error_logged is True
+    assert set(viewer._panda_render_last_timing) == {"acquire_wait", "target_rebuild", "bridge_render", "release", "total"}
+    assert all(seconds >= 0.0 for seconds in viewer._panda_render_last_timing.values())
+    assert "openxr_projection_panda_total" in [name for name, _seconds in time_calls]
 
 
 def test_d3d11_projection_failure_does_not_mark_screen_presented(monkeypatch):
