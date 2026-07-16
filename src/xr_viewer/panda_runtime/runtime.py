@@ -64,56 +64,18 @@ class PandaEyeView:
 
 
 @dataclass(frozen=True)
-class PandaScreenTextureFrame:
-    """Latest completed screen texture snapshot for the Panda scene."""
-
-    width: int
-    height: int
-    format: int | str = "rgba8"
-    native_id: int = 0
-    frame_index: int | None = None
-    payload: Any | None = None
-
-    def __post_init__(self) -> None:
-        if self.width <= 0 or self.height <= 0:
-            raise ValueError("screen texture dimensions must be positive")
-
-    @property
-    def native_id_available(self) -> bool:
-        return self.native_id > 0
-
-
-@dataclass(frozen=True)
-class PandaControllerRay:
-    """Controller ray visual state captured in the same XR frame snapshot."""
-
-    origin: tuple[float, float, float]
-    direction: tuple[float, float, float]
-    length: float = 30.0
-    visible: bool = True
-    hit_target: str = ""
-
-    def __post_init__(self) -> None:
-        if len(self.origin) != 3 or len(self.direction) != 3:
-            raise ValueError("controller ray origin and direction must be 3D vectors")
-        if self.length <= 0.0:
-            raise ValueError("controller ray length must be positive")
-
-
-@dataclass(frozen=True)
 class PandaFrameState:
-    """Frame snapshot passed from the existing OpenXR state machine."""
+    """3D model-layer snapshot passed from the existing OpenXR state machine."""
 
     predicted_display_time: float = 0.0
     animation_time_seconds: float | None = None
     frame_index: int | None = None
     head_pose: Any | None = None
+    projection_near: float = 0.01
+    projection_far: float = 1000.0
     eye_views: tuple[PandaEyeView | None, PandaEyeView | None] = (None, None)
     eye_poses: tuple[Any | None, Any | None] = (None, None)
     controller_poses: Mapping[str, Any] = field(default_factory=dict)
-    controller_rays: Mapping[str, PandaControllerRay] = field(default_factory=dict)
-    screen_pose: Any | None = None
-    screen_texture: PandaScreenTextureFrame | Any | None = None
 
 
 def validate_frame_state(frame_state: PandaFrameState) -> None:
@@ -121,6 +83,17 @@ def validate_frame_state(frame_state: PandaFrameState) -> None:
     predicted = float(frame_state.predicted_display_time)
     if not math.isfinite(predicted):
         raise PandaRuntimeUnavailable("PandaFrameState.predicted_display_time must be finite")
+    projection_near = float(frame_state.projection_near)
+    projection_far = float(frame_state.projection_far)
+    if (
+        not math.isfinite(projection_near)
+        or not math.isfinite(projection_far)
+        or projection_near <= 0.0
+        or projection_far <= projection_near
+    ):
+        raise PandaRuntimeUnavailable(
+            "PandaFrameState projection clip planes must be finite and satisfy 0 < near < far"
+        )
     if len(frame_state.eye_views) != 2:
         raise PandaRuntimeUnavailable("PandaFrameState.eye_views must contain exactly two eyes")
     for expected_eye, eye_view in enumerate(frame_state.eye_views):
@@ -298,6 +271,20 @@ class PandaSceneRenderer:
         self._ensure_live()
         self.scene.load_environment(asset_path)
         self.diagnostics.record_event("environment_loaded", asset_path)
+
+    def configure_environment_transform(self, position: Any, rotation: Any, scale: Any) -> None:
+        self._ensure_live()
+        self.scene.configure_environment_transform(position, rotation, scale)
+
+    def configure_environment_lighting(
+        self,
+        ambient_color: Any,
+        head_light_color: Any,
+        fill_lights: Any,
+    ) -> None:
+        self._ensure_live()
+        self.scene.configure_environment_lighting(ambient_color, head_light_color, fill_lights)
+
 
     def load_controller(self, hand: str, asset_path: str) -> None:
         self._ensure_live()

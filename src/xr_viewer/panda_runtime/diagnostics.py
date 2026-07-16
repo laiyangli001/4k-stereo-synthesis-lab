@@ -37,8 +37,6 @@ class PandaRuntimeSnapshot:
     frame_index: int | None
     frame_eye_view_count: int
     frame_controller_count: int
-    frame_controller_ray_count: int
-    frame_screen_pose_present: bool
     animation_playback_speed: float
     animation_paused: bool
     animation_fixed_time_seconds: float | None
@@ -50,18 +48,8 @@ class PandaRuntimeSnapshot:
     scene_animation_channel_count: int
     scene_animation_bound_node_count: int
     scene_controller_hands: tuple[str, ...]
-    scene_controller_ray_hands: tuple[str, ...]
-    scene_applied_controller_ray_hands: tuple[str, ...]
-    scene_screen_pose_present: bool
-    scene_screen_texture_present: bool
-    scene_screen_texture_applied: bool
-    scene_screen_texture_width: int
-    scene_screen_texture_height: int
-    scene_screen_texture_format: str
-    scene_screen_texture_native_id_available: bool
     scene_eye_view_count: int
     scene_applied_controller_hands: tuple[str, ...]
-    scene_screen_pose_applied: bool
     event_count: int
     events: tuple[str, ...]
 
@@ -118,8 +106,6 @@ class PandaRuntimeDiagnostics:
             frame_index=_optional_int(getattr(frame_state, "frame_index", None)),
             frame_eye_view_count=_eye_view_count(frame_state),
             frame_controller_count=len(getattr(frame_state, "controller_poses", {}) or {}),
-            frame_controller_ray_count=len(getattr(frame_state, "controller_rays", {}) or {}),
-            frame_screen_pose_present=getattr(frame_state, "screen_pose", None) is not None,
             animation_playback_speed=_animation_playback_speed(renderer),
             animation_paused=_animation_paused(renderer),
             animation_fixed_time_seconds=_animation_fixed_time_seconds(renderer),
@@ -131,21 +117,8 @@ class PandaRuntimeDiagnostics:
             scene_animation_channel_count=_scene_int(scene, "animation_channel_count"),
             scene_animation_bound_node_count=_scene_int(scene, "animation_bound_node_count"),
             scene_controller_hands=_scene_controller_hands(scene),
-            scene_controller_ray_hands=_scene_controller_ray_hands(scene),
-            scene_applied_controller_ray_hands=_scene_applied_controller_ray_hands(scene),
-            scene_screen_pose_present=_scene_bool(scene, "screen_pose_present"),
-            scene_screen_texture_present=_scene_bool(scene, "screen_texture_present"),
-            scene_screen_texture_applied=_scene_bool(scene, "screen_texture_applied"),
-            scene_screen_texture_width=_scene_int(scene, "screen_texture_width"),
-            scene_screen_texture_height=_scene_int(scene, "screen_texture_height"),
-            scene_screen_texture_format=_scene_str(scene, "screen_texture_format"),
-            scene_screen_texture_native_id_available=_scene_bool(
-                scene,
-                "screen_texture_native_id_available",
-            ),
             scene_eye_view_count=_scene_int(scene, "eye_view_count"),
             scene_applied_controller_hands=_scene_applied_controller_hands(scene),
-            scene_screen_pose_applied=_scene_bool(scene, "screen_pose_applied"),
             event_count=len(self.events),
             events=tuple(event.name for event in self.events),
         )
@@ -203,18 +176,6 @@ def _scene_applied_controller_hands(scene: Any) -> tuple[str, ...]:
     return tuple(getattr(_scene_snapshot(scene), "applied_controller_hands", ()) or ())
 
 
-def _scene_controller_ray_hands(scene: Any) -> tuple[str, ...]:
-    return tuple(getattr(_scene_snapshot(scene), "controller_ray_hands", ()) or ())
-
-
-def _scene_applied_controller_ray_hands(scene: Any) -> tuple[str, ...]:
-    return tuple(getattr(_scene_snapshot(scene), "applied_controller_ray_hands", ()) or ())
-
-
-def _scene_bool(scene: Any, name: str) -> bool:
-    return bool(getattr(_scene_snapshot(scene), name, False))
-
-
 def _scene_int(scene: Any, name: str) -> int:
     return int(getattr(_scene_snapshot(scene), name, 0) or 0)
 
@@ -224,10 +185,6 @@ def _scene_optional_float(scene: Any, name: str) -> float | None:
     if value is None:
         return None
     return float(value)
-
-
-def _scene_str(scene: Any, name: str) -> str:
-    return str(getattr(_scene_snapshot(scene), name, "") or "")
 
 
 def _scene_asset_summary(scene: Any) -> tuple[Mapping[str, object], ...]:

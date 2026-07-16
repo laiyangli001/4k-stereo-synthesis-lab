@@ -8,9 +8,12 @@ from OpenGL.GL import (
     GL_COLOR_BUFFER_BIT,
     GL_DRAW_FRAMEBUFFER,
     GL_LINEAR,
+    GL_NO_ERROR,
     GL_READ_FRAMEBUFFER,
     glBindFramebuffer,
     glBlitFramebuffer,
+    glGetError,
+    glIsTexture,
     glReadBuffer,
 )
 
@@ -26,6 +29,10 @@ except ImportError:
     xr = None
 
 
+def _one_line_exception_text(exc):
+    return " ".join(f"{type(exc).__name__}: {exc}".replace("\r", " ").replace("\n", " ").split())
+
+
 def _record_panda_bridge_timing(viewer, timing):
     snapshot = {str(name): float(seconds) for name, seconds in timing.items()}
     viewer._panda_render_last_timing = snapshot
@@ -37,7 +44,23 @@ def _record_panda_bridge_timing(viewer, timing):
 
 
 def _log_panda_bridge_diagnostics(viewer):
-    _log_panda_render_path_status(viewer, status='bridge-active')
+    log_count = int(getattr(viewer, '_panda_render_diagnostic_log_count', 0) or 0)
+    if log_count >= 5:
+        return
+    timing = getattr(viewer, '_panda_render_last_timing', {}) or {}
+    timing_text = ','.join(f'{name}={seconds * 1000.0:.2f}ms' for name, seconds in timing.items())
+    print(
+        '[OpenXRViewer] Panda3D projection bridge diagnostics '
+        f'viewer._panda_render_success_count={int(getattr(viewer, "_panda_render_success_count", 0) or 0)} '
+        f'viewer._panda_render_failure_count={int(getattr(viewer, "_panda_render_failure_count", 0) or 0)} '
+        f'viewer._panda_render_last_bridge_mode={getattr(viewer, "_panda_render_last_bridge_mode", "")!r} '
+        f'viewer._panda_render_last_target_size={getattr(viewer, "_panda_render_last_target_size", None)!r} '
+        f'viewer._panda_render_last_image_indices={getattr(viewer, "_panda_render_last_image_indices", None)!r} '
+        f'viewer._panda_render_error={getattr(viewer, "_panda_render_error", "")!r} '
+        f'viewer._panda_render_last_timing={{{timing_text}}}',
+        flush=True,
+    )
+    viewer._panda_render_diagnostic_log_count = log_count + 1
 
 
 def _panda_opengl_bridge_backoff_active(viewer, now=None):
@@ -53,6 +76,73 @@ def _make_viewer_gl_context_current(viewer):
         glfw.make_context_current(window)
 
 
+def _configure_panda_wgl_context_sharing(viewer, targets):
+    setter = getattr(targets, 'set_wgl_share_source_context', None)
+    if not callable(setter) or getattr(viewer, 'window', None) is None:
+        return
+    _make_viewer_gl_context_current(viewer)
+    try:
+        from OpenGL.WGL import wglGetCurrentContext
+
+        source_context = wglGetCurrentContext()
+    except Exception as exc:
+        raise RuntimeError(f'OpenXR WGL context is unavailable: {_one_line_exception_text(exc)}') from exc
+    if not source_context:
+        raise RuntimeError('OpenXR WGL context is unavailable')
+    setter(source_context)
+
+
+def _prewarm_panda_targets(viewer, renderer, fmt):
+    sizes = getattr(viewer, '_swapchain_sizes', {}) or {}
+    left_size = sizes.get(0)
+    right_size = sizes.get(1)
+    if not left_size or not right_size:
+        return False
+    start = time.perf_counter()
+    renderer.rebuild_targets(
+        StereoTargetSpec(int(left_size[0]), int(left_size[1]), fmt),
+        StereoTargetSpec(int(right_size[0]), int(right_size[1]), fmt),
+    )
+    elapsed = time.perf_counter() - start
+    recorder = getattr(viewer, '_breakdown_add_time', None)
+    if callable(recorder):
+        recorder('openxr_projection_panda_target_prewarm', elapsed)
+    return True
+
+
+def _drain_gl_errors():
+    for _ in range(8):
+        try:
+            err = glGetError()
+        except Exception:
+            continue
+        if err == GL_NO_ERROR:
+            return
+
+
+def _panda_opengl_targets_visible(renderer):
+    targets = getattr(renderer, 'targets', None)
+    target_refs = getattr(targets, 'target_refs', None)
+    refs = target_refs() if callable(target_refs) else ()
+    if not refs:
+        return True, ''
+    _drain_gl_errors()
+    for ref in refs:
+        native_id = int(getattr(ref, 'texture_native_id', 0) or 0)
+        if native_id <= 0:
+            return False, 'Panda OpenGL target has no native texture id'
+        try:
+            visible = bool(glIsTexture(native_id))
+        except Exception as exc:
+            return False, f'Panda OpenGL texture visibility check failed: {_one_line_exception_text(exc)}'
+        if not visible:
+            return False, (
+                f'Panda OpenGL texture native_id={native_id} is not visible in the '
+                'OpenXR GL context; contexts are not shared'
+            )
+    return True, ''
+
+
 def _log_panda_render_path_status(viewer, *, status, reason=''):
     renderer = getattr(viewer, '_panda_scene_renderer', None)
     if renderer is None:
@@ -64,7 +154,7 @@ def _log_panda_render_path_status(viewer, *, status, reason=''):
     try:
         snapshot = renderer.diagnostics_snapshot()
     except Exception as exc:
-        snapshot_error = f'{type(exc).__name__}: {exc}'
+        snapshot_error = _one_line_exception_text(exc)
     viewer_success = int(getattr(viewer, '_panda_render_success_count', 0) or 0)
     viewer_failure = int(getattr(viewer, '_panda_render_failure_count', 0) or 0)
     bridge_mode = getattr(viewer, '_panda_render_last_bridge_mode', '')
@@ -123,16 +213,10 @@ class ProjectionLayerPresenter:
             if callable(ensure_swapchains) and not ensure_swapchains():
                 return []
             if self._panda_opengl_bridge_enabled() and not _panda_opengl_bridge_backoff_active(viewer):
-                viewer._panda_opengl_bridge_failed_this_frame = False
-                panda_views = self.render_panda_opengl_bridge(
-                    views,
-                    default_fov,
-                    updated_quad_eyes=updated_quad_eyes,
-                )
+                panda_views = self.render_panda_opengl_bridge(views, default_fov, updated_quad_eyes=updated_quad_eyes)
                 if panda_views:
                     return panda_views
-                if bool(getattr(viewer, '_panda_opengl_bridge_failed_this_frame', False)):
-                    return []
+                return []
             return self.render_opengl(
                 views,
                 default_fov,
@@ -188,6 +272,8 @@ class ProjectionLayerPresenter:
         targets = getattr(renderer, 'targets', None)
         if targets is not None and not bool(getattr(targets, 'create_panda_targets', False)):
             targets.create_panda_targets = True
+        if targets is not None:
+            _configure_panda_wgl_context_sharing(self.viewer, targets)
     def _panda_bridge_enabled(self):
         viewer = self.viewer
         config = getattr(viewer, '_gltf_renderer_config', None)
@@ -204,6 +290,19 @@ class ProjectionLayerPresenter:
             return []
         self._ensure_panda_opengl_bridge(renderer)
         _make_viewer_gl_context_current(viewer)
+        fmt = getattr(viewer, '_opengl_swapchain_fmt', 'rgba8')
+        targets_prewarmed = _prewarm_panda_targets(viewer, renderer, fmt)
+        _make_viewer_gl_context_current(viewer)
+        visible, reason = _panda_opengl_targets_visible(renderer)
+        if not visible:
+            viewer._panda_opengl_bridge_disabled_until = time.perf_counter() + 3600.0
+            viewer._panda_render_failure_count = int(getattr(viewer, '_panda_render_failure_count', 0) or 0) + 1
+            viewer._panda_render_error = reason
+            if not getattr(viewer, '_panda_render_error_logged', False):
+                print(f"[OpenXRViewer] Panda3D OpenGL projection bridge disabled: {reason}", flush=True)
+                viewer._panda_render_error_logged = True
+            _log_panda_render_path_status(viewer, status='bridge-unavailable', reason=reason)
+            return []
         acquired = []
         released = set()
         total_start = time.perf_counter()
@@ -231,13 +330,13 @@ class ProjectionLayerPresenter:
 
             left = acquired[0]
             right = acquired[1]
-            fmt = getattr(viewer, '_opengl_swapchain_fmt', 'rgba8')
             generation = int(getattr(viewer, '_panda_swapchain_session_generation', 0) or 0)
             rebuild_start = time.perf_counter()
-            renderer.rebuild_targets(
-                StereoTargetSpec(left[5], left[6], fmt),
-                StereoTargetSpec(right[5], right[6], fmt),
-            )
+            if not targets_prewarmed:
+                renderer.rebuild_targets(
+                    StereoTargetSpec(left[5], left[6], fmt),
+                    StereoTargetSpec(right[5], right[6], fmt),
+                )
             timing['target_rebuild'] = time.perf_counter() - rebuild_start
             left_image = SwapchainImageRef(left[0], left[2], left[4], left[5], left[6], fmt, generation)
             right_image = SwapchainImageRef(right[0], right[2], right[4], right[5], right[6], fmt, generation)
@@ -283,11 +382,14 @@ class ProjectionLayerPresenter:
             _record_panda_bridge_timing(viewer, timing)
             viewer._breakdown_inc('openxr_projection_panda_failed')
             viewer._panda_render_failure_count = int(getattr(viewer, '_panda_render_failure_count', 0) or 0) + 1
-            viewer._panda_render_error = f"{type(exc).__name__}: {exc}"
-            viewer._panda_opengl_bridge_failed_this_frame = True
+            viewer._panda_render_error = _one_line_exception_text(exc)
             viewer._panda_opengl_bridge_disabled_until = time.perf_counter() + 2.0
             if not getattr(viewer, '_panda_render_error_logged', False):
-                print(f"[OpenXRViewer] Panda3D OpenGL projection bridge failed; temporarily using native projection on later frames: {type(exc).__name__}: {exc}", flush=True)
+                print(
+                    "[OpenXRViewer] Panda3D OpenGL projection bridge failed; "
+                    f"temporarily using native projection on later frames: {_one_line_exception_text(exc)}",
+                    flush=True,
+                )
                 viewer._panda_render_error_logged = True
             _log_panda_render_path_status(viewer, status='bridge-failed', reason=viewer._panda_render_error)
             return []
@@ -296,6 +398,8 @@ class ProjectionLayerPresenter:
         renderer = getattr(viewer, '_panda_scene_renderer', None)
         if renderer is None:
             return []
+        fmt = getattr(viewer, '_d3d11_swapchain_fmt', 'rgba8')
+        targets_prewarmed = _prewarm_panda_targets(viewer, renderer, fmt)
         acquired = []
         released = set()
         total_start = time.perf_counter()
@@ -320,13 +424,13 @@ class ProjectionLayerPresenter:
 
             left = acquired[0]
             right = acquired[1]
-            fmt = getattr(viewer, '_d3d11_swapchain_fmt', 'rgba8')
             generation = int(getattr(viewer, '_panda_swapchain_session_generation', 0) or 0)
             rebuild_start = time.perf_counter()
-            renderer.rebuild_targets(
-                StereoTargetSpec(left[4], left[5], fmt),
-                StereoTargetSpec(right[4], right[5], fmt),
-            )
+            if not targets_prewarmed:
+                renderer.rebuild_targets(
+                    StereoTargetSpec(left[4], left[5], fmt),
+                    StereoTargetSpec(right[4], right[5], fmt),
+                )
             timing['target_rebuild'] = time.perf_counter() - rebuild_start
             left_image = SwapchainImageRef(left[0], left[2], left[3].texture, left[4], left[5], fmt, generation)
             right_image = SwapchainImageRef(right[0], right[2], right[3].texture, right[4], right[5], fmt, generation)
@@ -368,9 +472,12 @@ class ProjectionLayerPresenter:
             _record_panda_bridge_timing(viewer, timing)
             viewer._breakdown_inc('openxr_projection_panda_failed')
             viewer._panda_render_failure_count = int(getattr(viewer, '_panda_render_failure_count', 0) or 0) + 1
-            viewer._panda_render_error = f"{type(exc).__name__}: {exc}"
+            viewer._panda_render_error = _one_line_exception_text(exc)
             if not getattr(viewer, '_panda_render_error_logged', False):
-                print(f"[OpenXRViewer] Panda3D projection bridge failed, falling back to native: {type(exc).__name__}: {exc}")
+                print(
+                    "[OpenXRViewer] Panda3D projection bridge failed, falling back to native: "
+                    f"{_one_line_exception_text(exc)}"
+                )
                 viewer._panda_render_error_logged = True
             return []
 
@@ -448,7 +555,7 @@ class ProjectionLayerPresenter:
                     except Exception:
                         pass
                 viewer._breakdown_inc('openxr_projection_render_failed')
-                print(f"[OpenXRViewer] D3D11 projection render failed: {type(exc).__name__}: {exc}")
+                print(f"[OpenXRViewer] D3D11 projection render failed: {_one_line_exception_text(exc)}")
                 return []
         viewer._breakdown_inc('openxr_projection_screen_present')
         viewer._record_projection_screen_presented()
@@ -549,19 +656,34 @@ class ProjectionLayerPresenter:
         viewer._record_projection_screen_presented()
         return eye_layer_views
 
-    def render_opengl(self, views, default_fov, default_proj, *, updated_quad_eyes=()):
+    def render_opengl(self, views, default_fov, default_proj, *, updated_quad_eyes=(), acquired=None):
         viewer = self.viewer
         near, far = self._projection_clip_planes()
         eye_layer_views = []
-        for eye_index in range(2):
-            swapchain = viewer._xr_swapchains[eye_index]
-            img_index = xr.acquire_swapchain_image(swapchain, viewer._xr_sc_acquire_info)
-            viewer._wait_swapchain_image(swapchain)
-            released = False
-            try:
+        if acquired is None:
+            acquired = []
+            for eye_index in range(2):
+                swapchain = viewer._xr_swapchains[eye_index]
+                img_index = xr.acquire_swapchain_image(swapchain, viewer._xr_sc_acquire_info)
+                viewer._wait_swapchain_image(swapchain)
                 sc_image = viewer._swapchain_images[eye_index][img_index]
                 sc_w, sc_h = viewer._swapchain_sizes[eye_index]
                 view = views[eye_index] if views and views[eye_index] else None
+                acquired.append((eye_index, swapchain, img_index, sc_image, sc_w, sc_h, view))
+        normalized_acquired = []
+        for entry in acquired:
+            if len(entry) == 7:
+                normalized_acquired.append(entry)
+                continue
+            if len(entry) == 8:
+                eye_index, swapchain, img_index, _raw_fbo, _mgl_fbo, sc_w, sc_h, view = entry
+                sc_image = viewer._swapchain_images[eye_index][img_index]
+                normalized_acquired.append((eye_index, swapchain, img_index, sc_image, sc_w, sc_h, view))
+                continue
+            raise ValueError(f"unexpected acquired swapchain entry shape: {len(entry)}")
+        try:
+            for eye_index, swapchain, img_index, sc_image, sc_w, sc_h, view in normalized_acquired:
+                view = views[eye_index] if views and views[eye_index] else view
                 view_mat = _pose_to_view_mat4(view.pose) if view else np.eye(4, dtype=np.float32)
                 proj_mat = _fov_to_proj_mat4(view.fov, near=near, far=far) if view else default_proj
 
@@ -574,18 +696,16 @@ class ProjectionLayerPresenter:
                     self._mirror_preview(raw_fbo, sc_w, sc_h)
 
                 xr.release_swapchain_image(swapchain, viewer._xr_sc_release_info)
-                released = True
-            except Exception as exc:
-                if not released:
-                    try:
-                        xr.release_swapchain_image(swapchain, viewer._xr_sc_release_info)
-                    except Exception:
-                        pass
-                viewer._breakdown_inc('openxr_projection_render_failed')
-                print(f"[OpenXRViewer] OpenGL projection render failed: {type(exc).__name__}: {exc}")
-                return []
-
-            eye_layer_views.append(self._projection_view(swapchain, sc_w, sc_h, view, default_fov))
+                eye_layer_views.append(self._projection_view(swapchain, sc_w, sc_h, view, default_fov))
+        except Exception as exc:
+            for eye_index, swapchain, *_rest in normalized_acquired:
+                try:
+                    xr.release_swapchain_image(swapchain, viewer._xr_sc_release_info)
+                except Exception:
+                    pass
+            viewer._breakdown_inc('openxr_projection_render_failed')
+            print(f"[OpenXRViewer] OpenGL projection render failed: {_one_line_exception_text(exc)}")
+            return []
         viewer._breakdown_inc('openxr_projection_screen_present')
         viewer._record_projection_screen_presented()
         return eye_layer_views

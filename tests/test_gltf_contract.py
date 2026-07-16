@@ -154,6 +154,30 @@ def test_preview_room_layout_scales_navigation_speed_to_scene_extent():
     assert "size_speed = 0.8" not in source.split("def main", 1)[1]
 
 
+def test_preview_room_layout_reload_rebuilds_profile_model_transform():
+    source = (SRC / "xr_viewer" / "preview_room_layout.py").read_text(encoding="utf-8")
+    main_source = source.split("def main", 1)[1]
+    reload_source = main_source.split("if glfw.get_key(window, glfw.KEY_R) == glfw.PRESS:", 1)[1].split(
+        "if glfw.get_key(window, glfw.KEY_ESCAPE)", 1
+    )[0]
+
+    assert "env_model = _environment_model_matrix(profile)" in reload_source
+    assert "_world_bounds_from_local(env_local_min, env_local_max, env_model)" in reload_source
+    assert "speed, size_speed = _preview_motion_speeds(env_world_min, env_world_max)" in reload_source
+    assert "projection_near, projection_far = _profile_projection_planes(profile)" in reload_source
+
+
+def test_preview_room_layout_uses_profile_projection_clip_planes():
+    source = (SRC / "xr_viewer" / "preview_room_layout.py").read_text(encoding="utf-8")
+    main_source = source.split("def main", 1)[1]
+
+    assert 'profile.get("xr_projection_near", 0.03)' in source
+    assert 'profile.get("xr_projection_far", 200.0)' in source
+    assert "proj = _projection(aspect, near=projection_near, far=projection_far)" in main_source
+    assert "Preview projection: clip=" in main_source
+    assert "proj = _projection(aspect)" not in main_source
+
+
 def test_preview_room_layout_ctrl_enables_one_meter_per_second_fine_mode():
     source = (SRC / "xr_viewer" / "preview_room_layout.py").read_text(encoding="utf-8")
     main_source = source.split("def main", 1)[1]

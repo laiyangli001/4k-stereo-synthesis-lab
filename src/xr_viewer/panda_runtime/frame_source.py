@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 import math
 from typing import Any, Mapping
 
-from .runtime import PandaControllerRay, PandaEyeView, PandaFrameState, PandaPose
+from .runtime import PandaEyeView, PandaFrameState, PandaPose
 
 
 class PandaFrameSourceError(RuntimeError):
@@ -19,12 +19,11 @@ class PandaFrameSourceInput:
 
     predicted_display_time: float
     frame_index: int | None = None
+    projection_near: float = 0.01
+    projection_far: float = 1000.0
     eye_pose_mats: tuple[Any | None, Any | None] = (None, None)
     eye_fovs: tuple[Any | None, Any | None] = (None, None)
     controller_pose_mats: Mapping[str, Any] = field(default_factory=dict)
-    controller_rays: Mapping[str, PandaControllerRay] = field(default_factory=dict)
-    screen_pose_mat: Any | None = None
-    screen_texture: Any | None = None
 
 
 def build_panda_frame_state(source: PandaFrameSourceInput) -> PandaFrameState:
@@ -42,48 +41,30 @@ def build_panda_frame_state(source: PandaFrameSourceInput) -> PandaFrameState:
     return PandaFrameState(
         predicted_display_time=float(source.predicted_display_time),
         frame_index=source.frame_index,
+        projection_near=float(source.projection_near),
+        projection_far=float(source.projection_far),
         eye_views=(eye_views[0], eye_views[1]),
         controller_poses={
             str(hand).strip().lower(): mat4_to_panda_pose(pose_mat)
             for hand, pose_mat in source.controller_pose_mats.items()
             if pose_mat is not None
         },
-        controller_rays={
-            str(hand).strip().lower(): ray
-            for hand, ray in source.controller_rays.items()
-            if ray is not None
-        },
-        screen_pose=mat4_to_panda_pose(source.screen_pose_mat)
-        if source.screen_pose_mat is not None
-        else None,
-        screen_texture=source.screen_texture,
     )
 
 
 def mat4_to_panda_pose(matrix: Any) -> PandaPose:
-    """Convert a row-major 4x4 transform matrix to PandaPose xyz + xyzw."""
+    """Convert OpenXR/OpenGL X-right/Y-up/-Z-forward into Panda X-right/Y-forward/Z-up."""
     rows = _matrix_rows(matrix)
-    position = (float(rows[0][3]), float(rows[1][3]), float(rows[2][3]))
-    rotation = _mat3_to_quat_xyzw(rows)
-    return PandaPose(position=position, orientation=rotation)
-
-
-def controller_ray_from_vectors(
-    origin: Any,
-    direction: Any,
-    *,
-    length: float = 30.0,
-    visible: bool = True,
-    hit_target: str = "",
-) -> PandaControllerRay:
-    """Create a Panda controller ray from existing smoothed ray vectors."""
-    return PandaControllerRay(
-        origin=_vector3(origin, "origin"),
-        direction=_vector3(direction, "direction"),
-        length=float(length),
-        visible=bool(visible),
-        hit_target=str(hit_target or ""),
+    position = (float(rows[0][3]), -float(rows[2][3]), float(rows[1][3]))
+    rotation = _mat3_to_quat_xyzw(
+        (
+            (rows[0][0], -rows[0][2], rows[0][1], 0.0),
+            (-rows[2][0], rows[2][2], -rows[2][1], 0.0),
+            (rows[1][0], -rows[1][2], rows[1][1], 0.0),
+            (0.0, 0.0, 0.0, 1.0),
+        )
     )
+    return PandaPose(position=position, orientation=rotation)
 
 
 def _matrix_rows(matrix: Any) -> tuple[tuple[float, float, float, float], ...]:
@@ -91,13 +72,6 @@ def _matrix_rows(matrix: Any) -> tuple[tuple[float, float, float, float], ...]:
     if len(rows) != 4 or any(len(row) != 4 for row in rows):
         raise PandaFrameSourceError("pose matrix must be 4x4")
     return rows
-
-
-def _vector3(value: Any, name: str) -> tuple[float, float, float]:
-    if value is None or len(value) != 3:
-        raise PandaFrameSourceError(f"controller ray {name} must be a 3D vector")
-    return tuple(float(component) for component in value)
-
 
 def _mat3_to_quat_xyzw(rows: tuple[tuple[float, float, float, float], ...]) -> tuple[float, float, float, float]:
     m00, m01, m02 = rows[0][0], rows[0][1], rows[0][2]

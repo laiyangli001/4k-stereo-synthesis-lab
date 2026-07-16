@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from xr_viewer.openxr_panda_frame_state import _eye_fovs, update_panda_frame_state_from_viewer
-from xr_viewer.projection_layer_presenter import ProjectionLayerPresenter
+from xr_viewer.openxr_panda_frame_state import _eye_fovs, _eye_pose_mats, update_panda_frame_state_from_viewer
+from xr_viewer.projection_layer_presenter import ProjectionLayerPresenter, _one_line_exception_text
 from xr_viewer.panda_runtime import scene as panda_scene_module
 from xr_viewer.panda_runtime.bridge import (
     PandaBridge,
@@ -12,40 +12,28 @@ from xr_viewer.panda_runtime.bridge import (
     SwapchainImageRef,
     SwapchainResourceKey,
 )
-from xr_viewer.panda_runtime.controller_ray import (
-    PandaControllerRayGeometryError,
-    PandaControllerRayGeometryTarget,
-)
 from xr_viewer.panda_runtime.frame_source import (
     PandaFrameSourceInput,
     build_panda_frame_state,
-    controller_ray_from_vectors,
     mat4_to_panda_pose,
 )
 from xr_viewer.panda_runtime.nv_dx_bridge import PandaNvDxBridge
 from xr_viewer.panda_runtime.opengl_bridge import PandaOpenGLBridge
 from xr_viewer.panda_runtime.scene_bindings import sync_panda_scene_assets_from_viewer
-from xr_viewer.panda_runtime.screen_node import create_panda_screen_node_target
 from xr_viewer.panda_runtime.runtime import (
     GLTF_RENDERER_ENV_VAR,
     PandaAnimationClock,
-    PandaControllerRay,
     PandaEyeView,
     PandaFrameState,
     PandaPose,
     PandaRuntimeUnavailable,
     PandaSceneRenderer,
-    PandaScreenTextureFrame,
     log_renderer_selection,
     resolve_gltf_renderer_mode,
     validate_frame_state,
 )
-from xr_viewer.panda_runtime.scene import PandaSceneGraph
-from xr_viewer.panda_runtime.screen_texture import (
-    PandaScreenTextureUploadError,
-    PandaScreenTextureUploadTarget,
-)
-from xr_viewer.panda_runtime.stereo_targets import StereoTargetSpec, StereoTargets
+from xr_viewer.panda_runtime.scene import PandaFillLight, PandaSceneGraph
+from xr_viewer.panda_runtime.stereo_targets import StereoTargetRef, StereoTargetSpec, StereoTargets
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -75,22 +63,6 @@ class _FakePoseRoot:
         self.pos_quat = (pos, quat)
 
 
-class _FakeScreenTextureTarget:
-    def __init__(self):
-        self.screen_texture = None
-
-    def set_screen_texture(self, screen_texture):
-        self.screen_texture = screen_texture
-
-
-class _FakeControllerRayTarget:
-    def __init__(self):
-        self.controller_ray = None
-
-    def set_controller_ray(self, controller_ray):
-        self.controller_ray = controller_ray
-
-
 class _FakeAnimationRuntime:
     channel_count = 38
     bound_node_count = 19
@@ -109,14 +81,6 @@ class _FakeAnimationPlayer:
 class _FakePandaSceneForBindings:
     def __init__(self):
         self.load_panda_assets = False
-        self.screen_root = None
-        self.screen_texture_target = None
-
-    def attach_screen_root(self, root):
-        self.screen_root = root
-
-    def attach_screen_texture_target(self, target):
-        self.screen_texture_target = target
 
 
 class _FakePandaRendererForBindings:
@@ -125,12 +89,20 @@ class _FakePandaRendererForBindings:
         self.environments = []
         self.controllers = []
         self.frame_states = []
+        self.environment_transforms = []
+        self.environment_lighting = []
 
     def load_environment(self, path):
         self.environments.append(path)
 
     def load_controller(self, hand, path):
         self.controllers.append((hand, path))
+
+    def configure_environment_transform(self, position, rotation, scale):
+        self.environment_transforms.append((position, rotation, scale))
+
+    def configure_environment_lighting(self, ambient_color, head_light_color, fill_lights):
+        self.environment_lighting.append((ambient_color, head_light_color, fill_lights))
 
     def update_frame_state(self, frame_state):
         self.frame_states.append(frame_state)
@@ -171,14 +143,31 @@ class _FakePandaBase:
     def __init__(self):
         self.render = object()
         self.graphicsEngine = _FakeGraphicsEngine()
+        self.win = type(
+            "Win",
+            (),
+            {"get_gsg": lambda _self: type("Gsg", (), {"get_prepared_objects": lambda _gsg: "prepared"})()},
+        )()
 
 
 class _FakeReparentableRoot:
     def __init__(self):
         self.parents = []
+        self.pos = None
+        self.hpr = None
+        self.scale = None
 
     def reparent_to(self, parent):
         self.parents.append(parent)
+
+    def set_pos(self, *value):
+        self.pos = value
+
+    def set_hpr(self, *value):
+        self.hpr = value
+
+    def set_scale(self, *value):
+        self.scale = value
 
 
 class _FakeModernGlFramebuffer:
@@ -189,9 +178,13 @@ class _FakeModernGlFramebuffer:
 class _FakeLens:
     def __init__(self):
         self.fov = None
+        self.near_far = None
 
     def set_fov(self, horizontal, vertical):
         self.fov = (horizontal, vertical)
+
+    def set_near_far(self, near_clip, far_clip):
+        self.near_far = (near_clip, far_clip)
 
 
 class _FakeCameraNode:
@@ -293,6 +286,34 @@ def test_panda_scene_graph_can_own_panda_loaded_environment_root():
     assert scene.environment.animation_target_node_count == 19
     assert scene.environment.animation_bound_node_count == 19
     assert scene.environment.animation_duration_seconds == pytest.approx(15.0)
+    skybox = scene._environment_root.find("**/Model_Artemis__SkyBox_hybrid_pbr")
+    skybox_geom = skybox.find("**/+GeomNode")
+    skybox_state = str(skybox_geom.node().get_geom_state(0))
+    assert "GLTF_UnlitSkybox_GLTF_Skybox_Composite_0" in skybox_state
+    assert "AlphaTestAttrib" not in skybox_state
+    assert "CullFaceAttrib" not in skybox_state
+    assert "CullBinAttrib" not in skybox_state
+    assert "DepthWriteAttrib" not in skybox_state
+
+    from panda3d.core import ShaderAttrib, TextureAttrib
+
+    chair = scene._environment_root.find("**/*chair_close*")
+    chair_geom = chair.find("**/+GeomNode")
+    chair_state = chair_geom.node().get_geom_state(0).compose(chair.get_state())
+    chair_texture_attrib = chair_state.get_attrib(TextureAttrib)
+    chair_stage_order = [
+        chair_texture_attrib.get_on_stage(index).get_name()
+        for index in range(chair_texture_attrib.get_num_on_stages())
+    ]
+    assert chair_stage_order == ["Base Color"]
+    assert chair_state.get_attrib(ShaderAttrib) is not None
+    skybox_texture_attrib = skybox_geom.node().get_geom_state(0).get_attrib(TextureAttrib)
+    skybox_stages = {
+        skybox_texture_attrib.get_on_stage(index).get_name()
+        for index in range(skybox_texture_attrib.get_num_on_stages())
+    }
+    assert "Metal Roughness" not in skybox_stages
+    assert skybox_geom.node().get_geom_state(0).get_attrib(ShaderAttrib) is None
     assert scene.loaded_assets() == (scene.environment,)
     assert "_environment_root" not in scene.environment.__dict__
 
@@ -303,8 +324,6 @@ def test_panda_scene_graph_can_own_panda_loaded_environment_root():
             frame_index=22,
             eye_views=(PandaEyeView(0, pose=pose), PandaEyeView(1, pose=pose)),
             controller_poses={"right": pose, "left": pose},
-            screen_pose=pose,
-            screen_texture=object(),
         )
     )
     assert scene.frame_state.animation_time_seconds == pytest.approx(7.5)
@@ -317,11 +336,8 @@ def test_panda_scene_graph_can_own_panda_loaded_environment_root():
     assert scene.snapshot.animation_channel_count == 38
     assert scene.snapshot.animation_bound_node_count == 19
     assert scene.snapshot.controller_hands == ("left", "right")
-    assert scene.snapshot.screen_pose_present is True
-    assert scene.snapshot.screen_texture_present is True
     assert scene.snapshot.eye_view_count == 2
     assert scene.snapshot.applied_controller_hands == ()
-    assert scene.snapshot.screen_pose_applied is False
 
     scene.release()
     assert scene.released
@@ -347,68 +363,6 @@ def test_panda_scene_graph_applies_controller_pose_to_loaded_roots():
     assert quat.get_k() == pytest.approx(0.0)
 
 
-def test_panda_scene_graph_applies_controller_ray_to_attached_target():
-    scene = PandaSceneGraph()
-    target = _FakeControllerRayTarget()
-    scene.attach_controller_ray_target("left", target)
-    ray = PandaControllerRay(
-        origin=(1.0, 2.0, 3.0),
-        direction=(0.0, 0.0, -1.0),
-        length=12.5,
-        hit_target="screen",
-    )
-
-    scene.update_frame_state(PandaFrameState(controller_rays={"left": ray}))
-
-    assert scene.snapshot.controller_ray_hands == ("left",)
-    assert scene.snapshot.applied_controller_ray_hands == ("left",)
-    assert target.controller_ray is ray
-
-    with pytest.raises(ValueError, match="controller ray hand"):
-        scene.attach_controller_ray_target("middle", target)
-
-
-def test_panda_scene_graph_applies_screen_pose_to_attached_root():
-    pytest.importorskip("panda3d")
-    scene = PandaSceneGraph()
-    root = _FakePoseRoot()
-    scene.attach_screen_root(root)
-    pose = PandaPose((4.0, 5.0, 6.0), (0.0, 0.0, 0.0, 1.0))
-
-    scene.update_frame_state(PandaFrameState(screen_pose=pose))
-
-    assert scene.snapshot.screen_pose_present is True
-    assert scene.snapshot.screen_pose_applied is True
-    assert root.pos_quat is not None
-    pos, quat = root.pos_quat
-    assert tuple(round(pos[index], 4) for index in range(3)) == (4.0, 5.0, 6.0)
-    assert quat.get_r() == pytest.approx(1.0)
-
-
-def test_panda_scene_graph_applies_screen_texture_to_attached_target():
-    scene = PandaSceneGraph()
-    target = _FakeScreenTextureTarget()
-    scene.attach_screen_texture_target(target)
-    screen_texture = PandaScreenTextureFrame(
-        width=1920,
-        height=1080,
-        format="rgba8",
-        native_id=77,
-        frame_index=12,
-        payload=object(),
-    )
-
-    scene.update_frame_state(PandaFrameState(screen_texture=screen_texture))
-
-    assert scene.snapshot.screen_texture_present is True
-    assert scene.snapshot.screen_texture_applied is True
-    assert scene.snapshot.screen_texture_width == 1920
-    assert scene.snapshot.screen_texture_height == 1080
-    assert scene.snapshot.screen_texture_format == "rgba8"
-    assert scene.snapshot.screen_texture_native_id_available is True
-    assert target.screen_texture is screen_texture
-
-
 def test_stereo_targets_default_mode_stays_import_light():
     targets = StereoTargets()
 
@@ -421,6 +375,60 @@ def test_stereo_targets_default_mode_stays_import_light():
     assert not right.created_with_panda
     assert not left.texture_native_id_available
     assert not right.texture_native_id_available
+
+
+def test_stereo_targets_share_wgl_context_before_creating_panda_textures(monkeypatch):
+    from xr_viewer.panda_runtime import stereo_targets as targets_module
+
+    calls = []
+
+    class Base:
+        def __init__(self):
+            self.graphicsEngine = type(
+                "Engine",
+                (), {"render_frame": lambda _self: calls.append("render_frame")},
+            )()
+
+        def destroy(self):
+            calls.append("destroy")
+
+    base = Base()
+    monkeypatch.setattr(targets_module, "_create_panda_base", lambda: base)
+    monkeypatch.setattr(
+        targets_module,
+        "_share_wgl_contexts",
+        lambda context: calls.append(("share", context)),
+    )
+    monkeypatch.setattr(
+        targets_module,
+        "_create_panda_offscreen_target",
+        lambda _base, eye_index, _spec: (
+            f"buffer-{eye_index}",
+            f"texture-{eye_index}",
+            eye_index + 1,
+            f"camera-{eye_index}",
+            f"region-{eye_index}",
+        ) if not calls.append(("target", eye_index)) else None,
+    )
+    monkeypatch.setattr(
+        targets_module,
+        "_init_panda_pbr_pipeline",
+        lambda _base, eye_targets: calls.append(("pbr", eye_targets)) or ("left-pipe", "right-pipe"),
+    )
+    targets = StereoTargets(create_panda_targets=True)
+    targets.set_wgl_share_source_context("viewer-context")
+
+    targets.rebuild(StereoTargetSpec(64, 64, "rgba8"), StereoTargetSpec(64, 64, "rgba8"))
+
+    assert calls == [
+        ("share", "viewer-context"),
+        ("target", 0),
+        ("target", 1),
+        ("pbr", (("buffer-0", "camera-0"), ("buffer-1", "camera-1"))),
+        "render_frame",
+        "render_frame",
+    ]
+    assert targets._panda_pbr_pipelines == ["left-pipe", "right-pipe"]
 
 
 def test_stereo_targets_can_create_panda_offscreen_targets():
@@ -437,12 +445,109 @@ def test_stereo_targets_can_create_panda_offscreen_targets():
     assert right.texture_native_id_available
     assert left.buffer_name == "d2s-panda-eye-0"
     assert right.buffer_name == "d2s-panda-eye-1"
+    from panda3d.core import Texture
+
     assert len(targets._panda_cameras) == 2
     assert len(targets._panda_display_regions) == 2
+    assert all(texture.get_format() == Texture.F_srgb_alpha for texture in targets._panda_textures)
+    assert all(buffer.get_fb_properties().get_srgb_color() for buffer in targets._panda_buffers)
 
     targets.release()
     assert targets.released
     assert targets.target_refs() == ()
+
+
+def test_panda_pbr_pipeline_uses_neutral_ibl_env_map(monkeypatch):
+    import sys
+    import types
+
+    from xr_viewer.panda_runtime import stereo_targets as targets_module
+
+    calls = {}
+    neutral_env = object()
+
+    def fake_neutral_env(module):
+        calls["neutral_module"] = module
+        return neutral_env
+
+    def fake_init(**kwargs):
+        calls.setdefault("init_kwargs", []).append(kwargs)
+        return "pipeline-{}".format(len(calls["init_kwargs"]))
+
+    simplepbr = types.SimpleNamespace(init=fake_init)
+    monkeypatch.setitem(sys.modules, "simplepbr", simplepbr)
+    monkeypatch.setattr(targets_module, "_neutral_ibl_env_map", fake_neutral_env)
+    base = types.SimpleNamespace(render="render", task_mgr="task_mgr")
+
+    pipelines = targets_module._init_panda_pbr_pipeline(
+        base,
+        (("left-buffer", "left-camera"), ("right-buffer", "right-camera")),
+    )
+
+    assert calls["neutral_module"] is simplepbr
+    assert [kwargs["window"] for kwargs in calls["init_kwargs"]] == ["left-buffer", "right-buffer"]
+    assert [kwargs["camera_node"] for kwargs in calls["init_kwargs"]] == ["left-camera", "right-camera"]
+    assert all(kwargs["env_map"] is neutral_env for kwargs in calls["init_kwargs"])
+    assert all(kwargs["use_emission_maps"] is True for kwargs in calls["init_kwargs"])
+    assert all(kwargs["enable_shadows"] is False for kwargs in calls["init_kwargs"])
+    assert pipelines == ("pipeline-1", "pipeline-2")
+    assert base._d2s_simplepbr_pipeline == pipelines
+    assert base._d2s_simplepbr_enabled is True
+
+
+class _FakeLightNode:
+    def __init__(self):
+        self.removed = False
+
+    def set_pos(self, *value):
+        self.pos = value
+
+    def remove_node(self):
+        self.removed = True
+
+
+class _FakeLightRenderRoot:
+    def __init__(self):
+        self.shader_auto_calls = 0
+        self.lights = []
+
+    def set_shader_auto(self):
+        self.shader_auto_calls += 1
+
+    def attach_new_node(self, _light):
+        return _FakeLightNode()
+
+    def set_light(self, node):
+        self.lights.append(node)
+
+    def clear_light(self, node):
+        self.lights.remove(node)
+
+
+def test_panda_profile_lights_do_not_override_simplepbr_shader():
+    pytest.importorskip("panda3d")
+    render_root = _FakeLightRenderRoot()
+    base = type("Base", (), {"render": render_root, "_d2s_simplepbr_enabled": True})()
+    scene = PandaSceneGraph()
+    scene.configure_environment_lighting((0.1, 0.1, 0.1), (0.2, 0.2, 0.2), ())
+
+    scene._install_environment_lights(base)
+
+    assert render_root.shader_auto_calls == 0
+    assert len(render_root.lights) == 2
+
+
+def test_panda_profile_lights_use_shader_auto_without_simplepbr():
+    pytest.importorskip("panda3d")
+    render_root = _FakeLightRenderRoot()
+    base = type("Base", (), {"render": render_root})()
+    scene = PandaSceneGraph()
+    scene.configure_environment_lighting((0.1, 0.1, 0.1), (0.0, 0.0, 0.0), ())
+
+    scene._install_environment_lights(base)
+
+    assert render_root.shader_auto_calls == 1
+    assert len(render_root.lights) == 1
 
 
 def test_panda_bridge_cache_key_includes_session_eye_image_size_and_format():
@@ -469,6 +574,12 @@ def test_panda_scene_graph_renders_panda_targets_then_blits_to_framebuffers(monk
         "_blit_panda_texture_to_framebuffer",
         lambda texture, framebuffer, width, height: blits.append((texture, framebuffer.glo, width, height)),
     )
+    srgb_events = []
+    monkeypatch.setattr(
+        panda_scene_module,
+        "_set_framebuffer_srgb",
+        lambda enabled: srgb_events.append(bool(enabled)),
+    )
     monkeypatch.setattr(
         panda_scene_module,
         "_apply_pose_to_node_path",
@@ -477,17 +588,16 @@ def test_panda_scene_graph_renders_panda_targets_then_blits_to_framebuffers(monk
     scene = PandaSceneGraph()
     environment_root = _FakeReparentableRoot()
     controller_root = _FakeReparentableRoot()
-    screen_root = _FakeReparentableRoot()
-    ray_root = _FakeReparentableRoot()
     scene._environment_root = environment_root
     scene._controller_roots["left"] = controller_root
-    scene._screen_root = screen_root
-    scene._controller_ray_targets["left"] = type("RayTarget", (), {"ray_node": ray_root})()
+    scene.configure_environment_transform((1.0, 2.0, 3.0), (0.0, 0.0, 0.0), (4.0, 5.0, 6.0))
     targets = StereoTargets()
     targets.left = StereoTargetSpec(100, 120, "rgba8")
     targets.right = StereoTargetSpec(101, 121, "rgba8")
     targets._panda_base = _FakePandaBase()
     targets._panda_textures = ["left-texture", "right-texture"]
+    panda_context_calls = []
+    targets.make_panda_context_current = lambda: panda_context_calls.append("panda-context")
     left_camera = _FakeEyeCamera()
     right_camera = _FakeEyeCamera()
     targets._panda_cameras = [left_camera, right_camera]
@@ -498,6 +608,8 @@ def test_panda_scene_graph_renders_panda_targets_then_blits_to_framebuffers(monk
     scene.render_to_framebuffers(
         targets=targets,
         frame_state=PandaFrameState(
+            projection_near=0.1,
+            projection_far=20000.0,
             eye_views=(
                 PandaEyeView(
                     0,
@@ -520,7 +632,7 @@ def test_panda_scene_graph_renders_panda_targets_then_blits_to_framebuffers(monk
     )
     scene.render_to_framebuffers(
         targets=targets,
-        frame_state=PandaFrameState(),
+        frame_state=PandaFrameState(projection_near=0.1, projection_far=20000.0),
         left_framebuffer=_FakeModernGlFramebuffer(33),
         right_framebuffer=_FakeModernGlFramebuffer(34),
         left_resource=left_resource,
@@ -530,21 +642,101 @@ def test_panda_scene_graph_renders_panda_targets_then_blits_to_framebuffers(monk
     )
 
     assert targets._panda_base.graphicsEngine.render_frame_calls == 4
+    assert panda_context_calls == ["panda-context", "panda-context"]
     assert context_calls == ["target-context", "target-context"]
+    assert srgb_events == [True, False, True, False]
     assert environment_root.parents == [targets._panda_base.render]
+    assert environment_root.pos == pytest.approx((1.0, -3.0, 2.0))
+    assert environment_root.hpr == pytest.approx((0.0, 0.0, 0.0))
+    assert environment_root.scale == pytest.approx((4.0, 6.0, 5.0))
     assert controller_root.parents == [targets._panda_base.render]
-    assert screen_root.parents == [targets._panda_base.render]
-    assert ray_root.parents == [targets._panda_base.render]
     assert left_camera.pos_quat is not None
     assert right_camera.pos_quat is not None
     assert left_camera.lens.fov == pytest.approx((57.2958, 45.8366), rel=1e-4)
     assert right_camera.lens.fov == pytest.approx((68.7549, 34.3775), rel=1e-4)
+    assert left_camera.lens.near_far == pytest.approx((0.1, 20000.0))
+    assert right_camera.lens.near_far == pytest.approx((0.1, 20000.0))
     assert blits == [
         ("left-texture", 31, 100, 120),
         ("right-texture", 32, 101, 121),
         ("left-texture", 33, 100, 120),
         ("right-texture", 34, 101, 121),
     ]
+
+
+def test_panda_scene_graph_uses_task_manager_when_simplepbr_is_enabled(monkeypatch):
+    blits = []
+    monkeypatch.setattr(
+        panda_scene_module,
+        "_blit_panda_texture_to_framebuffer",
+        lambda texture, framebuffer, width, height: blits.append((texture, framebuffer.glo, width, height)),
+    )
+    monkeypatch.setattr(panda_scene_module, "_set_framebuffer_srgb", lambda _enabled: None)
+    scene = PandaSceneGraph()
+    targets = StereoTargets()
+    targets.left = StereoTargetSpec(64, 65, "rgba8")
+    targets.right = StereoTargetSpec(66, 67, "rgba8")
+    targets._panda_base = _FakePandaBase()
+    task_steps = []
+    targets._panda_base._d2s_simplepbr_enabled = True
+    targets._panda_base.task_mgr = type(
+        "TaskMgr",
+        (),
+        {"step": lambda _self: task_steps.append("step")},
+    )()
+    targets._panda_textures = ["left-texture", "right-texture"]
+
+    scene.render_to_framebuffers(
+        targets=targets,
+        frame_state=PandaFrameState(),
+        left_framebuffer=_FakeModernGlFramebuffer(51),
+        right_framebuffer=_FakeModernGlFramebuffer(52),
+        make_target_context_current=lambda: None,
+        require_shared_context=True,
+    )
+
+    assert task_steps == ["step", "step"]
+    assert targets._panda_base.graphicsEngine.render_frame_calls == 0
+    assert blits == [("left-texture", 51, 64, 65), ("right-texture", 52, 66, 67)]
+
+
+def test_panda_scene_graph_uses_target_ref_texture_ids_before_target_context(monkeypatch):
+    blits = []
+    events = []
+    monkeypatch.setattr(panda_scene_module, "_drain_target_gl_errors", lambda: events.append("drain"))
+    monkeypatch.setattr(
+        panda_scene_module,
+        "_blit_panda_texture_to_framebuffer",
+        lambda texture, framebuffer, width, height: events.append("blit") or blits.append(
+            (texture, framebuffer.glo, width, height)
+        ),
+    )
+    scene = PandaSceneGraph()
+    targets = StereoTargets()
+    targets.left = StereoTargetSpec(100, 120, "rgba8")
+    targets.right = StereoTargetSpec(101, 121, "rgba8")
+    targets.left_ref = StereoTargetRef(0, targets.left, True, 41)
+    targets.right_ref = StereoTargetRef(1, targets.right, True, 42)
+    targets._panda_base = _FakePandaBase()
+    left_texture = object()
+    right_texture = object()
+    targets._panda_textures = [left_texture, right_texture]
+    context_calls = []
+
+    scene.render_to_framebuffers(
+        targets=targets,
+        frame_state=PandaFrameState(),
+        left_framebuffer=_FakeModernGlFramebuffer(31),
+        right_framebuffer=_FakeModernGlFramebuffer(32),
+        make_target_context_current=lambda: events.append("context") or context_calls.append(
+            (targets.left_ref.texture_native_id, targets.right_ref.texture_native_id)
+        ),
+        require_shared_context=True,
+    )
+
+    assert context_calls == [(41, 42)]
+    assert events == ["context", "drain", "blit", "blit"]
+    assert blits == [(41, 31, 100, 120), (42, 32, 101, 121)]
 
 
 def test_panda_scene_graph_render_to_framebuffers_requires_panda_targets():
@@ -684,8 +876,6 @@ def test_panda_runtime_diagnostics_snapshot_summarizes_assets_targets_and_bridge
             frame_index=11,
             eye_views=(PandaEyeView(0, pose=pose), PandaEyeView(1, pose=pose)),
             controller_poses={"left": pose, "right": pose},
-            controller_rays={"left": PandaControllerRay((0.0, 0.0, 0.0), (0.0, 0.0, -1.0))},
-            screen_pose=pose,
         )
     )
     snapshot = renderer.diagnostics_snapshot()
@@ -697,8 +887,6 @@ def test_panda_runtime_diagnostics_snapshot_summarizes_assets_targets_and_bridge
     assert snapshot.frame_index == 11
     assert snapshot.frame_eye_view_count == 2
     assert snapshot.frame_controller_count == 2
-    assert snapshot.frame_controller_ray_count == 1
-    assert snapshot.frame_screen_pose_present is True
     assert snapshot.scene_animation_time_seconds == pytest.approx(1.5)
     assert snapshot.scene_animation_sample_count == 0
     assert snapshot.scene_animation_applied_player_count == 0
@@ -706,18 +894,8 @@ def test_panda_runtime_diagnostics_snapshot_summarizes_assets_targets_and_bridge
     assert snapshot.scene_animation_channel_count == 0
     assert snapshot.scene_animation_bound_node_count == 0
     assert snapshot.scene_controller_hands == ("left", "right")
-    assert snapshot.scene_controller_ray_hands == ("left",)
-    assert snapshot.scene_applied_controller_ray_hands == ()
-    assert snapshot.scene_screen_pose_present is True
-    assert snapshot.scene_screen_texture_present is False
-    assert snapshot.scene_screen_texture_applied is False
-    assert snapshot.scene_screen_texture_width == 0
-    assert snapshot.scene_screen_texture_height == 0
-    assert snapshot.scene_screen_texture_format == ""
-    assert snapshot.scene_screen_texture_native_id_available is False
     assert snapshot.scene_eye_view_count == 2
     assert snapshot.scene_applied_controller_hands == ()
-    assert snapshot.scene_screen_pose_applied is False
     assert snapshot.event_count == 2
     assert snapshot.events == ("environment_loaded", "stereo_targets_rebuilt")
     assert snapshot.scene_assets[0]["role"] == "environment"
@@ -744,77 +922,7 @@ def test_panda_runtime_diagnostics_snapshot_summarizes_assets_targets_and_bridge
     assert '"scene_assets"' in snapshot_json
 
 
-def test_panda_controller_ray_geometry_target_builds_line_segments():
-    pytest.importorskip("panda3d")
-    from panda3d.core import NodePath
-
-    parent = NodePath("controller-ray-root")
-    target = PandaControllerRayGeometryTarget(parent)
-    visible_ray = PandaControllerRay((1.0, 2.0, 3.0), (0.0, 0.0, -2.0), length=4.0)
-
-    ray_node = target.set_controller_ray(visible_ray)
-
-    assert ray_node is not None
-    assert target.ray_node is ray_node
-    assert target.last_ray is visible_ray
-    assert parent.get_num_children() == 1
-
-    hidden_ray = PandaControllerRay((0.0, 0.0, 0.0), (0.0, 0.0, -1.0), visible=False)
-    assert target.set_controller_ray(hidden_ray) is None
-    assert target.ray_node is None
-    assert parent.get_num_children() == 0
-
-    with pytest.raises(PandaControllerRayGeometryError, match="non-zero"):
-        target.set_controller_ray(PandaControllerRay((0.0, 0.0, 0.0), (0.0, 0.0, 0.0)))
-
-
-def test_panda_screen_texture_upload_target_binds_payload_to_node_path():
-    pytest.importorskip("panda3d")
-    from panda3d.core import NodePath
-
-    node = NodePath("screen")
-    target = PandaScreenTextureUploadTarget(node)
-    frame = PandaScreenTextureFrame(
-        2,
-        2,
-        frame_index=33,
-        payload=bytes(range(16)),
-    )
-
-    texture = target.set_screen_texture(frame)
-
-    assert target.texture is texture
-    assert target.last_frame_index == 33
-    assert node.get_texture() == texture
-    assert texture.get_x_size() == 2
-    assert texture.get_y_size() == 2
-
-    with pytest.raises(PandaScreenTextureUploadError, match="byte length"):
-        target.set_screen_texture(PandaScreenTextureFrame(2, 2, payload=b"short"))
-
-
-def test_panda_screen_texture_frame_validates_dimensions():
-    screen_texture = PandaScreenTextureFrame(1920, 1080, native_id=42)
-
-    assert screen_texture.native_id_available is True
-
-    with pytest.raises(ValueError, match="dimensions"):
-        PandaScreenTextureFrame(0, 1080)
-
-
-def test_panda_controller_ray_validates_vectors_and_length():
-    ray = PandaControllerRay((0.0, 0.0, 0.0), (0.0, 0.0, -1.0), length=5.0)
-
-    assert ray.visible is True
-    assert ray.length == pytest.approx(5.0)
-
-    with pytest.raises(ValueError, match="3D vectors"):
-        PandaControllerRay((0.0, 0.0), (0.0, 0.0, -1.0))
-    with pytest.raises(ValueError, match="positive"):
-        PandaControllerRay((0.0, 0.0, 0.0), (0.0, 0.0, -1.0), length=0.0)
-
-
-def test_panda_frame_source_converts_matrices_and_rays_to_frame_state():
+def test_panda_frame_source_converts_model_layer_matrices_to_frame_state():
     screen_mat = [
         [1.0, 0.0, 0.0, 4.0],
         [0.0, 1.0, 0.0, 5.0],
@@ -827,34 +935,55 @@ def test_panda_frame_source_converts_matrices_and_rays_to_frame_state():
         [0.0, 0.0, 1.0, 0.3],
         [0.0, 0.0, 0.0, 1.0],
     ]
-    screen_texture = PandaScreenTextureFrame(2, 2, payload=bytes(range(16)))
-    ray = controller_ray_from_vectors((1, 2, 3), (0, 0, -1), length=7.0, hit_target="screen")
-
     frame_state = build_panda_frame_state(
         PandaFrameSourceInput(
             predicted_display_time=12.5,
             frame_index=99,
+            projection_near=0.1,
+            projection_far=20000.0,
             eye_pose_mats=(eye_mat, None),
             eye_fovs=({"angle_left": -0.5, "angle_right": 0.5, "angle_up": 0.4, "angle_down": -0.4}, None),
             controller_pose_mats={"left": screen_mat},
-            controller_rays={"left": ray},
-            screen_pose_mat=screen_mat,
-            screen_texture=screen_texture,
         )
     )
 
     assert frame_state.predicted_display_time == pytest.approx(12.5)
     assert frame_state.frame_index == 99
-    assert frame_state.eye_views[0].pose.position == pytest.approx((0.1, 0.2, 0.3))
+    assert frame_state.projection_near == pytest.approx(0.1)
+    assert frame_state.projection_far == pytest.approx(20000.0)
+    assert frame_state.eye_views[0].pose.position == pytest.approx((0.1, -0.3, 0.2))
     assert frame_state.eye_views[0].fov["angle_right"] == pytest.approx(0.5)
     assert frame_state.eye_views[1].pose is None
-    assert frame_state.controller_poses["left"].position == pytest.approx((4.0, 5.0, 6.0))
-    assert frame_state.controller_rays["left"] is ray
-    assert frame_state.screen_pose.position == pytest.approx((4.0, 5.0, 6.0))
-    assert frame_state.screen_texture is screen_texture
+    assert frame_state.controller_poses["left"].position == pytest.approx((4.0, -6.0, 5.0))
 
     pose = mat4_to_panda_pose(screen_mat)
     assert pose.orientation == pytest.approx((0.0, 0.0, 0.0, 1.0))
+
+    yaw_pose = mat4_to_panda_pose(
+        (
+            (0.0, 0.0, 1.0, 0.0),
+            (0.0, 1.0, 0.0, 0.0),
+            (-1.0, 0.0, 0.0, 0.0),
+            (0.0, 0.0, 0.0, 1.0),
+        )
+    )
+    assert yaw_pose.orientation == pytest.approx((0.0, 0.0, 2**-0.5, 2**-0.5))
+
+
+def test_openxr_panda_eye_pose_falls_back_to_xr_pose():
+    pose = type(
+        "Pose",
+        (),
+        {
+            "position": type("Position", (), {"x": 1.0, "y": 2.0, "z": 3.0})(),
+            "orientation": type("Orientation", (), {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0})(),
+        },
+    )()
+
+    left, right = _eye_pose_mats(object(), [type("View", (), {"pose": pose})()])
+
+    assert left[:3, 3] == pytest.approx((1.0, 2.0, 3.0))
+    assert right is None
 
 
 def test_openxr_panda_frame_state_carries_eye_fovs():
@@ -900,7 +1029,48 @@ def test_projection_layer_attempts_panda_opengl_bridge_before_native_fallback(mo
     assert "backend=opengl" in output
     assert "scene-bound-only" not in output
 
-def test_openxr_panda_scene_binding_logs_when_screen_binding_becomes_active(monkeypatch, capsys):
+
+def test_projection_layer_falls_back_to_native_opengl_after_panda_bridge_failure(monkeypatch):
+    viewer = type("Viewer", (), {})()
+    viewer._use_d3d11 = False
+    viewer._gltf_renderer_config = type("Config", (), {"panda3d_enabled": True})()
+    viewer._panda_scene_renderer = object()
+    viewer._ensure_projection_swapchains = lambda: True
+    viewer._breakdown_inc = lambda *_args, **_kwargs: None
+    presenter = ProjectionLayerPresenter(viewer)
+
+    def fake_panda_bridge(*_args, **_kwargs):
+        return []
+
+    native_calls = []
+    monkeypatch.setattr(presenter, "render_panda_opengl_bridge", fake_panda_bridge)
+    monkeypatch.setattr(
+        presenter,
+        "render_opengl",
+        lambda *args, **kwargs: native_calls.append(kwargs.get("acquired")) or ["native"],
+    )
+
+    result = presenter.render_projection(
+        enabled=True,
+        views=[],
+        default_fov=None,
+        default_proj=None,
+        default_proj_d3d=None,
+    )
+
+    assert result == []
+    assert native_calls == []
+
+
+def test_projection_layer_exception_text_is_single_line():
+    text = _one_line_exception_text(RuntimeError("first line\nsecond\tline"))
+
+    assert "\n" not in text
+    assert "\r" not in text
+    assert text == "RuntimeError: first line second line"
+
+
+def test_openxr_panda_scene_binding_logs_when_model_assets_change(monkeypatch, capsys):
     bindings = iter(
         [
             type(
@@ -908,9 +1078,8 @@ def test_openxr_panda_scene_binding_logs_when_screen_binding_becomes_active(monk
                 (),
                 {
                     "loaded": True,
-                    "screen_target_bound": False,
-                    "screen_size": None,
                     "environment_path": "Artemis/environment.glb",
+                    "controller_paths": (),
                 },
             )(),
             type(
@@ -918,9 +1087,8 @@ def test_openxr_panda_scene_binding_logs_when_screen_binding_becomes_active(monk
                 (),
                 {
                     "loaded": True,
-                    "screen_target_bound": True,
-                    "screen_size": (2.4, 1.35),
                     "environment_path": "Artemis/environment.glb",
+                    "controller_paths": (("left", "controllers/left.glb"),),
                 },
             )(),
         ]
@@ -934,10 +1102,8 @@ def test_openxr_panda_scene_binding_logs_when_screen_binding_becomes_active(monk
     viewer._gltf_renderer_config = type("Config", (), {"panda3d_requested": True})()
     viewer._panda_scene_renderer = renderer
     viewer._frame_count = 1
-    viewer.screen_width = 2.4
-    viewer.screen_height = None
-    viewer._screen_pose_mat4 = lambda: None
-    viewer._ensure_screen_dimensions = lambda: setattr(viewer, "screen_height", 1.35)
+    viewer._xr_projection_near = 0.1
+    viewer._xr_projection_far = 20000.0
 
     update_panda_frame_state_from_viewer(
         viewer,
@@ -953,9 +1119,11 @@ def test_openxr_panda_scene_binding_logs_when_screen_binding_becomes_active(monk
     )
 
     output = capsys.readouterr().out
-    assert "Panda3D scene binding active loaded=True screen_bound=False" in output
-    assert "Panda3D scene binding active loaded=True screen_bound=True" in output
+    assert output.count("Panda3D scene binding active loaded=True") == 2
+    assert "clip=0.100/20000.0" in output
     assert len(renderer.frame_states) == 2
+    assert renderer.frame_states[-1].projection_near == pytest.approx(0.1)
+    assert renderer.frame_states[-1].projection_far == pytest.approx(20000.0)
 
 
 def test_panda_frame_state_validates_same_frame_eye_views():
@@ -977,6 +1145,9 @@ def test_panda_frame_state_validates_same_frame_eye_views():
 
     with pytest.raises(PandaRuntimeUnavailable, match="predicted_display_time"):
         validate_frame_state(PandaFrameState(predicted_display_time=float("inf")))
+
+    with pytest.raises(PandaRuntimeUnavailable, match="projection clip planes"):
+        validate_frame_state(PandaFrameState(projection_near=1.0, projection_far=1.0))
 
 
 def test_panda_animation_clock_uses_xr_predicted_display_time_monotonically():
@@ -1056,15 +1227,6 @@ def test_panda_scene_binding_loads_active_environment_and_controllers(tmp_path, 
     right = controllers / "right.glb"
     left.write_bytes(b"left")
     right.write_bytes(b"right")
-    screen_target = type(
-        "FakeScreenNodeTarget",
-        (),
-        {"root": "screen-root", "texture_target": "screen-texture-target"},
-    )()
-    monkeypatch.setattr(
-        "xr_viewer.panda_runtime.screen_node.create_panda_screen_node_target",
-        lambda width, height: screen_target,
-    )
     renderer = _FakePandaRendererForBindings()
     viewer = type("Viewer", (), {})()
     viewer._panda_scene_renderer = renderer
@@ -1073,8 +1235,15 @@ def test_panda_scene_binding_loads_active_environment_and_controllers(tmp_path, 
     viewer._controllers_root = str(tmp_path / "controllers")
     viewer._current_brand = "pico"
     viewer._controller_model = "fallback"
-    viewer.screen_width = 2.4
-    viewer.screen_height = 1.35
+    viewer._env_model_pos = [1.0, 2.0, 3.0]
+    viewer._env_model_rot = [0.1, 0.2, 0.3]
+    viewer._env_model_scale = [4.0, 5.0, 6.0]
+    viewer._env_ambient_color = (0.06, 0.05, 0.04)
+    viewer._env_head_light_color = (0.45, 0.44, 0.43)
+    viewer._env_fill_lights = [
+        {"position": (1.0, 2.0, 3.0), "color": (0.2, 0.3, 0.4), "range": 5.0}
+    ]
+    viewer._env_profile = {"panda_light_scale": 4.0}
 
     result = sync_panda_scene_assets_from_viewer(viewer)
     second = sync_panda_scene_assets_from_viewer(viewer)
@@ -1084,26 +1253,26 @@ def test_panda_scene_binding_loads_active_environment_and_controllers(tmp_path, 
     assert renderer.scene.load_panda_assets is True
     assert renderer.environments == [str(env_path)]
     assert renderer.controllers == [("left", str(left)), ("right", str(right))]
-    assert result.screen_size == pytest.approx((2.4, 1.35))
-    assert result.screen_target_bound is True
-    assert renderer.scene.screen_root is not None
-    assert renderer.scene.screen_texture_target is not None
+    assert renderer.environment_transforms == [
+        ((1.0, 2.0, 3.0), (0.1, 0.2, 0.3), (4.0, 5.0, 6.0))
+    ]
+    assert renderer.environment_lighting == [
+        (
+            (0.24, 0.2, 0.16),
+            (1.8, 1.76, 1.72),
+            (PandaFillLight((1.0, 2.0, 3.0), (0.8, 1.2, 1.6), 5.0),),
+        )
+    ]
+    assert result.ambient_color == (0.24, 0.2, 0.16)
+    assert result.head_light_color == (1.8, 1.76, 1.72)
+    assert result.fill_light_count == 1
+
+    viewer._env_head_light_color = (0.8, 0.7, 0.6)
+    changed = sync_panda_scene_assets_from_viewer(viewer)
+    assert changed is not result
+    assert renderer.environment_lighting[-1][1] == (3.2, 2.8, 2.4)
+
     assert viewer._panda_scene_binding_error == ""
-
-
-def test_panda_screen_node_target_creates_textured_card():
-    pytest.importorskip("panda3d")
-
-    target = create_panda_screen_node_target(2.4, 1.35)
-
-    assert target.width == pytest.approx(2.4)
-    assert target.height == pytest.approx(1.35)
-    assert target.root.get_name() == "d2s-screen-root"
-    assert target.root.get_num_children() == 1
-    assert target.texture_target.node_path == target.root.get_child(0)
-
-    with pytest.raises(ValueError, match="screen dimensions"):
-        create_panda_screen_node_target(0.0, 1.0)
 
 
 def test_panda_scene_renderer_facade_contract():
@@ -1111,6 +1280,11 @@ def test_panda_scene_renderer_facade_contract():
     renderer = PandaSceneRenderer(bridge=bridge)
 
     renderer.load_environment("Artemis/environment.glb")
+    renderer.configure_environment_lighting(
+        (0.04, 0.05, 0.06),
+        (0.5, 0.4, 0.3),
+        ({"position": (1.0, 2.0, 3.0), "color": (0.1, 0.2, 0.3), "range": 7.0},),
+    )
     renderer.load_controller("left", "controllers/left.glb")
     left_spec = StereoTargetSpec(100, 120, "rgba8")
     right_spec = StereoTargetSpec(100, 120, "rgba8")
@@ -1141,6 +1315,11 @@ def test_panda_scene_renderer_facade_contract():
     assert frame_state.predicted_display_time == pytest.approx(123.5)
     assert frame_state.animation_time_seconds == pytest.approx(0.5)
     assert renderer.scene.frame_state is frame_state
+    assert renderer.scene.environment_lighting.ambient_color == (0.04, 0.05, 0.06)
+    assert renderer.scene.environment_lighting.head_light_color == (0.5, 0.4, 0.3)
+    assert renderer.scene.environment_lighting.fill_lights == (
+        PandaFillLight((1.0, 2.0, 3.0), (0.1, 0.2, 0.3), 7.0),
+    )
     assert [asset.role for asset in renderer.scene.loaded_assets()] == ["environment", "controller:left"]
     assert renderer.targets.ready
     assert "environment_loaded" in renderer.diagnostics.summary()["events"]

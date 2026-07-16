@@ -3076,9 +3076,10 @@ def test_openxr_frame_renderer_builds_layers_from_latest_screen_frame():
     assert viewer.calls[1] == ("locate", 123)
     assert viewer._panda_frame_state.predicted_display_time == 123
     assert viewer._panda_frame_state.frame_index == 44
-    assert viewer._panda_frame_state.screen_pose.position == pytest.approx((4.0, 5.0, 6.0))
-    assert viewer._panda_frame_state.controller_poses["left"].position == pytest.approx((4.0, 5.0, 6.0))
-    assert viewer._panda_frame_state.controller_rays["left"].direction == pytest.approx((0.0, 0.0, -1.0))
+    assert viewer._panda_frame_state.controller_poses["left"].position == pytest.approx((4.0, -6.0, 5.0))
+    assert not hasattr(viewer._panda_frame_state, "screen_pose")
+    assert not hasattr(viewer._panda_frame_state, "screen_texture")
+    assert not hasattr(viewer._panda_frame_state, "controller_rays")
     assert panda_updates == [viewer._panda_frame_state]
     assert viewer._panda_frame_state_error == ""
     assert viewer.calls[2] == ("prepare", True)
@@ -3781,6 +3782,7 @@ def test_panda_opengl_projection_bridge_acquires_renders_and_releases_both_eyes(
             self.images = []
 
         def rebuild_targets(self, left, right):
+            events.append(("rebuild", left.width, right.width))
             self.rebuilds.append((left, right))
 
         def render_eyes(self, left_image, right_image):
@@ -3832,6 +3834,8 @@ def test_panda_opengl_projection_bridge_acquires_renders_and_releases_both_eyes(
     assert renderer.targets.create_panda_targets is True
     assert events == [
         ("make_current", "viewer-window"),
+        ("rebuild", 100, 101),
+        ("make_current", "viewer-window"),
         ("acquire", "sc0"),
         ("wait", "sc0"),
         ("acquire", "sc1"),
@@ -3851,12 +3855,160 @@ def test_panda_opengl_projection_bridge_acquires_renders_and_releases_both_eyes(
     assert viewer._panda_render_error == ""
     assert calls == [("openxr_projection_panda_present", 1), "presented"]
     assert [name for name, _seconds in time_calls] == [
+        "openxr_projection_panda_target_prewarm",
         "openxr_projection_panda_acquire_wait",
         "openxr_projection_panda_target_rebuild",
         "openxr_projection_panda_bridge_render",
         "openxr_projection_panda_release",
         "openxr_projection_panda_total",
     ]
+
+
+def test_panda_opengl_projection_bridge_disables_when_targets_not_visible(monkeypatch, capsys):
+    import xr_viewer.projection_layer_presenter as presenter_module
+    from xr_viewer.projection_layer_presenter import ProjectionLayerPresenter
+
+    events = []
+
+    class FakeXr:
+        @staticmethod
+        def acquire_swapchain_image(_swapchain, _info):
+            pytest.fail("OpenXR swapchain must not be acquired when Panda GL targets are not visible")
+
+    class Renderer:
+        def __init__(self):
+            self.bridge = None
+            self.targets = SimpleNamespace(create_panda_targets=False)
+            self.rebuilds = []
+
+        def rebuild_targets(self, left, right):
+            events.append(("rebuild", left.width, right.width))
+            self.rebuilds.append((left, right))
+            self.targets.target_refs = lambda: (SimpleNamespace(texture_native_id=54),)
+
+        def render_eyes(self, _left_image, _right_image):
+            pytest.fail("Panda render must not run when GL target visibility gate fails")
+
+        def diagnostics_snapshot(self):
+            return SimpleNamespace(render_success_count=0, render_failure_count=0, scene_animation_sample_count=1)
+
+    monkeypatch.setattr(presenter_module, "xr", FakeXr)
+    monkeypatch.setattr(presenter_module.glfw, "make_context_current", lambda window: events.append(("make_current", window)))
+    monkeypatch.setattr(presenter_module, "glGetError", lambda: presenter_module.GL_NO_ERROR)
+    monkeypatch.setattr(presenter_module, "glIsTexture", lambda native_id: native_id != 54)
+
+    renderer = Renderer()
+    time_calls = []
+    viewer = SimpleNamespace(
+        _panda_scene_renderer=renderer,
+        _swapchain_sizes={0: (100, 120), 1: (101, 121)},
+        _opengl_swapchain_fmt="rgba8",
+        _breakdown_add_time=lambda name, seconds: time_calls.append((name, seconds)),
+        _use_d3d11=False,
+        window="viewer-window",
+    )
+    presenter = ProjectionLayerPresenter(viewer)
+
+    result = presenter.render_panda_opengl_bridge(["view0", "view1"], default_fov=object())
+
+    assert result == []
+    assert events == [
+        ("make_current", "viewer-window"),
+        ("rebuild", 100, 101),
+        ("make_current", "viewer-window"),
+    ]
+    assert renderer.rebuilds
+    assert renderer.targets.create_panda_targets is True
+    assert viewer._panda_render_failure_count == 1
+    assert "contexts are not shared" in viewer._panda_render_error
+    assert viewer._panda_opengl_bridge_disabled_until > 0.0
+    assert [name for name, _seconds in time_calls] == ["openxr_projection_panda_target_prewarm"]
+    output = capsys.readouterr().out
+    assert "Panda3D OpenGL projection bridge disabled" in output
+    assert "status=bridge-unavailable" in output
+    assert "native_id=54" in output
+
+
+def test_panda_opengl_projection_bridge_failure_reuses_acquired_images_for_native_fallback(monkeypatch):
+    import xr_viewer.projection_layer_presenter as presenter_module
+    from xr_viewer.projection_layer_presenter import ProjectionLayerPresenter
+
+    events = []
+
+    class FakeXr:
+        @staticmethod
+        def acquire_swapchain_image(swapchain, _info):
+            events.append(("acquire", swapchain))
+            return 0
+
+        @staticmethod
+        def release_swapchain_image(swapchain, _info):
+            events.append(("release", swapchain))
+
+    class Renderer:
+        def __init__(self):
+            self.rebuilds = []
+
+        def rebuild_targets(self, left, right):
+            events.append(("rebuild", left.width, right.width))
+            self.rebuilds.append((left, right))
+
+        def render_eyes(self, _left_image, _right_image):
+            events.append("bridge-render")
+            raise RuntimeError("bridge failed")
+
+    monkeypatch.setattr(presenter_module, "xr", FakeXr)
+    monkeypatch.setattr(presenter_module.glfw, "make_context_current", lambda window: events.append(("make_current", window)))
+    monkeypatch.setattr(presenter_module, "_pose_to_view_mat4", lambda pose: f"view-{pose}")
+    monkeypatch.setattr(presenter_module, "_fov_to_proj_mat4", lambda fov, near, far: f"proj-{fov}")
+
+    renderer = Renderer()
+    viewer = SimpleNamespace(
+        _panda_scene_renderer=renderer,
+        _xr_swapchains={0: "sc0", 1: "sc1"},
+        _xr_sc_acquire_info=object(),
+        _xr_sc_release_info=object(),
+        _swapchain_images={0: [SimpleNamespace(image="img0")], 1: [SimpleNamespace(image="img1")]},
+        _swapchain_sizes={0: (100, 120), 1: (101, 121)},
+        _opengl_swapchain_fmt="rgba8",
+        _panda_swapchain_session_generation=7,
+        _preview_active=False,
+        window="viewer-window",
+        _wait_swapchain_image=lambda swapchain: events.append(("wait", swapchain)),
+        _get_or_create_fbo=lambda eye, image, tex, width, height: (f"raw{eye}", f"fbo{eye}"),
+        _render_eye=lambda eye, fbo, view_mat, proj_mat: events.append(("native-render", eye, fbo, view_mat, proj_mat)),
+        _breakdown_inc=lambda _name, amount=1: None,
+        _record_projection_screen_presented=lambda: events.append("presented"),
+        _use_d3d11=False,
+        _gltf_renderer_config=SimpleNamespace(panda3d_enabled=True),
+    )
+    presenter = ProjectionLayerPresenter(viewer)
+    presenter._projection_view = lambda swapchain, width, height, view, _fov: (swapchain, width, height, view)
+    views = [SimpleNamespace(pose="pose0", fov="fov0"), SimpleNamespace(pose="pose1", fov="fov1")]
+
+    result = presenter.render_projection(
+        enabled=True,
+        views=views,
+        default_fov="default-fov",
+        default_proj="default-proj",
+        default_proj_d3d=None,
+    )
+
+    assert result == []
+    assert events == [
+        ("make_current", "viewer-window"),
+        ("rebuild", 100, 101),
+        ("make_current", "viewer-window"),
+        ("acquire", "sc0"),
+        ("wait", "sc0"),
+        ("acquire", "sc1"),
+        ("wait", "sc1"),
+        "bridge-render",
+        ("make_current", "viewer-window"),
+        ("release", "sc0"),
+        ("release", "sc1"),
+    ]
+
 
 def test_panda_projection_bridge_acquires_renders_and_releases_both_eyes(monkeypatch):
     import xr_viewer.projection_layer_presenter as presenter_module
@@ -3880,6 +4032,7 @@ def test_panda_projection_bridge_acquires_renders_and_releases_both_eyes(monkeyp
             self.images = []
 
         def rebuild_targets(self, left, right):
+            events.append(("rebuild", left.width, right.width))
             self.rebuilds.append((left, right))
 
         def render_eyes(self, left_image, right_image):
@@ -3910,7 +4063,15 @@ def test_panda_projection_bridge_acquires_renders_and_releases_both_eyes(monkeyp
     result = presenter.render_panda_bridge(["view0", "view1"], default_fov=object())
 
     assert result == [("sc0", 100, 120, "view0"), ("sc1", 101, 121, "view1")]
-    assert events == [("acquire", "sc0"), ("wait", "sc0"), ("acquire", "sc1"), ("wait", "sc1"), ("release", "sc0"), ("release", "sc1")]
+    assert events == [
+        ("rebuild", 100, 101),
+        ("acquire", "sc0"),
+        ("wait", "sc0"),
+        ("acquire", "sc1"),
+        ("wait", "sc1"),
+        ("release", "sc0"),
+        ("release", "sc1"),
+    ]
     assert renderer.rebuilds[0][0].width == 100
     assert renderer.rebuilds[0][1].height == 121
     left_image, right_image = renderer.images[0]
@@ -3925,6 +4086,7 @@ def test_panda_projection_bridge_acquires_renders_and_releases_both_eyes(monkeyp
     assert set(viewer._panda_render_last_timing) == {"acquire_wait", "target_rebuild", "bridge_render", "release", "total"}
     assert all(seconds >= 0.0 for seconds in viewer._panda_render_last_timing.values())
     assert [name for name, _seconds in time_calls] == [
+        "openxr_projection_panda_target_prewarm",
         "openxr_projection_panda_acquire_wait",
         "openxr_projection_panda_target_rebuild",
         "openxr_projection_panda_bridge_render",

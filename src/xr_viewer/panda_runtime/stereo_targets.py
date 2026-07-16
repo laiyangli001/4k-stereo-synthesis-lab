@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Any
 
 
@@ -47,6 +48,10 @@ class StereoTargets:
     _panda_textures: list[Any] = field(default_factory=list, init=False, repr=False)
     _panda_cameras: list[Any] = field(default_factory=list, init=False, repr=False)
     _panda_display_regions: list[Any] = field(default_factory=list, init=False, repr=False)
+    _panda_pbr_pipelines: list[Any] = field(default_factory=list, init=False, repr=False)
+    _wgl_share_source_context: Any | None = field(default=None, init=False, repr=False)
+    _panda_wgl_device_context: Any | None = field(default=None, init=False, repr=False)
+    _panda_wgl_render_context: Any | None = field(default=None, init=False, repr=False)
 
     @property
     def ready(self) -> bool:
@@ -70,6 +75,17 @@ class StereoTargets:
             return ()
         return self.left_ref, self.right_ref
 
+    def set_wgl_share_source_context(self, context: Any) -> None:
+        self._wgl_share_source_context = context
+
+    def make_panda_context_current(self) -> None:
+        if self._panda_wgl_device_context is None or self._panda_wgl_render_context is None:
+            return
+        from OpenGL.WGL import wglMakeCurrent
+
+        if not wglMakeCurrent(self._panda_wgl_device_context, self._panda_wgl_render_context):
+            raise RuntimeError("Panda OpenGL context could not be made current")
+
     def release(self) -> None:
         self._release_panda_handles()
         self.left = None
@@ -84,15 +100,26 @@ class StereoTargets:
         right: StereoTargetSpec,
     ) -> tuple[StereoTargetRef, StereoTargetRef]:
         base = _create_panda_base()
+        try:
+            self._panda_wgl_device_context, self._panda_wgl_render_context = _current_wgl_context_handles()
+            _share_wgl_contexts(self._wgl_share_source_context)
+            left_buffer, left_texture, left_native_id, left_camera, left_region = _create_panda_offscreen_target(base, 0, left)
+            right_buffer, right_texture, right_native_id, right_camera, right_region = _create_panda_offscreen_target(base, 1, right)
+            pbr_pipelines = _init_panda_pbr_pipeline(
+                base,
+                ((left_buffer, left_camera), (right_buffer, right_camera)),
+            )
+            _render_panda_base_frame(base)
+            _render_panda_base_frame(base)
+        except Exception:
+            base.destroy()
+            raise
         self._panda_base = base
-        left_buffer, left_texture, left_native_id, left_camera, left_region = _create_panda_offscreen_target(base, 0, left)
-        right_buffer, right_texture, right_native_id, right_camera, right_region = _create_panda_offscreen_target(base, 1, right)
-        base.graphicsEngine.render_frame()
-        base.graphicsEngine.render_frame()
         self._panda_buffers.extend([left_buffer, right_buffer])
         self._panda_textures.extend([left_texture, right_texture])
         self._panda_cameras.extend([left_camera, right_camera])
         self._panda_display_regions.extend([left_region, right_region])
+        self._panda_pbr_pipelines.extend(pbr_pipelines)
         return (
             StereoTargetRef(0, left, True, left_native_id, "d2s-panda-eye-0"),
             StereoTargetRef(1, right, True, right_native_id, "d2s-panda-eye-1"),
@@ -103,9 +130,12 @@ class StereoTargets:
         self._panda_textures.clear()
         self._panda_cameras.clear()
         self._panda_display_regions.clear()
+        self._panda_pbr_pipelines.clear()
         if self._panda_base is not None:
             self._panda_base.destroy()
             self._panda_base = None
+        self._panda_wgl_device_context = None
+        self._panda_wgl_render_context = None
 
 
 def _create_panda_base() -> Any:
@@ -118,6 +148,7 @@ def _create_panda_base() -> Any:
             [
                 "window-type offscreen",
                 "load-display pandagl",
+                "framebuffer-srgb true",
                 "audio-library-name null",
                 "sync-video false",
                 "show-frame-rate-meter false",
@@ -135,6 +166,105 @@ def _create_panda_base() -> Any:
     return base
 
 
+
+
+def _init_panda_pbr_pipeline(base: Any, eye_targets: tuple[tuple[Any, Any], ...]) -> tuple[Any, ...]:
+    try:
+        import simplepbr
+    except ImportError as exc:
+        raise RuntimeError("simplepbr is required for Panda3D glTF PBR rendering") from exc
+    pipelines = []
+    env_map = _neutral_ibl_env_map(simplepbr)
+    try:
+        for window, camera_node in eye_targets:
+            pipelines.append(
+                simplepbr.init(
+                    render_node=base.render,
+                    window=window,
+                    camera_node=camera_node,
+                    taskmgr=base.task_mgr,
+                    msaa_samples=0,
+                    use_normal_maps=False,
+                    use_emission_maps=True,
+                    use_occlusion_maps=False,
+                    exposure=0.0,
+                    enable_shadows=False,
+                    enable_fog=False,
+                    env_map=env_map,
+                )
+            )
+    except Exception as exc:
+        raise RuntimeError(f"simplepbr initialization failed: {exc}") from exc
+    try:
+        base._d2s_simplepbr_pipeline = tuple(pipelines)
+        base._d2s_simplepbr_enabled = True
+    except Exception:
+        pass
+    return tuple(pipelines)
+
+
+@lru_cache(maxsize=1)
+def _neutral_ibl_env_map(simplepbr_module: Any) -> Any:
+    from panda3d.core import LColor, Texture
+
+    size = 16
+    texture = Texture("d2s-neutral-ibl-env")
+    texture.setup_cube_map(size, Texture.T_unsigned_byte, Texture.F_rgb)
+    # Low-frequency neutral room light: brighter top, neutral sides, darker floor.
+    pages = []
+    for face_index in range(6):
+        if face_index == 4:
+            color = (178, 178, 178)
+        elif face_index == 5:
+            color = (84, 84, 84)
+        else:
+            color = (128, 128, 128)
+        pages.append(bytes(color) * size * size)
+    texture.set_ram_image(b"".join(pages))
+    texture.set_clear_color(LColor(0.5, 0.5, 0.5, 1.0))
+    return simplepbr_module.EnvMap(
+        texture,
+        prefiltered_size=size,
+        prefiltered_samples=16,
+        blocking_prepare=True,
+    )
+
+
+def _render_panda_base_frame(base: Any) -> None:
+    if bool(getattr(base, "_d2s_simplepbr_enabled", False)) and hasattr(getattr(base, "task_mgr", None), "step"):
+        base.task_mgr.step()
+        return
+    base.graphicsEngine.render_frame()
+
+
+def _share_wgl_contexts(source_context: Any | None) -> None:
+    if source_context is None:
+        return
+    import sys
+
+    if sys.platform != "win32":
+        raise RuntimeError("Panda OpenGL target sharing is only implemented for WGL")
+    from OpenGL.WGL import wglGetCurrentContext, wglShareLists
+
+    panda_context = wglGetCurrentContext()
+    if not panda_context:
+        raise RuntimeError("Panda OpenGL context is not current for WGL sharing")
+    if int(source_context) == int(panda_context):
+        return
+    if not wglShareLists(source_context, panda_context):
+        raise RuntimeError("WGL context sharing between OpenXR and Panda3D failed")
+
+
+def _current_wgl_context_handles() -> tuple[Any | None, Any | None]:
+    import sys
+
+    if sys.platform != "win32":
+        return None, None
+    from OpenGL.WGL import wglGetCurrentContext, wglGetCurrentDC
+
+    return wglGetCurrentDC(), wglGetCurrentContext()
+
+
 def _create_panda_offscreen_target(
     base: Any,
     eye_index: int,
@@ -144,8 +274,10 @@ def _create_panda_offscreen_target(
 
     gsg = base.win.get_gsg()
     texture = Texture(f"d2s-panda-eye-{eye_index}-color")
+    texture.set_format(Texture.F_srgb_alpha)
     framebuffer = FrameBufferProperties()
     framebuffer.set_rgba_bits(8, 8, 8, 8)
+    framebuffer.set_srgb_color(True)
     framebuffer.set_depth_bits(24)
     window_props = WindowProperties.size(spec.width, spec.height)
     buffer = base.graphicsEngine.make_output(

@@ -264,6 +264,25 @@ def _view_matrix(pos, rot_rad):
     return np.linalg.inv(model).astype("f4")
 
 
+def _environment_model_matrix(profile):
+    model_pos = _vec3(profile.get("model_position"), [0.0, -1.0, -3.0])
+    model_rot = _rot_deg(profile.get("model_rotation_deg", profile.get("model_rotation")), [0.0, 0.0, 0.0])
+    model_scale = _vec3(profile.get("model_scale"), [1.0, 1.0, 1.0])
+    return _mat_from_trs(model_pos, model_rot, model_scale)
+
+
+def _profile_projection_planes(profile):
+    try:
+        near = max(0.01, float(profile.get("xr_projection_near", 0.03)))
+    except (TypeError, ValueError):
+        near = 0.03
+    try:
+        far = max(near + 1.0, float(profile.get("xr_projection_far", 200.0)))
+    except (TypeError, ValueError):
+        far = 200.0
+    return near, far
+
+
 def _projection(aspect, fov_deg=80.0, near=0.03, far=200.0):
     f = 1.0 / math.tan(math.radians(fov_deg) * 0.5)
     return np.array([
@@ -395,6 +414,7 @@ def main():
 
     os.chdir(APP_DIR)
     room_dir, profile_path, profile, glb_path = _load_profile(args.room)
+    projection_near, projection_far = _profile_projection_planes(profile)
     view_pose = _active_view_pose(profile)
     if not view_pose:
         view_pose = profile.setdefault("view_pose", {})
@@ -425,10 +445,7 @@ def main():
     screen_vbo = ctx.buffer(reserve=4 * 5 * 4)
     screen_vao = ctx.vertex_array(screen_prog, [(screen_vbo, "3f 2f", "in_position", "in_uv")])
 
-    model_pos = _vec3(profile.get("model_position"), [0.0, -1.0, -3.0])
-    model_rot = _rot_deg(profile.get("model_rotation_deg", profile.get("model_rotation")), [0.0, 0.0, 0.0])
-    model_scale = _vec3(profile.get("model_scale"), [1.0, 1.0, 1.0])
-    env_model = _mat_from_trs(model_pos, model_rot, model_scale)
+    env_model = _environment_model_matrix(profile)
 
     view_pos = _pose_position(view_pose, [0.0, 1.2, 0.0])
     env_world_min, env_world_max = _world_bounds_from_local(env_local_min, env_local_max, env_model)
@@ -450,6 +467,7 @@ def main():
     print(f"Room: {args.room}")
     print(f"Profile: {profile_path}")
     print(f"Preview lighting: exposure={preview_exposure:.2f} gamma={preview_gamma:.2f}")
+    print(f"Preview projection: clip={projection_near:.3f}/{projection_far:.1f}")
     print(f"Preview navigation: move_speed={speed:.2f}m/s size_speed={size_speed:.2f}m/s")
     print(f"Preview fine mode: hold Ctrl for {PREVIEW_FINE_MOVE_SPEED_MPS:.2f}m/s movement/size adjustment")
     print("Controls:")
@@ -599,6 +617,7 @@ def main():
             saved_flash = 1.0
         if glfw.get_key(window, glfw.KEY_R) == glfw.PRESS:
             _room_dir, _profile_path, profile, _glb_path = _load_profile(args.room)
+            projection_near, projection_far = _profile_projection_planes(profile)
             view_pose = _active_view_pose(profile)
             if not view_pose:
                 view_pose = profile.setdefault("view_pose", {})
@@ -606,6 +625,9 @@ def main():
             view_pos = _pose_position(view_pose, [0.0, 1.2, 0.0])
             view_rot_deg = _pose_rotation_deg(view_pose, [0.0, 0.0, 0.0])
             view_rot = [math.radians(v) for v in view_rot_deg]
+            env_model = _environment_model_matrix(profile)
+            env_world_min, env_world_max = _world_bounds_from_local(env_local_min, env_local_max, env_model)
+            speed, size_speed = _preview_motion_speeds(env_world_min, env_world_max)
         if glfw.get_key(window, glfw.KEY_ESCAPE) == glfw.PRESS:
             glfw.set_window_should_close(window, True)
 
@@ -623,7 +645,7 @@ def main():
         ww, wh = glfw.get_window_size(window)
         ctx.viewport = (0, 0, ww, wh)
         aspect = ww / max(1, wh)
-        proj = _projection(aspect)
+        proj = _projection(aspect, near=projection_near, far=projection_far)
         view = _view_matrix(view_pos, view_rot)
         vp = proj @ view
         cam_pos = np.array(view_pos, dtype="f4")

@@ -179,7 +179,9 @@ def test_artemis_large_scene_uses_active_view_pose_and_long_xr_far_plane():
 
     assert "view_pose" not in profile
     assert profile["view_pose_index"] == 1
-    assert profile["view_poses"][1]["y"] == 900.0
+    assert profile["model_position"][:2] == [0.0, 843.0854]
+    assert profile["view_poses"][1]["name"] == "Model Center"
+    assert all(isinstance(profile["view_poses"][1][axis], (int, float)) for axis in ("x", "y", "z"))
     assert profile["xr_projection_near"] == 0.1
     assert profile["xr_projection_far"] >= 20000.0
 

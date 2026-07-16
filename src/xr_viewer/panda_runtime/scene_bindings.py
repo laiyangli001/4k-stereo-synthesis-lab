@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 import os
-from typing import Any
+from typing import Any, Mapping
+
+from .scene import PandaFillLight
 
 
 @dataclass(frozen=True)
@@ -15,8 +18,10 @@ class PandaSceneBindingResult:
     environment_path: str
     controller_brand: str
     controller_paths: tuple[tuple[str, str], ...]
-    screen_size: tuple[float, float] | None = None
-    screen_target_bound: bool = False
+    ambient_color: tuple[float, float, float]
+    head_light_color: tuple[float, float, float]
+    fill_light_count: int
+
 
 
 def sync_panda_scene_assets_from_viewer(viewer: Any) -> PandaSceneBindingResult | None:
@@ -38,8 +43,15 @@ def sync_panda_scene_assets_from_viewer(viewer: Any) -> PandaSceneBindingResult 
         or ""
     )
     controller_paths = _controller_paths(getattr(viewer, "_controllers_root", None), controller_brand)
-    screen_size = _screen_size(viewer)
-    binding_key = (environment_path, controller_brand, controller_paths, screen_size)
+    environment_transform = _environment_transform(viewer)
+    environment_lighting = _environment_lighting(viewer)
+    binding_key = (
+        environment_path,
+        controller_brand,
+        controller_paths,
+        environment_transform,
+        environment_lighting,
+    )
     if getattr(viewer, "_panda_scene_binding_key", None) == binding_key:
         return getattr(viewer, "_panda_scene_binding_result", None)
 
@@ -52,59 +64,34 @@ def sync_panda_scene_assets_from_viewer(viewer: Any) -> PandaSceneBindingResult 
             scene.load_panda_assets = True
         if environment_path:
             renderer.load_environment(environment_path)
+            configure_transform = getattr(renderer, "configure_environment_transform", None)
+            if callable(configure_transform):
+                configure_transform(*environment_transform)
+            configure_lighting = getattr(renderer, "configure_environment_lighting", None)
+            if callable(configure_lighting):
+                configure_lighting(*environment_lighting)
+
         for hand, path in controller_paths:
             renderer.load_controller(hand, path)
-        screen_target_bound = _sync_screen_target(viewer, renderer, screen_size)
     except Exception as exc:
         viewer._panda_scene_binding_error = f"{type(exc).__name__}: {exc}"
         viewer._panda_scene_binding_failed_key = binding_key
         return None
 
     result = PandaSceneBindingResult(
-        loaded=bool(environment_path or controller_paths or screen_target_bound),
+        loaded=bool(environment_path or controller_paths),
         environment_path=environment_path,
         controller_brand=controller_brand,
         controller_paths=controller_paths,
-        screen_size=screen_size,
-        screen_target_bound=screen_target_bound,
+        ambient_color=environment_lighting[0],
+        head_light_color=environment_lighting[1],
+        fill_light_count=len(environment_lighting[2]),
     )
     viewer._panda_scene_binding_key = binding_key
     viewer._panda_scene_binding_failed_key = None
     viewer._panda_scene_binding_result = result
     viewer._panda_scene_binding_error = ""
     return result
-
-
-def _screen_size(viewer: Any) -> tuple[float, float] | None:
-    try:
-        width = float(getattr(viewer, "screen_width", 0.0) or 0.0)
-        height = float(getattr(viewer, "screen_height", 0.0) or 0.0)
-    except (TypeError, ValueError):
-        return None
-    if width <= 0.0 or height <= 0.0:
-        return None
-    return (width, height)
-
-
-def _sync_screen_target(viewer: Any, renderer: Any, screen_size: tuple[float, float] | None) -> bool:
-    if screen_size is None:
-        return False
-    scene = getattr(renderer, "scene", None)
-    attach_root = getattr(scene, "attach_screen_root", None)
-    attach_texture = getattr(scene, "attach_screen_texture_target", None)
-    if not callable(attach_root) or not callable(attach_texture):
-        return False
-    if getattr(viewer, "_panda_screen_node_size", None) == screen_size:
-        return getattr(viewer, "_panda_screen_node_target", None) is not None
-
-    from .screen_node import create_panda_screen_node_target
-
-    target = create_panda_screen_node_target(*screen_size)
-    attach_root(target.root)
-    attach_texture(target.texture_target)
-    viewer._panda_screen_node_target = target
-    viewer._panda_screen_node_size = screen_size
-    return True
 
 
 def _existing_path(path: Any) -> str:
@@ -124,3 +111,65 @@ def _controller_paths(root: Any, brand: str) -> tuple[tuple[str, str], ...]:
         if os.path.isfile(path):
             paths.append((hand, path))
     return tuple(paths)
+
+
+def _environment_transform(viewer: Any) -> tuple[tuple[float, float, float], ...]:
+    return (
+        _vec3(getattr(viewer, "_env_model_pos", None), (0.0, 0.0, 0.0)),
+        _vec3(getattr(viewer, "_env_model_rot", None), (0.0, 0.0, 0.0)),
+        _vec3(getattr(viewer, "_env_model_scale", None), (1.0, 1.0, 1.0)),
+    )
+
+
+def _environment_lighting(
+    viewer: Any,
+) -> tuple[tuple[float, float, float], tuple[float, float, float], tuple[PandaFillLight, ...]]:
+    scale = _panda_light_scale(viewer)
+    ambient = _scale_vec3(_vec3(getattr(viewer, "_env_ambient_color", None), (0.0, 0.0, 0.0)), scale)
+    head = _scale_vec3(_vec3(getattr(viewer, "_env_head_light_color", None), (0.0, 0.0, 0.0)), scale)
+    fills = []
+    for value in getattr(viewer, "_env_fill_lights", ()) or ():
+        if not isinstance(value, Mapping):
+            continue
+        position = _vec3(value.get("position"), (0.0, 0.0, 0.0))
+        color = _scale_vec3(_vec3(value.get("color"), (0.0, 0.0, 0.0)), scale)
+        try:
+            light_range = max(0.001, float(value.get("range", 1.0)))
+        except (TypeError, ValueError):
+            light_range = 1.0
+        if not math.isfinite(light_range):
+            continue
+        if any(max(0.0, component) for component in color):
+            fills.append(PandaFillLight(position, color, light_range))
+    return ambient, head, tuple(fills)
+
+
+def _panda_light_scale(viewer: Any) -> float:
+    profile = getattr(viewer, "_env_profile", None)
+    candidates = [getattr(viewer, "_env_panda_light_scale", None)]
+    if isinstance(profile, Mapping):
+        candidates.extend(
+            (
+                profile.get("panda_light_scale"),
+                profile.get("panda3d_light_scale"),
+                profile.get("env_panda_light_scale"),
+            )
+        )
+    for value in candidates:
+        try:
+            scale = float(value)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(scale) and scale > 0.0:
+            return scale
+    return 1.0
+
+
+def _scale_vec3(value: tuple[float, float, float], scale: float) -> tuple[float, float, float]:
+    return tuple(float(component) * scale for component in value)
+
+
+def _vec3(value: Any, default: tuple[float, float, float]) -> tuple[float, float, float]:
+    if not isinstance(value, (list, tuple)) or len(value) < 3:
+        return default
+    return tuple(float(component) for component in value[:3])

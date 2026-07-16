@@ -5,8 +5,8 @@
   },
   "glb": "environment.glb",
   "model_position": [
-    4629.4438,
-    985.6101,
+    0.0,
+    843.0854,
     -0.1649
   ],
   "model_rotation_deg": [
@@ -31,6 +31,7 @@
   "env_gamma": 2.2,
   "env_emissive_strength": 10.0,
   "env_khr_light_scale": 1.0,
+  "panda_light_scale": 4.0,
   "xr_render_scale": 1.0,
   "xr_projection_near": 0.1,
   "xr_projection_far": 20000.0,
@@ -93,13 +94,13 @@
     },
     {
       "name": "Model Center",
-      "x": -24.3209,
-      "y": 909.0595,
-      "z": -960.0756,
-      "angle": 541.32,
+      "x": -24.5487,
+      "y": 900.6632,
+      "z": -961.4048,
+      "angle": 541.08,
       "rotation_deg": [
-        541.32,
-        -0.56,
+        541.08,
+        1.12,
         0.0
       ]
     },
@@ -120,7 +121,7 @@
     "allow_controller_move": true,
     "width": 90.5689,
     "position": [
-      -34.4155,
+      -22.3741,
       912.0375,
       -903.2128
     ],
