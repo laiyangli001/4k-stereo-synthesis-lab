@@ -306,7 +306,7 @@ def test_panda_scene_graph_can_own_panda_loaded_environment_root():
         for index in range(chair_texture_attrib.get_num_on_stages())
     ]
     assert chair_stage_order == ["Base Color"]
-    assert chair_state.get_attrib(ShaderAttrib) is not None
+    assert chair_state.get_attrib(ShaderAttrib) is None
     skybox_texture_attrib = skybox_geom.node().get_geom_state(0).get_attrib(TextureAttrib)
     skybox_stages = {
         skybox_texture_attrib.get_on_stage(index).get_name()
@@ -410,11 +410,6 @@ def test_stereo_targets_share_wgl_context_before_creating_panda_textures(monkeyp
             f"region-{eye_index}",
         ) if not calls.append(("target", eye_index)) else None,
     )
-    monkeypatch.setattr(
-        targets_module,
-        "_init_panda_pbr_pipeline",
-        lambda _base, eye_targets: calls.append(("pbr", eye_targets)) or ("left-pipe", "right-pipe"),
-    )
     targets = StereoTargets(create_panda_targets=True)
     targets.set_wgl_share_source_context("viewer-context")
 
@@ -424,11 +419,9 @@ def test_stereo_targets_share_wgl_context_before_creating_panda_textures(monkeyp
         ("share", "viewer-context"),
         ("target", 0),
         ("target", 1),
-        ("pbr", (("buffer-0", "camera-0"), ("buffer-1", "camera-1"))),
         "render_frame",
         "render_frame",
     ]
-    assert targets._panda_pbr_pipelines == ["left-pipe", "right-pipe"]
 
 
 def test_stereo_targets_can_create_panda_offscreen_targets():
@@ -455,44 +448,6 @@ def test_stereo_targets_can_create_panda_offscreen_targets():
     targets.release()
     assert targets.released
     assert targets.target_refs() == ()
-
-
-def test_panda_pbr_pipeline_uses_neutral_ibl_env_map(monkeypatch):
-    import sys
-    import types
-
-    from xr_viewer.panda_runtime import stereo_targets as targets_module
-
-    calls = {}
-    neutral_env = object()
-
-    def fake_neutral_env(module):
-        calls["neutral_module"] = module
-        return neutral_env
-
-    def fake_init(**kwargs):
-        calls.setdefault("init_kwargs", []).append(kwargs)
-        return "pipeline-{}".format(len(calls["init_kwargs"]))
-
-    simplepbr = types.SimpleNamespace(init=fake_init)
-    monkeypatch.setitem(sys.modules, "simplepbr", simplepbr)
-    monkeypatch.setattr(targets_module, "_neutral_ibl_env_map", fake_neutral_env)
-    base = types.SimpleNamespace(render="render", task_mgr="task_mgr")
-
-    pipelines = targets_module._init_panda_pbr_pipeline(
-        base,
-        (("left-buffer", "left-camera"), ("right-buffer", "right-camera")),
-    )
-
-    assert calls["neutral_module"] is simplepbr
-    assert [kwargs["window"] for kwargs in calls["init_kwargs"]] == ["left-buffer", "right-buffer"]
-    assert [kwargs["camera_node"] for kwargs in calls["init_kwargs"]] == ["left-camera", "right-camera"]
-    assert all(kwargs["env_map"] is neutral_env for kwargs in calls["init_kwargs"])
-    assert all(kwargs["use_emission_maps"] is True for kwargs in calls["init_kwargs"])
-    assert all(kwargs["enable_shadows"] is False for kwargs in calls["init_kwargs"])
-    assert pipelines == ("pipeline-1", "pipeline-2")
-    assert base._d2s_simplepbr_pipeline == pipelines
-    assert base._d2s_simplepbr_enabled is True
 
 
 class _FakeLightNode:
@@ -522,19 +477,6 @@ class _FakeLightRenderRoot:
 
     def clear_light(self, node):
         self.lights.remove(node)
-
-
-def test_panda_profile_lights_do_not_override_simplepbr_shader():
-    pytest.importorskip("panda3d")
-    render_root = _FakeLightRenderRoot()
-    base = type("Base", (), {"render": render_root, "_d2s_simplepbr_enabled": True})()
-    scene = PandaSceneGraph()
-    scene.configure_environment_lighting((0.1, 0.1, 0.1), (0.2, 0.2, 0.2), ())
-
-    scene._install_environment_lights(base)
-
-    assert render_root.shader_auto_calls == 0
-    assert len(render_root.lights) == 2
 
 
 def test_panda_profile_lights_use_shader_auto_without_simplepbr():
@@ -664,7 +606,7 @@ def test_panda_scene_graph_renders_panda_targets_then_blits_to_framebuffers(monk
     ]
 
 
-def test_panda_scene_graph_uses_task_manager_when_simplepbr_is_enabled(monkeypatch):
+def test_panda_scene_graph_uses_direct_graphics_engine_rendering(monkeypatch):
     blits = []
     monkeypatch.setattr(
         panda_scene_module,
@@ -677,13 +619,6 @@ def test_panda_scene_graph_uses_task_manager_when_simplepbr_is_enabled(monkeypat
     targets.left = StereoTargetSpec(64, 65, "rgba8")
     targets.right = StereoTargetSpec(66, 67, "rgba8")
     targets._panda_base = _FakePandaBase()
-    task_steps = []
-    targets._panda_base._d2s_simplepbr_enabled = True
-    targets._panda_base.task_mgr = type(
-        "TaskMgr",
-        (),
-        {"step": lambda _self: task_steps.append("step")},
-    )()
     targets._panda_textures = ["left-texture", "right-texture"]
 
     scene.render_to_framebuffers(
@@ -695,8 +630,7 @@ def test_panda_scene_graph_uses_task_manager_when_simplepbr_is_enabled(monkeypat
         require_shared_context=True,
     )
 
-    assert task_steps == ["step", "step"]
-    assert targets._panda_base.graphicsEngine.render_frame_calls == 0
+    assert targets._panda_base.graphicsEngine.render_frame_calls == 2
     assert blits == [("left-texture", 51, 64, 65), ("right-texture", 52, 66, 67)]
 
 

@@ -115,15 +115,23 @@ show-frame-rate-meter false
 3. `preview_room_layout.py` 在归一化坐标系中编辑 `view_pose`/`view_poses` 和 screen 布局；座位位置属于 OpenXR reference-space 偏移，不得回写为模型根平移。
 4. 运行时最后分别加载可选的模型布局参数和座位参数。Panda 只把 `model_position/rotation/scale` 应用到环境根，把 `view_pose` 应用到 OpenXR reference space，两者不得相互代偿。
 
+所有标准 glTF/GLB 模型必须共用同一个坐标边界：`panda3d-gltf` 负责加载时把 glTF Y-up `(x,y,z)` 转成 Panda Z-up `(x,-z,y)`，项目不得再按房间、天空盒或手柄重复修改模型根轴向。profile transform 和需要导回现有 glTF/OpenGL renderer 的 Panda Geom 数据统一调用 `xr_viewer.panda_runtime.coordinates`；后者集中处理位置、旋转、尺度、法线、切线和 UV 反变换。只有跨出 Panda renderer 边界时才允许 Panda -> glTF 逆转换，纯 Panda 渲染路径禁止二次转换。
+
 旧 GLB 与旧 profile 必须成对迁移：先重新导出并静态确认应用节点变换后的非天空盒水平中心接近 `(0, 0)`，再删除旧 `model_position` 水平补偿，并用 preview 重新保存座位和 screen 坐标。不得在旧 GLB 尚未替换时提前清空 profile。
 
 ### 4.3 天空盒与色彩
 
-天空盒语义必须优先固化在 Unity→GLB 资产管线：导出副本使用朝内法线与三角形绕序，材质为 `OPAQUE` + `KHR_materials_unlit`，从球体内部按标准 glTF 材质即可看见且不受房间灯光影响。Panda 只按 GLB 普通节点加载和渲染，不按节点名/profile 注入 alpha、double-sided、background bin 或 depth-write 私有覆盖。原 PNG、星空合成图、MIME、UV/朝向与导出质量问题都属于 Unity→GLB 资产管线；只有独立、标准化的 camera-relative background/cubemap 功能才允许作为未来通用 renderer 能力另行设计，不能为单个模型恢复私有补丁。
+天空盒语义必须优先固化在 Unity→GLB 资产管线：导出副本使用朝内法线与三角形绕序，材质为 `OPAQUE` + `KHR_materials_unlit`，从球体内部按标准 glTF 材质即可看见且不受房间灯光影响。Panda 只按 GLB 普通节点加载和渲染，不按节点名/profile 注入 alpha、double-sided、background bin 或 depth-write 私有覆盖。原 PNG、静态天空背景、MIME、UV/朝向与导出质量问题都属于 Unity→GLB 资产管线；只有独立、标准化的 camera-relative background/cubemap 功能才允许作为未来通用 renderer 能力另行设计，不能为单个模型恢复私有补丁。
+
+**Artemis StarGlim 可选 sidecar（唯一的资产声明例外）**：动态星星不能重新塞入 profile 或按 Artemis 节点名硬编码。Unity 导出器仅在源 `StarGlim` 材质、星图与 mask 完整时，于 `environment.glb` 同目录写出 `star_glim.json`、`star_glim_stars.png`、`star_glim_mask.png`；GLB 本身仍保留静态天空背景 PNG。sidecar 必须声明 `schema_version=1`、`effect=star_glim`、精确节点模式、两张相对纹理路径与原始材质参数。Panda 只在加载时验证并加载这些资源，对 sidecar 明确选中的天空几何绑定通用 shader；稳态帧只用既有 XR `animation_time_seconds` 更新 time uniform，禁止 CPU readback、每帧 texture upload 或触碰虚拟屏/CUDA/OpenXR compositor。sidecar 缺失、无效或纹理不可读时，必须保持 GLB 的静态天空背景而不是猜测节点或注入回退补丁。部署时三份 sidecar 文件必须与 GLB 一起复制；重新导出后必须进行真机可见性与性能验证。
 
 Unity -> GLB 材质分类必须是白名单规则：只有天空盒、明确具有发光纹理/非黑发光颜色或明确发光节点语义的对象、以及真正生成的 baked atlas/detail 材质使用 `KHR_materials_unlit`。普通房间、地面、看台、座椅、装饰、金属和普通透明材质必须导出为 glTF metallic-roughness PBR。仅启用 Unity `_EMISSION` keyword 不能证明材质发光；它可能是导入残留状态，不能据此把整个场景改成 unlit。baked 与 no-bake 导出必须执行同一分类规则。
 
+**Artemis 资产例外（已确认）：** Artemis 是完整烘焙/合成纹理场景，`environment.glb` 的 44 个材质（含座椅、地面和站台）必须全部保留 `KHR_materials_unlit`；这不是导出错误，也不得为了满足通用 PBR 规则强制转为 metallic-roughness。Artemis 用于验收 Panda 对 unlit 纹理、alpha、天空盒和动画的加载与合成；PBR 验收必须使用 Bedroom 或控制器等独立 PBR fixture。
+
 Panda 颜色管理必须单独验证：base color/emissive 按 sRGB 解释，normal、occlusion、metallic-roughness 按线性数据解释。只有 baseColorTexture、没有 metallic-roughness/normal/emissive 贴图的 Artemis 环境表面不应强行走完整 metallic-roughness PBR；Panda runtime 应按 `preview_room_layout.py` 的 lit-diffuse 兼容语义渲染这类表面，只保留 Base Color 采样、profile ambient/head 光照、exposure/tone mapping，避免 simplepbr 对缺失 MR 贴图的采样产生黑色罩层或白色覆盖。最终 RT 格式、sRGB view 和 D3D11/OpenGL swapchain format 组成一个端到端色彩契约。不能同时在 Panda 和 D3D11/OpenGL 中做两次 gamma/tone mapping，也不能完全漏掉显示端 gamma/tonemap。Panda offscreen 目标必须申请 sRGB color buffer/texture；在 OpenGL fallback 中，Panda `render_frame()` 期间启用 `GL_FRAMEBUFFER_SRGB`，输出到 `Texture.F_srgb_alpha`，随后关闭该状态并把已编码的 GPU texture blit 到 OpenXR sRGB swapchain，避免线性颜色被当作显示颜色提交。当前待替换的 Artemis GLB 曾为 `lights=0` 且导出材质全部走 unlit 兼容路径，这是错误的资产基线。Panda runtime 已接入 profile ambient/head/fill lights：scene binding 从 viewer 读取 `_env_ambient_color`、`_env_head_light_color`、`_env_fill_lights`，把它们纳入幂等 binding key，并通过 `PandaSceneRenderer.configure_environment_lighting()` 重建 Panda `AmbientLight`、head-following `PointLight` 和 fill `PointLight`。Day/Night preset 或 profile 灯光变化后，下一帧会自动重新配置 Panda 灯光。PBR 还需要与 glTF viewer 类似的环境光基线：Panda 左右眼 offscreen target 初始化 simplepbr 时必须以各自的 eye `GraphicsBuffer` 和 eye camera 创建 pipeline，并提供程序生成的 neutral cubemap/env map，形成低频 IBL/反射输入；每帧渲染必须走 Panda `task_mgr.step()`，让 simplepbr update、camera_world_position 和 postprocess/tone mapping 对 OpenXR eye buffer 生效。profile 灯光安装阶段不得再调用 `set_shader_auto()` 覆盖 simplepbr 的 PBR shader，否则 neutral IBL 虽然创建成功也不会参与最终渲染。它是模型层渲染环境，不接管虚拟屏、键盘、激光、FPS/OSD 或最终 compositor。场景发黑不能只靠补 Panda 灯光解决；必须同时确认房间 PBR 材质确实有匹配的资产语义、只有上述白名单保留 unlit、GLB 灯光合理，并且 Panda/OpenXR 之间只做一次输出颜色变换；禁止恢复 Artemis 节点私有补丁。
+
+**实时模型层资源结论（2026-07-17）：** `simplepbr.init()` 会为每个 eye `GraphicsBuffer` 强制创建 `FilterManager`、`RGBA16F` 场景纹理、depth attachment 和 tone-map quad；在本机 `3648x3648` 双眼 OpenXR 目标上，这些额外 HDR FBO 会触发 `filter-base` / `d2s-panda-eye-*` attachment incomplete，随后 `GL_OUT_OF_MEMORY (0x505)`。因此它不得进入实时 Panda/OpenXR bridge，也不得以每眼 `task_mgr.step()` 替代直接 render。实时路径只保留 Panda 对 GLB 的加载、scene graph、动画、unlit/alpha 和场景灯光，直接渲染到缓存的 `Texture.F_srgb_alpha` + depth24 eye target，再由既有 GPU bridge/blit 合成；不创建 HDR 中间色纹理，不经 CPU。`simplepbr` 仅保留在独立 PBR fixture/预览诊断中，待未来有可证明的单目标资源预算后再单独接入，不能与 Artemis 的全 `KHR_materials_unlit` 验收混用。上段中关于 Artemis 必须走 lit-diffuse、每眼 simplepbr/neutral IBL 和 `task_mgr.step()` 的历史尝试已废弃，不得恢复。
 
 ### 4.4 Panda 稳态 GPU-only 规则
 

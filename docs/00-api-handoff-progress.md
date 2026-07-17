@@ -82,6 +82,34 @@ Current task queue:
 
 ## Current Status
 
+### 2026-07-17 Artemis Unlit Baseline and StarGlim Sidecar
+
+This entry supersedes the 2026-07-16 Artemis PBR/material-split acceptance notes below. The latest asset investigation used the official Khronos glTF Sample Viewer, the existing native preview, and the Panda-backed preview to establish that Artemis is a baked/composited source scene, not a valid metallic-roughness PBR fixture. Its expected runtime export is therefore all `KHR_materials_unlit`; room surfaces, seats, station, skybox, emissive details, and source texture appearance must not be forced into PBR simply to satisfy the generic exporter rule. PBR validation belongs to a separate known-PBR fixture.
+
+Implemented in this pass:
+
+- Removed the realtime `simplepbr` path from Panda eye rendering. `simplepbr.init()` creates `FilterManager` HDR/depth intermediate targets per eye; at the acquired OpenXR size of `3648x3648` this produced `filter-base` / `d2s-panda-eye-*` incomplete attachments and `GL_OUT_OF_MEMORY (0x505)`. The Panda/OpenXR runtime now remains a cached sRGB+depth24 direct model-layer target, GPU bridge/blit path, with no HDR postprocess, per-eye `task_mgr.step()`, CPU readback, or per-frame resource recreation.
+- Kept Panda3D strictly as the 3D model renderer: GLB scene graph, controllers, room/sky geometry, standard glTF node animation and model-layer rendering. Virtual screen, CUDA/GL texture ownership, keyboard, laser, FPS/OSD, OpenXR acquire/wait/release/end-frame, and final composition remain in the existing runtime.
+- Centralized glTF-to-Panda coordinate conversion in `xr_viewer.panda_runtime.coordinates`; standard GLB loading handles `(x,y,z)` -> `(x,-z,y)` once, and environment/profile transforms no longer apply one-off skybox or controller axis patches.
+- Added `preview_room_layout_panda3d.py` as a diagnostic path that keeps the established preview PBR/shader presentation while replacing only GLB resource loading with Panda. It confirms texture/sky geometry loading is not the cause of the earlier simplepbr material failures.
+- Added optional asset-declared `StarGlim` support. `H:\My project\Assets\LoadAndExport.cs` now writes `star_glim.json`, `star_glim_stars.png`, and `star_glim_mask.png` next to an exported GLB when the source StarGlim material and mask are present. The GLB retains its static background sky PNG. Panda validates this sidecar only at environment load, loads the two textures once, binds a generic shader only to the sidecar-declared sky geometry, and thereafter updates only the existing XR-derived `animation_time_seconds` uniform. Missing/invalid sidecars deliberately fall back to the static GLB sky without node-name/profile guessing.
+- Updated `docs/39` with the sidecar boundary, the all-unlit Artemis exception, and the simplepbr memory conclusion. No virtual-screen or compositor ownership moved into Panda.
+
+Verification completed:
+
+```powershell
+.\src\python3\python.exe -m py_compile src\xr_viewer\panda_runtime\star_glim.py src\xr_viewer\panda_runtime\scene.py tests\test_star_glim_sidecar.py
+.\src\python3\python.exe -m pytest tests\test_star_glim_sidecar.py tests\test_panda_runtime_adapter.py -q
+```
+
+Result: `41 passed`. The standalone Panda StarGlim shader constructor succeeds and the currently committed Artemis directory correctly returns no sidecar, so it retains the static-sky fallback. A full `pytest -q` run exceeded the 124-second command timeout and did not produce a suite result; do not record it as a pass.
+
+Required next validation (**real headset required**):
+
+1. Allow Unity to compile `LoadAndExport.cs`, re-export Artemis, and copy `environment.glb`, `star_glim.json`, `star_glim_stars.png`, and `star_glim_mask.png` together into `src/xr_viewer/environments/Artemis/`.
+2. Run the Panda OpenXR path on the headset. Confirm visible static room/sky, animated StarGlim twinkle, no black/gray fallback, no new FBO/GL errors, and stable frame timing. Check that absence or deletion of the sidecar restores only the static sky.
+3. Keep the D3D11/NV_DX acquired-swapchain path as the later main-path gate. The current shared OpenGL bridge is valid only when the per-device WGL context-sharing and visibility gate continue to pass.
+
 ### 2026-07-16 Panda3D OpenXR GPU-only Gate Update
 
 Updated the active migration contract after the OpenGL fallback investigation:

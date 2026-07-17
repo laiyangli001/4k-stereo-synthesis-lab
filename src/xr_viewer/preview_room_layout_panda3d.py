@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Preview a room profile's view_pose and screen layout without OpenXR."""
+"""Preview a room using Panda3D loading and the existing ModernGL renderer.
+
+This diagnostic keeps the shader, camera, render passes, and draw loop identical
+to preview_room_layout.py. Only GLB geometry/material/texture loading is routed
+through panda3d-gltf so visual differences isolate the loader boundary.
+"""
 
 from __future__ import annotations
 
@@ -7,6 +12,7 @@ import argparse
 import json
 import math
 import os
+import subprocess
 import sys
 import warnings
 from pathlib import Path
@@ -17,9 +23,38 @@ import numpy as np
 
 
 APP_DIR = Path(__file__).resolve().parents[1]
+SCRIPT_DIR = Path(__file__).resolve().parent
 ENVIRONMENTS_DIR = APP_DIR / "xr_viewer" / "environments"
 PREVIEW_FINE_MOVE_SPEED_MPS = 1.0
-sys.path.insert(0, str(APP_DIR))
+
+PANDA_DIAGNOSTIC_PRESETS = {
+    "01-raw-no-lights-linear": {"runtime_state": False, "simplepbr": False, "lights": False, "ibl": False, "srgb": False},
+    "02-raw-lights-linear": {"runtime_state": False, "simplepbr": False, "lights": True, "ibl": False, "srgb": False},
+    "03-runtime-state-lights-linear": {"runtime_state": True, "simplepbr": False, "lights": True, "ibl": False, "srgb": False},
+    "04-raw-simplepbr-lights-linear": {"runtime_state": False, "simplepbr": True, "lights": True, "ibl": False, "srgb": False},
+    "05-raw-simplepbr-ibl-linear": {"runtime_state": False, "simplepbr": True, "lights": True, "ibl": True, "srgb": False},
+    "06-raw-simplepbr-ibl-srgb": {"runtime_state": False, "simplepbr": True, "lights": True, "ibl": True, "srgb": True},
+    "07-runtime-simplepbr-ibl-srgb": {"runtime_state": True, "simplepbr": True, "lights": True, "ibl": True, "srgb": True},
+    "08-runtime-simplepbr-lights-srgb": {"runtime_state": True, "simplepbr": True, "lights": True, "ibl": False, "srgb": True},
+    "09-runtime-simplepbr-ibl-srgb-no-lights": {"runtime_state": True, "simplepbr": True, "lights": False, "ibl": True, "srgb": True},
+    "10-runtime-simplepbr-srgb-no-lighting": {"runtime_state": True, "simplepbr": True, "lights": False, "ibl": False, "srgb": True},
+}
+
+
+def _resolved_import_path(entry):
+    try:
+        return Path(entry or os.curdir).resolve()
+    except (OSError, RuntimeError):
+        return None
+
+
+# Direct script execution adds src/xr_viewer first, which would shadow the
+# installed panda3d-gltf package with this project's xr_viewer/gltf package.
+sys.path[:] = [str(APP_DIR)] + [
+    entry
+    for entry in sys.path
+    if _resolved_import_path(entry) not in {APP_DIR, SCRIPT_DIR}
+]
 os.chdir(APP_DIR)
 warnings.filterwarnings(
     "ignore",
@@ -29,15 +64,17 @@ warnings.filterwarnings(
 
 from xr_viewer.gl_state import set_depth_mask  # noqa: E402
 from xr_viewer.gltf import (  # noqa: E402
+    GltfMaterial,
     OPENGL_VERTEX_FORMAT,
     apply_skybox_profile,
+    attach_primitive_contract,
     format_gltf_scene_summary,
-    load_glb_model,
     render_pass_from_primitive,
     sort_transparent_primitives,
     summarize_gltf_scene,
     validate_mesh_contract,
 )
+from xr_viewer.panda_runtime.coordinates import panda_geometry_to_gltf  # noqa: E402
 
 
 ENV_VERT = """
@@ -316,8 +353,247 @@ def _screen_vertices(screen):
     return corners
 
 
+def _panda_vertex_column(vdata, name, width, default=0.0):
+    """Read one Panda vertex column into a packed float32 NumPy array."""
+    from panda3d.core import Geom, GeomVertexReader
+
+    rows = int(vdata.get_num_rows())
+    fmt = vdata.get_format()
+    if not fmt.has_column(name):
+        return np.full((rows, width), float(default), dtype="f4")
+
+    column = fmt.get_column(name)
+    array_index = int(fmt.get_array_with(name))
+    if array_index >= 0 and column.get_numeric_type() == Geom.NT_float32:
+        array_format = fmt.get_array(array_index)
+        stride = int(array_format.get_stride())
+        data = vdata.get_array(array_index).get_handle().get_data()
+        return np.ndarray(
+            shape=(rows, width),
+            dtype=np.float32,
+            buffer=data,
+            offset=int(column.get_start()),
+            strides=(stride, np.dtype(np.float32).itemsize),
+        ).copy()
+
+    reader = GeomVertexReader(vdata, name)
+    getter = {2: reader.get_data2f, 3: reader.get_data3f, 4: reader.get_data4f}[width]
+    result = np.empty((rows, width), dtype="f4")
+    for row in range(rows):
+        value = getter()
+        result[row] = [float(value[index]) for index in range(width)]
+    return result
+
+
+def _panda_matrix(node_path):
+    matrix = node_path.get_net_transform().get_mat()
+    return np.array(
+        [[matrix.get_cell(row, col) for col in range(4)] for row in range(4)],
+        dtype="f4",
+    )
+
+
+def _panda_geometry_vertices(node_path, geom):
+    vdata = geom.get_vertex_data()
+    positions = _panda_vertex_column(vdata, "vertex", 3)
+    normals = _panda_vertex_column(vdata, "normal", 3)
+    tangents = _panda_vertex_column(vdata, "tangent", 4)
+    if not vdata.get_format().has_column("tangent"):
+        tangents[:, 3] = 1.0
+    uv0 = _panda_vertex_column(vdata, "texcoord.0", 2)
+    uv1 = (
+        _panda_vertex_column(vdata, "texcoord.1", 2)
+        if vdata.get_format().has_column("texcoord.1")
+        else uv0.copy()
+    )
+
+    positions, normals, tangents, uv0, uv1 = panda_geometry_to_gltf(
+        positions,
+        normals,
+        tangents,
+        uv0,
+        uv1,
+        _panda_matrix(node_path),
+    )
+    vertices = np.hstack((positions, normals, uv0, uv1)).astype("f4")
+    return vertices, tangents
+
+
+def _panda_primitive_indices(primitive):
+    from panda3d.core import Geom
+
+    primitive = primitive.decompose()
+    if not primitive.is_indexed():
+        first = int(primitive.get_first_vertex())
+        return np.arange(first, first + int(primitive.get_num_vertices()), dtype="u4")
+    dtype_by_type = {
+        Geom.NT_uint8: np.uint8,
+        Geom.NT_uint16: np.uint16,
+        Geom.NT_uint32: np.uint32,
+    }
+    dtype = dtype_by_type.get(primitive.get_index_type())
+    if dtype is None:
+        return np.array(
+            [primitive.get_vertex(index) for index in range(primitive.get_num_vertices())],
+            dtype="u4",
+        )
+    data = primitive.get_vertices().get_handle().get_data()
+    return np.frombuffer(data, dtype=dtype, count=primitive.get_num_vertices()).astype("u4")
+
+
+def _panda_material_state(node_path, geom_node, geom_index):
+    from panda3d.core import (
+        AlphaTestAttrib,
+        MaterialAttrib,
+        TextureAttrib,
+        TransparencyAttrib,
+    )
+
+    state = geom_node.get_geom_state(geom_index).compose(node_path.get_net_state())
+    material_attrib = state.get_attrib(MaterialAttrib)
+    material = material_attrib.get_material() if material_attrib is not None else None
+    base_rgba = (1.0, 1.0, 1.0, 1.0)
+    if material is not None:
+        if material.has_base_color():
+            base_rgba = tuple(float(value) for value in material.get_base_color())
+        elif material.has_diffuse():
+            base_rgba = tuple(float(value) for value in material.get_diffuse())
+
+    alpha_test = state.get_attrib(AlphaTestAttrib)
+    transparency = state.get_attrib(TransparencyAttrib)
+    if alpha_test is not None:
+        alpha_mode = "MASK"
+    elif transparency is not None and transparency.get_mode() != TransparencyAttrib.M_none:
+        alpha_mode = "BLEND"
+    else:
+        alpha_mode = "OPAQUE"
+    alpha_cutoff = 0.5
+    if alpha_test is not None and hasattr(alpha_test, "get_reference_alpha"):
+        alpha_cutoff = float(alpha_test.get_reference_alpha())
+
+    texture = None
+    base_texcoord = 0
+    texture_attrib = state.get_attrib(TextureAttrib)
+    if texture_attrib is not None:
+        stages = [
+            texture_attrib.get_on_stage(index)
+            for index in range(texture_attrib.get_num_on_stages())
+        ]
+        stage = next((item for item in stages if item.get_name() == "Base Color"), None)
+        if stage is None and stages:
+            stage = stages[0]
+        if stage is not None:
+            texture = texture_attrib.get_on_texture(stage)
+            texcoord_name = str(stage.get_texcoord_name())
+            base_texcoord = 1 if texcoord_name.endswith("1") else 0
+
+    return {
+        "base_color": np.array(base_rgba[:3], dtype="f4"),
+        "base_alpha": float(base_rgba[3]),
+        "alpha_mode": alpha_mode,
+        "alpha_cutoff": alpha_cutoff,
+        "base_texcoord": base_texcoord,
+        "texture": texture,
+        "material_name": str(material.get_name()) if material is not None else "",
+    }
+
+
+def _panda_texture_rgba(texture):
+    width = int(texture.get_x_size())
+    height = int(texture.get_y_size())
+    if width <= 0 or height <= 0:
+        raise RuntimeError(f"Panda texture has invalid dimensions: {texture.get_name()}")
+    data = bytes(texture.get_ram_image_as("RGBA"))
+    expected = width * height * 4
+    if len(data) != expected:
+        raise RuntimeError(
+            f"Panda texture has no RGBA RAM image: {texture.get_name()} "
+            f"expected={expected} actual={len(data)}"
+        )
+    return np.frombuffer(data, dtype=np.uint8).reshape(height, width, 4)[::-1].copy()
+
+
+def _load_panda3d_gltf_module():
+    import importlib
+
+    try:
+        module = importlib.import_module("gltf")
+    except ImportError as exc:
+        raise RuntimeError(f"panda3d-gltf import failed: {exc}") from exc
+
+    module_path = Path(getattr(module, "__file__", "")).resolve()
+    local_contract_dir = APP_DIR / "xr_viewer" / "gltf"
+    if module_path.is_relative_to(local_contract_dir):
+        raise RuntimeError(
+            "panda3d-gltf module name collision: "
+            f"resolved project package instead of site-packages: {module_path}"
+        )
+    if not callable(getattr(module, "load_model", None)):
+        raise RuntimeError(f"panda3d-gltf has no load_model(): {module_path}")
+    return module
+
+
+def load_glb_model_with_panda3d(path):
+    """Return the native preview loader contract using Panda3D as the source."""
+    gltf = _load_panda3d_gltf_module()
+    try:
+        from panda3d.core import NodePath
+    except ImportError as exc:
+        raise RuntimeError(f"Panda3D import failed: {exc}") from exc
+
+    root = NodePath(gltf.load_model(str(path)))
+    primitives = []
+    textures = []
+    texture_ids = {}
+    geom_paths = root.find_all_matches("**/+GeomNode")
+    for geom_path in geom_paths:
+        geom_node = geom_path.node()
+        for geom_index in range(geom_node.get_num_geoms()):
+            geom = geom_node.get_geom(geom_index)
+            vertices, tangents = _panda_geometry_vertices(geom_path, geom)
+            material = _panda_material_state(geom_path, geom_node, geom_index)
+            texture = material.pop("texture")
+            tex_id = -1
+            if texture is not None:
+                texture_key = texture.get_name(), int(texture.get_x_size()), int(texture.get_y_size())
+                if texture_key not in texture_ids:
+                    texture_ids[texture_key] = len(textures)
+                    textures.append(_panda_texture_rgba(texture))
+                tex_id = texture_ids[texture_key]
+
+            material_name = material.pop("material_name")
+            for primitive_index in range(geom.get_num_primitives()):
+                indices = _panda_primitive_indices(geom.get_primitive(primitive_index))
+                material_contract = GltfMaterial(
+                    base_color=tuple(float(value) for value in material["base_color"]),
+                    base_alpha=float(material["base_alpha"]),
+                    alpha_mode=material["alpha_mode"],
+                    alpha_cutoff=float(material["alpha_cutoff"]),
+                )
+                record = {
+                    "vertices": vertices,
+                    "tangent": tangents,
+                    "indices": indices,
+                    "primitive_mode": 4,
+                    "node_name": geom_path.get_name(),
+                    "mesh_name": material_name or geom.get_vertex_data().get_name(),
+                    "tex_id": tex_id,
+                    "material_contract": material_contract,
+                    **material,
+                }
+                attach_primitive_contract(record)
+                primitives.append(record)
+
+    print(
+        f"[PandaLoad] asset={path} nodes={geom_paths.get_num_paths()} "
+        f"primitives={len(primitives)} textures={len(textures)}",
+        flush=True,
+    )
+    return primitives, textures, []
+
+
 def _make_env_resources(ctx, prog, glb_path: Path, profile):
-    prims_data, textures, lights = load_glb_model(str(glb_path))
+    prims_data, textures, lights = load_glb_model_with_panda3d(str(glb_path))
     apply_skybox_profile(prims_data, profile)
     summary = summarize_gltf_scene(prims_data, textures, lights)
     print("[Preview] " + format_gltf_scene_summary(summary, label=f"Active environment {glb_path}"))
@@ -410,16 +686,448 @@ def _preview_motion_speeds(env_world_min, env_world_max):
     return base_move_speed * scene_scale, base_size_speed * scene_scale
 
 
+def _diagnostic_size(value):
+    try:
+        width_text, height_text = str(value).lower().split("x", 1)
+        width = int(width_text)
+        height = int(height_text)
+    except (TypeError, ValueError) as exc:
+        raise argparse.ArgumentTypeError("diagnostic size must be WIDTHxHEIGHT") from exc
+    if width <= 0 or height <= 0:
+        raise argparse.ArgumentTypeError("diagnostic dimensions must be positive")
+    return width, height
+
+
+def _load_panda_diagnostic_root(glb_path, runtime_state):
+    from panda3d.core import NodePath
+
+    gltf = _load_panda3d_gltf_module()
+    root = NodePath(gltf.load_model(str(glb_path)))
+    if runtime_state:
+        from xr_viewer.panda_runtime.scene import _apply_gltf_unlit_extension_hints
+
+        _apply_gltf_unlit_extension_hints(str(glb_path), root)
+    return root
+
+
+def _apply_panda_diagnostic_transform(root, profile):
+    from xr_viewer.panda_runtime.coordinates import (
+        gltf_position_to_panda,
+        gltf_rotation_to_panda_hpr_degrees,
+        gltf_scale_to_panda,
+    )
+
+    position = _vec3(profile.get("model_position"), [0.0, -1.0, -3.0])
+    rotation = _rot_deg(
+        profile.get("model_rotation_deg", profile.get("model_rotation")),
+        [0.0, 0.0, 0.0],
+    )
+    scale = _vec3(profile.get("model_scale"), [1.0, 1.0, 1.0])
+    root.set_pos(*gltf_position_to_panda(position))
+    root.set_hpr(*gltf_rotation_to_panda_hpr_degrees(rotation))
+    root.set_scale(*gltf_scale_to_panda(scale))
+
+
+def _install_panda_diagnostic_lights(base, root, profile, camera_position, enabled):
+    from panda3d.core import AmbientLight, LVector3, PointLight
+    from xr_viewer.panda_runtime.coordinates import gltf_position_to_panda
+
+    ambient_color = _vec3(profile.get("env_ambient_color"), [0.24, 0.24, 0.26])
+    head_color = _vec3(profile.get("env_head_light_color"), [0.70, 0.70, 0.72])
+    preview_ambient = [max(0.22, component) for component in ambient_color]
+    preview_head = [max(0.85, component) for component in head_color]
+    base.render.set_shader_input("d2s_preview_ambient_color", *preview_ambient)
+    base.render.set_shader_input("d2s_preview_light_color", *preview_head)
+    base.render.set_shader_input("d2s_preview_exposure", 2.2)
+    base.render.set_shader_input("camera_world_position", *camera_position)
+    if not enabled:
+        return []
+
+    nodes = []
+    if any(ambient_color):
+        ambient = AmbientLight("diagnostic-profile-ambient")
+        ambient.set_color((*ambient_color, 1.0))
+        node = base.render.attach_new_node(ambient)
+        base.render.set_light(node)
+        nodes.append(node)
+    if any(head_color):
+        head = PointLight("diagnostic-profile-head")
+        head.set_color((*head_color, 1.0))
+        head.set_attenuation(LVector3(1.0, 0.0, 0.0))
+        node = base.render.attach_new_node(head)
+        node.set_pos(*camera_position)
+        base.render.set_light(node)
+        nodes.append(node)
+
+    for index, spec in enumerate(profile.get("env_fill_lights", ()) or ()):
+        if not isinstance(spec, dict):
+            continue
+        color = _vec3(spec.get("color"), [0.0, 0.0, 0.0])
+        position = gltf_position_to_panda(_vec3(spec.get("position"), [0.0, 0.0, 0.0]))
+        try:
+            light_range = max(float(spec.get("range", 1.0)), 0.001)
+        except (TypeError, ValueError):
+            light_range = 1.0
+        fill = PointLight(f"diagnostic-profile-fill-{index}")
+        fill.set_color((*color, 1.0))
+        fill.set_attenuation(LVector3(1.0, 0.0, 1.0 / (light_range * light_range)))
+        node = root.attach_new_node(fill)
+        node.set_pos(*position)
+        base.render.set_light(node)
+        nodes.append(node)
+    return nodes
+
+
+def _panda_shader_state_summary(root):
+    from panda3d.core import ShaderAttrib
+
+    result = {
+        "geom_count": 0,
+        "geom_state_count": 0,
+        "shader_attrib_count": 0,
+        "explicit_shader_count": 0,
+        "auto_shader_count": 0,
+        "priorities": {},
+        "attribs": {},
+    }
+    priorities = {}
+    attribs = {}
+    for geom_path in root.find_all_matches("**/+GeomNode"):
+        result["geom_count"] += 1
+        node = geom_path.node()
+        net_state = geom_path.get_net_state()
+        for geom_index in range(node.get_num_geoms()):
+            result["geom_state_count"] += 1
+            state = node.get_geom_state(geom_index).compose(net_state)
+            attrib = state.get_attrib(ShaderAttrib)
+            if attrib is None:
+                continue
+            result["shader_attrib_count"] += 1
+            if attrib.has_shader():
+                result["explicit_shader_count"] += 1
+            else:
+                result["auto_shader_count"] += 1
+            priority = str(int(attrib.get_shader_priority()))
+            priorities[priority] = priorities.get(priority, 0) + 1
+            text = " ".join(str(attrib).split())
+            if len(text) > 240:
+                text = text[:237] + "..."
+            attribs[text] = attribs.get(text, 0) + 1
+    result["priorities"] = priorities
+    result["attribs"] = attribs
+    return result
+
+
+def _panda_material_name_summary(root):
+    from panda3d.core import MaterialAttrib
+
+    names = {}
+    for geom_path in root.find_all_matches("**/+GeomNode"):
+        node = geom_path.node()
+        for geom_index in range(node.get_num_geoms()):
+            state = node.get_geom_state(geom_index).compose(geom_path.get_net_state())
+            material_attrib = state.get_attrib(MaterialAttrib)
+            material_name = (
+                material_attrib.get_material().get_name()
+                if material_attrib is not None
+                else "<none>"
+            )
+            names[material_name] = names.get(material_name, 0) + 1
+    return dict(sorted(names.items()))
+
+
+def _diagnostic_neutral_ibl_env_map(simplepbr_module, intensity):
+    from panda3d.core import LColor, Texture
+
+    strength = min(1.0, max(0.0, float(intensity)))
+    size = 16
+    texture = Texture("d2s-diagnostic-neutral-ibl-env")
+    texture.setup_cube_map(size, Texture.T_unsigned_byte, Texture.F_rgb)
+    pages = []
+    for face_index in range(6):
+        if face_index == 4:
+            color = 178
+        elif face_index == 5:
+            color = 84
+        else:
+            color = 128
+        value = round(color * strength)
+        pages.append(bytes((value, value, value)) * size * size)
+    texture.set_ram_image(b"".join(pages))
+    texture.set_clear_color(LColor(0.5 * strength, 0.5 * strength, 0.5 * strength, 1.0))
+    return simplepbr_module.EnvMap(
+        texture,
+        prefiltered_size=size,
+        prefiltered_samples=16,
+        blocking_prepare=True,
+    )
+
+
+def _panda_image_stats(path):
+    try:
+        from PIL import Image
+    except ImportError:
+        return {}
+    pixels = np.asarray(Image.open(path).convert("RGB"), dtype=np.float32) / 255.0
+    luminance = (
+        pixels[..., 0] * 0.2126
+        + pixels[..., 1] * 0.7152
+        + pixels[..., 2] * 0.0722
+    )
+    return {
+        "rgb_mean": [round(float(value), 6) for value in pixels.mean(axis=(0, 1))],
+        "luminance_mean": round(float(luminance.mean()), 6),
+        "luminance_p05": round(float(np.percentile(luminance, 5)), 6),
+        "luminance_p50": round(float(np.percentile(luminance, 50)), 6),
+        "luminance_p95": round(float(np.percentile(luminance, 95)), 6),
+    }
+
+
+def _gltf_material_summary(glb_path):
+    from pygltflib import GLTF2
+
+    document = GLTF2().load(str(glb_path))
+    materials = tuple(document.materials or ())
+    alpha_modes = {"OPAQUE": 0, "MASK": 0, "BLEND": 0}
+    for material in materials:
+        mode = str(material.alphaMode or "OPAQUE").upper()
+        alpha_modes[mode] = alpha_modes.get(mode, 0) + 1
+    return {
+        "material_count": len(materials),
+        "unlit_count": sum(
+            "KHR_materials_unlit" in (material.extensions or {})
+            for material in materials
+        ),
+        "base_color_texture_count": sum(
+            getattr(material.pbrMetallicRoughness, "baseColorTexture", None)
+            is not None
+            for material in materials
+        ),
+        "metallic_roughness_texture_count": sum(
+            getattr(material.pbrMetallicRoughness, "metallicRoughnessTexture", None)
+            is not None
+            for material in materials
+        ),
+        "normal_texture_count": sum(
+            material.normalTexture is not None for material in materials
+        ),
+        "emissive_texture_count": sum(
+            material.emissiveTexture is not None for material in materials
+        ),
+        "alpha_modes": alpha_modes,
+    }
+
+
+def _render_panda_diagnostic(profile, glb_path, preset_name, output_path, size):
+    config = PANDA_DIAGNOSTIC_PRESETS[preset_name]
+    width, height = size
+    srgb_text = "true" if config["srgb"] else "false"
+
+    from direct.showbase.ShowBase import ShowBase
+    from panda3d.core import Filename, PNMImage, load_prc_file_data
+
+    load_prc_file_data(
+        f"d2s-panda-diagnostic-{preset_name}",
+        "\n".join(
+            [
+                "window-type offscreen",
+                "load-display pandagl",
+                f"win-size {width} {height}",
+                f"framebuffer-srgb {srgb_text}",
+                "audio-library-name null",
+                "sync-video false",
+                "show-frame-rate-meter false",
+                "notify-level-display error",
+            ]
+        ),
+    )
+    base = ShowBase(windowType="offscreen")
+    pipeline = None
+    try:
+        if not base.win or not base.win.get_gsg():
+            raise RuntimeError("Panda3D diagnostic offscreen window has no GSG")
+
+        view_pose = _active_view_pose(profile)
+        view_position = _pose_position(view_pose, [0.0, 1.2, 0.0])
+        view_rotation_deg = _pose_rotation_deg(view_pose, [0.0, 0.0, 0.0])
+        view_rotation = [math.radians(value) for value in view_rotation_deg]
+        from xr_viewer.panda_runtime.coordinates import (
+            gltf_position_to_panda,
+            gltf_rotation_to_panda_hpr_degrees,
+        )
+
+        camera_position = gltf_position_to_panda(view_position)
+        base.camera.set_pos(*camera_position)
+        base.camera.set_hpr(*gltf_rotation_to_panda_hpr_degrees(view_rotation))
+        near, far = _profile_projection_planes(profile)
+        vertical_fov = 80.0
+        horizontal_fov = math.degrees(
+            2.0 * math.atan(math.tan(math.radians(vertical_fov) * 0.5) * width / height)
+        )
+        base.camLens.set_near_far(near, far)
+        base.camLens.set_fov(horizontal_fov, vertical_fov)
+        base.set_background_color(1.0, 1.0, 1.0, 1.0)
+
+        if config["simplepbr"]:
+            import simplepbr
+
+            env_map = (
+                _diagnostic_neutral_ibl_env_map(simplepbr, 1.0)
+                if config["ibl"]
+                else None
+            )
+            pipeline = simplepbr.init(
+                render_node=base.render,
+                window=base.win,
+                camera_node=base.cam,
+                taskmgr=base.task_mgr,
+                msaa_samples=0,
+                use_normal_maps=False,
+                use_emission_maps=True,
+                use_occlusion_maps=False,
+                exposure=0.0,
+                enable_shadows=False,
+                enable_fog=False,
+                env_map=env_map,
+            )
+            base._d2s_simplepbr_enabled = True
+        elif config["lights"]:
+            base.render.set_shader_auto()
+
+        root = _load_panda_diagnostic_root(glb_path, config["runtime_state"])
+        root.reparent_to(base.render)
+        _apply_panda_diagnostic_transform(root, profile)
+        _install_panda_diagnostic_lights(
+            base,
+            root,
+            profile,
+            camera_position,
+            config["lights"],
+        )
+        state_before = _panda_shader_state_summary(root)
+        materials_before = _panda_material_name_summary(root)
+
+        for _ in range(4):
+            if pipeline is not None:
+                base.task_mgr.step()
+            else:
+                base.graphicsEngine.render_frame()
+        state_after = _panda_shader_state_summary(root)
+        materials_after = _panda_material_name_summary(root)
+
+        output_path = Path(output_path).resolve()
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        screenshot = PNMImage()
+        if not base.win.get_screenshot(screenshot):
+            raise RuntimeError("Panda3D diagnostic screenshot capture failed")
+        if not screenshot.write(Filename.from_os_specific(str(output_path))):
+            raise RuntimeError(f"Panda3D diagnostic screenshot write failed: {output_path}")
+
+        fb_props = base.win.get_fb_properties()
+        actual_srgb = bool(fb_props.get_srgb_color())
+        report = {
+            "preset": preset_name,
+            "config": dict(config),
+            "asset": str(glb_path),
+            "output": str(output_path),
+            "requested_size": [width, height],
+            "actual_size": [int(base.win.get_x_size()), int(base.win.get_y_size())],
+            "requested_srgb": bool(config["srgb"]),
+            "actual_framebuffer_srgb": actual_srgb,
+            "materials": _gltf_material_summary(glb_path),
+            "resolved_materials_before_render": materials_before,
+            "resolved_materials_after_render": materials_after,
+            "state_before_render": state_before,
+            "state_after_render": state_after,
+            "image": _panda_image_stats(output_path),
+        }
+        report_path = output_path.with_suffix(".json")
+        report_path.write_text(
+            json.dumps(report, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        print(
+            f"[PandaDiagnostic] preset={preset_name} output={output_path} "
+            f"requested_srgb={config['srgb']} actual_srgb={actual_srgb} "
+            f"shader_explicit={state_after['explicit_shader_count']} "
+            f"shader_auto={state_after['auto_shader_count']} "
+            f"luminance={report['image'].get('luminance_mean', 'n/a')}",
+            flush=True,
+        )
+        return report
+    finally:
+        base.destroy()
+
+
+def _run_panda_diagnostic_suite(room, output_dir, size):
+    output_dir = Path(output_dir).resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    reports = []
+    for preset_name in PANDA_DIAGNOSTIC_PRESETS:
+        output_path = output_dir / f"{preset_name}.png"
+        command = [
+            sys.executable,
+            str(Path(__file__).resolve()),
+            room,
+            "--panda-diagnostic",
+            preset_name,
+            "--diagnostic-output",
+            str(output_path),
+            "--diagnostic-size",
+            f"{size[0]}x{size[1]}",
+        ]
+        print(f"[PandaDiagnostic] launching {preset_name}", flush=True)
+        subprocess.run(command, cwd=str(APP_DIR), check=True)
+        reports.append(
+            json.loads(output_path.with_suffix(".json").read_text(encoding="utf-8"))
+        )
+    suite_report = {
+        "room": room,
+        "output_dir": str(output_dir),
+        "presets": reports,
+    }
+    report_path = output_dir / "suite.json"
+    report_path.write_text(
+        json.dumps(suite_report, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    print(f"[PandaDiagnostic] suite complete: {report_path}", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("room", nargs="?", default="bedroom")
     parser.add_argument("--exposure", type=float, default=None, help="Preview-only brightness multiplier")
     parser.add_argument("--gamma", type=float, default=None, help="Preview-only output gamma")
     parser.add_argument("--center-view", action="store_true", help="Start camera at the transformed model bounds center")
+    parser.add_argument("--panda-diagnostic", choices=tuple(PANDA_DIAGNOSTIC_PRESETS))
+    parser.add_argument("--diagnostic-output", type=Path)
+    parser.add_argument(
+        "--diagnostic-suite",
+        nargs="?",
+        const="logs/panda_render_diagnostics",
+        help="Render every Panda diagnostic preset into the optional output directory",
+    )
+    parser.add_argument("--diagnostic-size", type=_diagnostic_size, default=(1280, 720))
     args = parser.parse_args()
 
     os.chdir(APP_DIR)
     room_dir, profile_path, profile, glb_path = _load_profile(args.room)
+    if args.diagnostic_suite:
+        _run_panda_diagnostic_suite(args.room, args.diagnostic_suite, args.diagnostic_size)
+        return
+    if args.panda_diagnostic:
+        output_path = args.diagnostic_output
+        if output_path is None:
+            output_path = Path("logs/panda_render_diagnostics") / f"{args.panda_diagnostic}.png"
+        _render_panda_diagnostic(
+            profile,
+            glb_path,
+            args.panda_diagnostic,
+            output_path,
+            args.diagnostic_size,
+        )
+        return
     projection_near, projection_far = _profile_projection_planes(profile)
     view_pose = _active_view_pose(profile)
     if not view_pose:

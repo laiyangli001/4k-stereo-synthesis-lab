@@ -7,6 +7,13 @@ import math
 from pathlib import Path
 from typing import Any, Mapping
 
+from .coordinates import (
+    gltf_position_to_panda,
+    gltf_rotation_to_panda_hpr_degrees,
+    gltf_scale_to_panda,
+)
+from .star_glim import apply_star_glim_sidecar, set_star_glim_time
+
 
 @dataclass(frozen=True)
 class PandaAssetRef:
@@ -65,6 +72,7 @@ class PandaSceneGraph:
     released: bool = False
     environment_lighting: PandaEnvironmentLighting = field(default_factory=PandaEnvironmentLighting)
     _environment_root: Any | None = field(default=None, init=False, repr=False)
+    _environment_star_glim_nodes: tuple[Any, ...] = field(default_factory=tuple, init=False, repr=False)
     _controller_roots: dict[str, Any] = field(default_factory=dict, init=False, repr=False)
     _environment_animation_player: Any | None = field(default=None, init=False, repr=False)
     _controller_animation_players: dict[str, Any] = field(default_factory=dict, init=False, repr=False)
@@ -82,6 +90,11 @@ class PandaSceneGraph:
         asset, root, animation_player = self._make_asset_ref("environment", asset_path)
         self.environment = asset
         self._environment_root = root
+        self._environment_star_glim_nodes = (
+            apply_star_glim_sidecar(asset_path, root, base_color_texture=_base_color_texture)
+            if root is not None
+            else ()
+        )
         self._environment_animation_player = animation_player
         _set_animation_player_loop(animation_player, self._animation_loop)
 
@@ -133,6 +146,7 @@ class PandaSceneGraph:
         animation_applied_player_count = 0
         if animation_time_seconds is not None:
             animation_applied_player_count = self._apply_animation_time(animation_time_seconds)
+            set_star_glim_time(self._environment_star_glim_nodes, animation_time_seconds)
         self.snapshot = _snapshot_from_frame_state(
             frame_state,
             applied_controller_hands,
@@ -216,6 +230,7 @@ class PandaSceneGraph:
         self.environment = None
         self.controllers.clear()
         self._environment_root = None
+        self._environment_star_glim_nodes = ()
         self._controller_roots.clear()
         self._environment_animation_player = None
         self._controller_animation_players.clear()
@@ -298,7 +313,7 @@ class PandaSceneGraph:
             raise RuntimeError("Panda render root cannot own environment lights")
         from panda3d.core import AmbientLight, LVector3, PointLight
 
-        if not bool(getattr(base, "_d2s_simplepbr_enabled", False)) and hasattr(render_root, "set_shader_auto"):
+        if hasattr(render_root, "set_shader_auto"):
             render_root.set_shader_auto()
         if any(lighting.ambient_color):
             ambient = AmbientLight("d2s-profile-ambient")
@@ -396,9 +411,6 @@ def _set_preview_diffuse_shader_inputs(render_root: Any, lighting: PandaEnvironm
         return
 
 def _render_panda_base_frame(base: Any) -> None:
-    if bool(getattr(base, "_d2s_simplepbr_enabled", False)) and hasattr(getattr(base, "task_mgr", None), "step"):
-        base.task_mgr.step()
-        return
     base.graphicsEngine.render_frame()
 
 
@@ -719,14 +731,9 @@ def _apply_pose_to_node_path(node_path: Any, pose: Any) -> bool:
 def _apply_environment_transform(root: Any, position: Any, rotation: Any, scale: Any) -> bool:
     if root is None or not all(hasattr(root, name) for name in ("set_pos", "set_hpr", "set_scale")):
         return False
-    import math
-
-    x, y, z = (float(value) for value in position)
-    yaw, pitch, roll = (float(value) for value in rotation)
-    sx, sy, sz = (float(value) for value in scale)
-    root.set_pos(x, -z, y)
-    root.set_hpr(math.degrees(yaw), math.degrees(pitch), -math.degrees(roll))
-    root.set_scale(sx, sz, sy)
+    root.set_pos(*gltf_position_to_panda(position))
+    root.set_hpr(*gltf_rotation_to_panda_hpr_degrees(rotation))
+    root.set_scale(*gltf_scale_to_panda(scale))
     return True
 
 

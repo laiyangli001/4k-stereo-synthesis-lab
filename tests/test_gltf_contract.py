@@ -1,6 +1,8 @@
 import ast
 import json
 from pathlib import Path
+import subprocess
+import sys
 
 import numpy as np
 import pytest
@@ -176,6 +178,58 @@ def test_preview_room_layout_uses_profile_projection_clip_planes():
     assert "proj = _projection(aspect, near=projection_near, far=projection_far)" in main_source
     assert "Preview projection: clip=" in main_source
     assert "proj = _projection(aspect)" not in main_source
+
+
+def test_preview_room_layout_handles_zero_sized_window_before_projection():
+    source = (SRC / "xr_viewer" / "preview_room_layout.py").read_text(encoding="utf-8")
+    main_source = source.split("def main", 1)[1]
+
+    assert "if not math.isfinite(aspect) or aspect <= 0.0:" in source
+    assert "if ww <= 0 or wh <= 0:" in main_source
+    assert "aspect = ww / wh" in main_source
+    assert "ww / max(1, wh)" not in main_source
+
+
+def test_panda_preview_changes_only_the_model_loading_boundary():
+    native = (SRC / "xr_viewer" / "preview_room_layout.py").read_text(encoding="utf-8")
+    panda = (SRC / "xr_viewer" / "preview_room_layout_panda3d.py").read_text(encoding="utf-8")
+
+    preview_start = "    projection_near, projection_far = _profile_projection_planes(profile)"
+    assert panda.split(preview_start, 1)[1] == native.split(preview_start, 1)[1]
+    assert "--panda-diagnostic" in panda
+    assert "if args.panda_diagnostic:" in panda
+    for shader_name in ("ENV_VERT", "ENV_FRAG", "SCREEN_VERT", "SCREEN_FRAG"):
+        native_shader = native.split(f'{shader_name} = """', 1)[1].split('"""', 1)[0]
+        panda_shader = panda.split(f'{shader_name} = """', 1)[1].split('"""', 1)[0]
+        assert panda_shader == native_shader
+    assert "root = NodePath(gltf.load_model(str(path)))" in panda
+    assert "load_glb_model(str(glb_path))" not in panda
+
+
+def test_panda_preview_direct_execution_resolves_installed_gltf_package():
+    script = SRC / "xr_viewer" / "preview_room_layout_panda3d.py"
+    script_dir = script.parent
+    probe = (
+        "import runpy,sys;"
+        f"sys.path.insert(0, {str(script_dir)!r});"
+        f"ns=runpy.run_path({str(script)!r}, run_name='panda_preview_probe');"
+        "module=ns['_load_panda3d_gltf_module']();"
+        "print(module.__file__)"
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    resolved = Path(result.stdout.strip()).resolve()
+    assert not resolved.is_relative_to(SRC / "xr_viewer" / "gltf")
+    assert resolved.name == "__init__.py"
 
 
 def test_preview_room_layout_ctrl_enables_one_meter_per_second_fine_mode():
@@ -496,9 +550,9 @@ def test_summarize_gltf_scene_reports_counts_passes_and_bounds():
             {
                 "primitive_count": 44,
                 "texture_count": 19,
-                    "light_count": 3,
-                    "alpha_modes": {"BLEND": 28, "MASK": 1, "OPAQUE": 15},
-                    "render_passes": {"mask": 1, "opaque": 15, "transparent": 28},
+                "light_count": 0,
+                "alpha_modes": {"BLEND": 28, "OPAQUE": 16},
+                "render_passes": {"opaque": 16, "transparent": 28},
                 "extensionsRequired": ["KHR_materials_unlit"],
                 "materialExtensions": ["KHR_materials_unlit"],
                 "primitiveExtensions": [],
