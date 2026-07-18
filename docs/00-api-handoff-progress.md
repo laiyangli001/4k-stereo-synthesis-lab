@@ -1,5 +1,23 @@
 # Handoff - 2026-06-27
 
+### 2026-07-18 Filament glTF Runtime Migration
+
+The active GLB runtime migration is now `docs/40-filament-gltf-openxr-implementation-plan.md`, replacing Panda3D as the target renderer. Filament `gltfio` owns GLB loading, scene graph, standard material semantics, and `Animator` playback for node TRS, skin, and morph data. Artemis satellite and spaceship motion must use `Animator`; the custom Python accessor/TRS sampler is not a valid main path.
+
+Completed locally:
+
+- Downloaded and SHA-256 validated Filament v1.74.0 SDKs for Windows, macOS, and Linux under `native/filament/sdk/`.
+- Added portable C++ bridge source and CMake build definition under `native/filament/bridge/`.
+- Built Windows `src/xr_viewer/native/filament_bridge.dll` successfully with CMake and MSVC. macOS/Linux SDKs and CMake definitions are ready, but their `.dylib`/`.so` must be built on matching platform runners.
+- Added `docs/40` as the canonical Filament architecture, lifecycle, GPU-only gate, test matrix, and Panda3D supersession record.
+
+Not completed and therefore not eligible for default selection:
+
+- Python ABI loader, OpenXR-current-context Engine creation, actual acquired swapchain texture binding, per-eye Filament RenderTarget rendering, compositor selector, and real-headset D3D11/OpenGL validation.
+- No CPU readback, PBO/Numpy/PIL image staging, or per-frame GLB/resource creation is permitted as a bridge fallback.
+- The current default renderer remains native/OpenGL. Panda3D stays only as historical probe/fallback reference until removed after Filament gate completion.
+
+Next validation order: build/load the bridge ABI, prove Engine/context ownership in the current OpenXR graphics context, bind an acquired swapchain target, render a single eye test frame, verify both eyes and `Animator` continuity, then integrate the mutually exclusive `native|filament` presenter selector.
 ## Project
 
 Repo:
@@ -17,7 +35,7 @@ https://github.com/laiyangli001/4k-stereo-synthesis-lab
 Current focus:
 
 ```text
-OpenXR projection-main stereo presentation, Panda3D glTF OpenXR D3D11 migration, glTF 2.0 renderer compliance layer, Traditional/Cinema runtime output contracts, GUI/runtime progress visibility, render-size defaults, and real-device presentation/runtime handoff follow-ups
+OpenXR projection-main stereo presentation, Filament glTF OpenXR D3D11 migration, glTF 2.0 renderer compliance layer, Traditional/Cinema runtime output contracts, GUI/runtime progress visibility, render-size defaults, and real-device presentation/runtime handoff follow-ups
 ```
 
 Latest pushed task commit:
@@ -33,7 +51,8 @@ Canonical specs for current work:
 - `docs/35-OpenXR_Asynchronous_Decoupled_Rendering_Architecture_Report.md` - target OpenXR asynchronous decoupled rendering architecture.
 - `docs/36-OpenXR_Asynchronous_Decoupled_Rendering_Implementation_Plan.md` - implementation plan for the OpenXR asynchronous refactor; use it as the current plan for projection-layer main-screen presentation, optional Quad diagnostics/overlays, panorama background, GPU Glow, and wall reflection work.
 - `docs/38-gltf-2-renderer-compliance-layer-plan.md` - current plan for the OpenXR/local glTF 2.0 core renderer compliance layer: static mesh/material/texture/render-pass contracts plus runtime animation, skinning, morph targets, sparse/interleaved/normalized accessors, cameras/multi-scene, diagnostics, and mature runtime reuse evaluation.
-- `docs/39-panda3d-gltf-openxr-d3d11-migration-plan.md` - active Panda3D migration plan for replacing the self-authored glTF scene renderer with Panda3D scene ownership and GPU-only OpenXR projection output. D3D11/NV_DX is the main target, OpenGL shared-context rendering is the fallback target, and real acquired OpenXR swapchain rendering remains the blocking gate.
+- `docs/40-filament-gltf-openxr-implementation-plan.md` - active Filament `gltfio` migration plan. It replaces Panda3D as the target GLB runtime; D3D11/NV_DX is the main target, OpenGL same/shared-context rendering is the fallback target, and real acquired OpenXR swapchain rendering remains the blocking gate.
+- `docs/39-panda3d-gltf-openxr-d3d11-migration-plan.md` - historical Panda3D probe and interop evidence; it is no longer the active renderer implementation plan.
 - `prompts/codex-refactor-prompt.md`
 - This file: `docs/00-api-handoff-progress.md`
 
@@ -75,9 +94,9 @@ Current task queue:
 8. Remove remaining compatibility redundancy after all consumers use the docs/01 contract: old snapshot/API aliases and debug-only fallback keys. Legacy parallax multiplier fields and historical render-scale numeric thresholds have been cleaned from the current runtime/config path and should now be guarded against regressions.
 9. Continue network_stream encoder transport work, especially RTMP / low-latency paths, without redefining stereo synthesis semantics.
 10. Keep `docs/02-desktop2stereo-engineering-design-specification.md` aligned to the `docs/01-Realtime-2d-to-3d-specification.md` eleven-step runtime flow.
-11. Execute the expanded `docs/38` glTF 2.0 core roadmap while using `docs/39` as the active mature-runtime candidate: keep the self-authored static contract stable, but prioritize proving Panda3D can own glTF scene graph, animation, material, skybox, controller, and screen rendering before adding more custom renderer surface area.
-12. Continue `docs/39` Panda3D migration gate: first prove the D3D11/NV_DX main path on the real acquired OpenXR swapchain, then prove the OpenGL fallback path only when Panda3D and OpenXR GL contexts are the same or verified shared. Required evidence is success count > 0, failure count 0, bridge mode `nv_dx` or `opengl`, correct per-eye target sizes/image indices, empty error string, useful timing fields, continuous glTF animation, and visible headset output.
-13. Treat `GLError 1282`, FBO incomplete, swapchain lock failure, missing shared GL context, or any CPU readback/PBO readback/PIL/Numpy image movement as Panda3D zero-copy gate failure, not as an acceptable fallback.
+11. Execute the expanded `docs/38` glTF 2.0 core roadmap with `docs/40` as the active mature-runtime plan: keep the self-authored static contract stable, but prioritize Filament `gltfio` scene loading and `Animator` playback rather than extending Panda3D or custom accessor/TRS animation code.
+12. Continue the `docs/40` Filament gate in order: load the native bridge ABI, create Engine in the current OpenXR graphics context, bind an actual acquired swapchain target, prove one-eye then two-eye GPU-only rendering, and confirm visible continuous `Animator` playback on the headset. D3D11/NV_DX is primary; OpenGL requires same or verified shared context.
+13. Treat `GLError 1282`, FBO/RenderTarget incomplete, swapchain lock failure, missing shared context, bridge ABI failure, or CPU readback/PBO/PIL/Numpy image movement as Filament GPU-only gate failure, not as an acceptable fallback.
 14. Continue `docs/36` phase 2: harden the OpenXR frame loop so the headset presenter keeps refreshing from the last good Projection screen frame when runtime/capture/effects are slow, without backpressuring capture/runtime.
 
 ## Current Status

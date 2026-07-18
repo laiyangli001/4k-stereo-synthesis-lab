@@ -3074,7 +3074,7 @@ def test_openxr_frame_renderer_builds_layers_from_latest_screen_frame():
     assert composition_layers == ["layer"]
     assert viewer.calls[0] == ("poll", True)
     assert viewer.calls[1] == ("locate", 123)
-    assert viewer._panda_frame_state.predicted_display_time == 123
+    assert viewer._panda_frame_state.predicted_display_time == pytest.approx(123e-9)
     assert viewer._panda_frame_state.frame_index == 44
     assert viewer._panda_frame_state.controller_poses["left"].position == pytest.approx((4.0, -6.0, 5.0))
     assert not hasattr(viewer._panda_frame_state, "screen_pose")

@@ -34,3 +34,9 @@ src/gui/flet_packages/*.partial
 src/.env
 CLAUDE.md
 .claude
+# Local Filament SDKs and CMake intermediates; bridge source and release DLL are tracked.
+native/filament/sdk/
+native/filament/build/
+native/filament/bridge/*.obj
+native/filament/bridge/*.exp
+native/filament/bridge/*.lib

@@ -11,6 +11,8 @@ from .panda_runtime.frame_source import (
 from .panda_runtime.scene_bindings import sync_panda_scene_assets_from_viewer
 from .xr_math import xr_pose_to_model_mat4
 
+_XR_TIME_TO_SECONDS = 1e-9
+
 
 def update_panda_frame_state_from_viewer(
     viewer: Any,
@@ -26,7 +28,8 @@ def update_panda_frame_state_from_viewer(
     try:
         frame_state = build_panda_frame_state(
             PandaFrameSourceInput(
-                predicted_display_time=predicted_display_time,
+                # XrTime is nanoseconds; Panda animation and shader clocks use seconds.
+                predicted_display_time=float(predicted_display_time) * _XR_TIME_TO_SECONDS,
                 frame_index=getattr(viewer, "_frame_count", None),
                 projection_near=float(getattr(viewer, "_xr_projection_near", 0.05)),
                 projection_far=float(getattr(viewer, "_xr_projection_far", 100.0)),
