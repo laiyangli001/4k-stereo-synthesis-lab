@@ -17,6 +17,6 @@ Linux:   libfilament_bridge.so
 OpenXR context and swapchain binding is deliberately platform-specific and is
 not implemented by this portable asset and animation layer.
 
-GitHub Actions builds the Linux x86_64 and macOS arm64 release libraries from
+GitHub Actions builds the Windows x86_64, Linux x86_64, and macOS arm64 release libraries from
 the matching official SDK archives, validates their SHA-256 digests, and uploads
 the resulting library as a workflow artifact.

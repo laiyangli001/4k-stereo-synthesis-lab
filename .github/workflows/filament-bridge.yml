@@ -15,6 +15,45 @@ permissions:
   contents: read
 
 jobs:
+  build-windows:
+    name: Windows x86_64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download and verify Filament SDK
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'filament-v1.74.0-windows.tgz'
+          Invoke-WebRequest `
+            -Uri 'https://github.com/google/filament/releases/download/v1.74.0/filament-v1.74.0-windows.tgz' `
+            -OutFile $archive
+          $actual = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne 'dafe3e329a44d60c9f9a891c04f94d49b33bd13b2c733a7deefc5f2f39973e0d') {
+            throw "Filament SDK SHA-256 mismatch: $actual"
+          }
+          $sdkRoot = Join-Path $env:RUNNER_TEMP 'filament-sdk'
+          New-Item -ItemType Directory -Path $sdkRoot -Force | Out-Null
+          tar -xzf $archive -C $sdkRoot
+          "FILAMENT_SDK_ROOT=$sdkRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Configure and build bridge
+        shell: pwsh
+        run: |
+          cmake -S native/filament/bridge -B native/filament/build/ci-windows `
+            -G 'Visual Studio 17 2022' -A x64 `
+            -DFILAMENT_SDK_ROOT="$env:FILAMENT_SDK_ROOT"
+          cmake --build native/filament/build/ci-windows --config Release --parallel 2
+          if (-not (Test-Path -LiteralPath 'src/xr_viewer/native/filament_bridge.dll')) {
+            throw 'Windows Filament bridge was not produced'
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: filament-bridge-windows-latest
+          path: src/xr_viewer/native/filament_bridge.dll
+          if-no-files-found: error
+
   build:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
