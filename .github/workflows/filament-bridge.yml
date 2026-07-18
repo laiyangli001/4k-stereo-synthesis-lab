@@ -5,10 +5,12 @@ on:
   push:
     paths:
       - 'native/filament/bridge/**'
+      - 'native/filament/version.json'
       - '.github/workflows/filament-bridge.yml'
   pull_request:
     paths:
       - 'native/filament/bridge/**'
+      - 'native/filament/version.json'
       - '.github/workflows/filament-bridge.yml'
 
 permissions:
@@ -25,12 +27,15 @@ jobs:
       - name: Download and verify Filament SDK
         shell: pwsh
         run: |
-          $archive = Join-Path $env:RUNNER_TEMP 'filament-v1.74.0-windows.tgz'
+          $config = Get-Content -Raw -Encoding utf8 'native/filament/version.json' | ConvertFrom-Json
+          $asset = $config.platforms.windows.asset
+          $expectedSha256 = $config.platforms.windows.sha256
+          $archive = Join-Path $env:RUNNER_TEMP $asset
           Invoke-WebRequest `
-            -Uri 'https://github.com/google/filament/releases/download/v1.74.0/filament-v1.74.0-windows.tgz' `
+            -Uri "https://github.com/google/filament/releases/download/v$($config.version)/$asset" `
             -OutFile $archive
           $actual = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($actual -ne 'dafe3e329a44d60c9f9a891c04f94d49b33bd13b2c733a7deefc5f2f39973e0d') {
+          if ($actual -ne $expectedSha256) {
             throw "Filament SDK SHA-256 mismatch: $actual"
           }
           $sdkRoot = Join-Path $env:RUNNER_TEMP 'filament-sdk'
@@ -64,14 +69,12 @@ jobs:
         include:
           - name: Linux x86_64
             runner: ubuntu-latest
-            asset: filament-v1.74.0-linux.tgz
-            sha256: 47020e876fa9b9a22ba6ce3e0ebd45ed2595a41b87f2a18098f2b8f595a7e117
+            platform: linux
             output: libfilament_bridge.so
             needs_opengl_dev: true
           - name: macOS arm64
             runner: macos-14
-            asset: filament-v1.74.0-mac.tgz
-            sha256: f606f776ad0ac53eb5ed6f266cd7c3f37f18e160bc5cfa7ea291ffd12182f092
+            platform: macos
             output: libfilament_bridge.dylib
             needs_opengl_dev: false
 
@@ -86,12 +89,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          archive="$RUNNER_TEMP/${{ matrix.asset }}"
+          version="$(jq -r '.version' native/filament/version.json)"
+          asset="$(jq -r '.platforms.${{ matrix.platform }}.asset' native/filament/version.json)"
+          expected_sha256="$(jq -r '.platforms.${{ matrix.platform }}.sha256' native/filament/version.json)"
+          archive="$RUNNER_TEMP/$asset"
           curl --fail --location --retry 3 \
-            "https://github.com/google/filament/releases/download/v1.74.0/${{ matrix.asset }}" \
+            "https://github.com/google/filament/releases/download/v$version/$asset" \
             --output "$archive"
           actual="$(shasum -a 256 "$archive" | awk '{print $1}')"
-          test "$actual" = "${{ matrix.sha256 }}"
+          test "$actual" = "$expected_sha256"
           mkdir -p "$RUNNER_TEMP/filament-sdk"
           tar -xzf "$archive" -C "$RUNNER_TEMP/filament-sdk"
 

@@ -6,9 +6,10 @@ The active GLB runtime migration is now `docs/40-filament-gltf-openxr-implementa
 
 Completed locally:
 
-- Downloaded and SHA-256 validated Filament v1.74.0 SDKs for Windows, macOS, and Linux under `native/filament/sdk/`.
 - Added portable C++ bridge source and CMake build definition under `native/filament/bridge/`.
-- Built Windows `src/xr_viewer/native/filament_bridge.dll` successfully with CMake and MSVC. macOS/Linux SDKs and CMake definitions are ready, but their `.dylib`/`.so` must be built on matching platform runners.
+- GitHub Actions builds SHA-256 validated Filament v1.74.0 bridge libraries on Windows x86_64, Linux x86_64, and macOS arm64. The three verified release libraries are packaged under `src/xr_viewer/native/`; no local SDK cache is retained in the repository.
+- `native/filament/version.json` is the single source of truth for the validated release, platform archive names, and SHA-256 values. The bridge CI reads this manifest instead of hard-coding an SDK version.
+- `Watch Filament Releases` checks the official upstream latest release each Monday and creates one deduplicated upgrade issue. Upgrades remain PR-gated: update the manifest, pass all platform builds, refresh all three release libraries, then merge together.
 - Added `docs/40` as the canonical Filament architecture, lifecycle, GPU-only gate, test matrix, and Panda3D supersession record.
 
 Not completed and therefore not eligible for default selection:
