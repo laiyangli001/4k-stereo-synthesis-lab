@@ -2,7 +2,7 @@
 
 本文是 Desktop2Stereo 当前有效的立体参数测试指南。它用于通过固定样本、视觉回归和人工评分，找出 `traditional_fastest`、`cinema`、`game_low_latency`、`still_image_hq` 四类立体模式的推荐参数。
 
-运行时语义以 `docs/01-Realtime-2d-to-3d-specification.md` 为准；工程映射以 `docs/01-desktop2stereo-engineering-design-specification.md` 为准。本文只描述测试方法、视觉判定和参数 sweep，不再保留旧 IPD / Stereo Scale / Max Shift Ratio 调参链。
+运行时语义以 `docs/01-Realtime-2d-to-3d-specification.md` 为准；工程设计以 `docs/02-desktop2stereo-engineering-design-specification.md` 为准。本文只描述测试方法、视觉判定和参数 sweep，不再保留旧 IPD / Stereo Scale / Max Shift Ratio 调参链。
 
 ## 当前参数模型
 

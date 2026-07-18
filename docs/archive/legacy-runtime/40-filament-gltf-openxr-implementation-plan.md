@@ -94,6 +94,18 @@ Windows、macOS、Linux 必须分别使用同版本官方 SDK 在本机或 CI �
 - 灯光、IBL、exposure、tone mapping 必须由通用 profile/资产语义驱动，不按 Artemis 节点名或材质名写私有覆盖。
 - StarGlim sidecar 若保留，必须是独立的、资产声明的 GPU shader effect；time uniform 与同一 `animation_time_seconds` 同步，不影响 GLB 标准动画语义。
 
+### 5.2.1 手柄模型、姿态与输入动画兼容
+
+Filament 接管手柄 GLB 的加载和渲染时，必须保留当前运行时的手柄行为；这不是 Artemis 的时间轴动画，也不得把手柄输入反馈删减为静态模型：
+
+- 每帧从同一 `xrLocateViews`/输入快照读取左右手 `grip` pose，并把它作为左右手柄 Filament root entity 的世界变换。`aim` pose 仍只属于现有激光、射线和 UI 命中链，不能错误地用来放置手柄模型。
+- 延续现有输入语义：左右 `trigger`、`grip`、A/B/X/Y、menu/app button、joystick/touchpad click、touch 和二维轴值。输入层继续产生 `_ctrl_press_l` / `_ctrl_press_r` 等价的不可变帧快照；平滑规则保持 `dt <= 50 ms`、系数 `min(1, dt * 24)`，避免低帧率时按钮跳变。
+- 对控制器 GLB 已声明的 `press_anim`、`axis_anim`、`anim_key` 和 `visible_key` 元数据，bridge adapter 必须按输入快照驱动对应 entity 的局部 TRS/可见性：button/trigger/grip 使用 `[0,1]` press amount，joystick/touchpad 使用 x/y axis amount。实现应直接写 Filament transform/entity 状态，不能恢复项目自研 primitive renderer，也不能逐帧重载 GLB、纹理或创建 GPU resource。
+- 若控制器资产提供标准 glTF animation channels，则以 `gltfio::Animator` 播放并用输入 amount 映射 clip 时间或权重；若只有现有资产元数据，则由 bridge 的通用 controller-animation adapter 处理局部实体变换。两种情况都必须保持根 `grip` pose 与局部按钮动画的矩阵乘法顺序正确。
+- `visible_key` 只控制模型子实体显示，不影响 OpenXR action、激光、haptic、键盘或 screen interaction。手柄闲置自动隐藏、品牌切换、profile 的 `model_offset` / `model_rotation_deg` 继续由现有 OpenXR UI 层发布，Filament 只消费已解析的每帧状态。
+
+验收：按下/松开 trigger、grip、A/B/X/Y 和 joystick/touchpad 时，左右手模型的按钮、摇杆和可见性反馈必须连续；头动和手动时模型稳定跟随 `grip`，激光保持跟随 `aim`，且不会产生每帧 CPU 像素传输或 GPU resource 重建。
+
 ### 5.3 每眼 target 与颜色
 
 每眼按当前 `XrView` 创建或更新 Filament `Camera` 的 projection 和 model matrix。目标缓存 key：
@@ -127,8 +139,9 @@ Windows、macOS、Linux 必须分别使用同版本官方 SDK 在本机或 CI �
 ### Phase 2：Filament 场景与动画可见性
 
 - 载入 Artemis 和一套控制器 GLB，添加到 Filament scene。
-- 从同一 XR frame snapshot 更新左右眼相机、环境根变换和控制器 transform。
+- 从同一 XR frame snapshot 更新左右眼相机、环境根变换、控制器 `grip` root transform，以及 `press_anim` / `axis_anim` / `visible_key` 输入动画状态；激光仍消费独立的 `aim` pose。
 - 用 `Animator` 连续播放 Artemis；验证卫星/飞船平滑运动、天空盒、土星环、alpha/unlit 和 PBR fixture。
+- 验证 trigger、grip、A/B/X/Y、joystick/touchpad 的手柄局部反馈与现有 native renderer 一致，包括输入平滑、idle hide、品牌 offset 和 rotation。
 - 把 profile 保留为资产布局、尺度、视角和通用灯光配置，不保存模型私有动画补偿。
 
 闸门：两眼 pose 不同帧、动画跳点、天空盒/alpha/PBR 明显错误或新出现 CPU transfer，阻止接入 compositor。
@@ -151,7 +164,7 @@ Windows、macOS、Linux 必须分别使用同版本官方 SDK 在本机或 CI �
 | 多平台构建 | Windows DLL、macOS dylib、Linux so 的 CMake/CI artifact | 各平台启动可加载 bridge |
 | GLB 与动画 | Artemis/Bedroom/控制器 fixture；animation count/duration/0-7.5-15s 摘要 | 卫星和飞船连续平滑运动 |
 | 材质 | unlit、alpha、double-sided、PBR、sRGB fixture 截图 | 天空、土星环、房间和控制器无黑/白覆盖 |
-| XR pose | 单帧两眼 view/projection、controller pose 单测 | 头动稳定、控制器对齐 |
+| XR pose 与手柄动画 | 单帧两眼 view/projection、grip/aim pose、输入动画快照和局部 TRS 单测 | 头动稳定、手柄按 grip 对齐，激光按 aim 对齐，按钮/摇杆连续反馈 |
 | D3D11 bridge | acquire -> lock -> render -> unlock -> release 顺序和 reset 测试 | 左右眼稳定显示 |
 | OpenGL fallback | same/shared context、target visibility、FBO complete | GL runtime 下无黑屏 |
 | 性能与零拷贝 | 无 CPU-transfer telemetry；render/bridge/submit p50/p95 | 不低于 native 基线且无显存增长 |

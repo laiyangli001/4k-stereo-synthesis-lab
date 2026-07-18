@@ -38,16 +38,17 @@
 | `scripts/examples/` | demo 和 OpenXR preview |
 | `scripts/windows/` | 可见窗口 Windows 启动脚本 |
 | `docs/` | 当前文档入口 |
-| `docs/benchmark/` | benchmark 与优化记录 |
-| `docs/archive/` | 早期设计文档归档 |
+| `docs/` | Vulkan 当前规范、工程设计和参考指南 |
+| `docs/archive/` | 旧运行时、阶段计划、调研和 benchmark 归档 |
 
 ## 重要文档
 
-- 当前交接入口：[docs/00-api-handoff-progress.md](docs/00-api-handoff-progress.md)
-- Host API 合同：[docs/15-host-api-contract.md](docs/15-host-api-contract.md)
-- Preset 调用示例：[docs/14-host-api-preset-examples.md](docs/14-host-api-preset-examples.md)
-- OpenXR 计划：[docs/12-openxr-stereo-runtime-plan.md](docs/12-openxr-stereo-runtime-plan.md)
-- Benchmark 汇总：[docs/benchmark/07-depth-backend-benchmark.md](docs/benchmark/07-depth-backend-benchmark.md)
+- 文档总入口：[docs/README.md](docs/README.md)
+- Vulkan 迁移报告：[docs/01.D2S_Vulkan_Migration_Technical_Report.md](docs/01.D2S_Vulkan_Migration_Technical_Report.md)
+- 实时系统规格：[docs/01-Realtime-2d-to-3d-specification.md](docs/01-Realtime-2d-to-3d-specification.md)
+- Vulkan 工程设计：[docs/02-desktop2stereo-engineering-design-specification.md](docs/02-desktop2stereo-engineering-design-specification.md)
+- 立体参数指南：[docs/13-realtime-stereo-parameter-guide.md](docs/13-realtime-stereo-parameter-guide.md)
+- 历史文档索引：[docs/archive/README.md](docs/archive/README.md)
 
 ## 启动
 

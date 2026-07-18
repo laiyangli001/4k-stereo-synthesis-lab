@@ -1,1036 +1,793 @@
-# 实时立体视觉合成管线设计规范书
+# D2S Vulkan 实时 2D 转 3D 系统规格书
 
-**文档版本**：3.0
-**发布日期**：2026年6月
-**规范地位**：Desktop2Stereo 当前正式最终运行时流程规范
-**编制依据**：ISO/IEC、Khronos OpenXR、UWA 等国际/行业标准，以及 Desktop2Stereo 当前工程实现
+**文档版本**：4.0
+**发布日期**：2026 年 7 月
+**规范状态**：Vulkan 原生架构正式规格
+**编制依据**：`01.D2S_Vulkan_Migration_Technical_Report.md`
+**适用范围**：Desktop2Stereo 新一代实时运行时、OpenXR 查看器与跨平台 GPU 后端
 
+---
 
-## 1. 引言与范围
+## 1. 文档目标
 
-### 1.1 背景
-实时立体视觉合成（Real-time Stereoscopic Synthesis）是将单目RGB视频流实时转换为双目立体视觉内容的关键技术，广泛应用于AR/VR头显、裸眼3D显示、远程呈现、沉浸式媒体等领域。本规范书定义 Desktop2Stereo 当前正式最终运行时流程规范，涵盖从捕获输入到最终输出的十一个核心处理步骤。历史文档 `25-2d-to-3d-runtime-specification.md` 自本文档生效后作废；若两者存在差异，以本文档为准。
+本规格定义 D2S 从单目 RGB 帧到立体画面、三维场景渲染和 OpenXR 提交的新架构。Vulkan 是默认且完整功能的主图形 API；OpenGL 仅作为隔离的兼容 Fallback，用于 Vulkan 不可用或用户显式选择兼容模式的环境。两个后端不得在同一会话中并行管理同一组图形资源。
 
-### 1.2 范围
-本规范适用于：
-- 基于单目RGB输入的实时双目立体视觉合成系统
-- 支持OpenXR标准的AR/VR设备端立体渲染
-- 裸眼3D显示终端的立体内容生成
-- 沉浸式媒体应用中基于渲染系统的视觉内容合成
+本规范取代此前以OpenGL、D3D11、CUDA-GL/WGL互操作和多输出上传器为中心的图形运行时描述。经过验证的Python GPU tensor、Capture、Inference和调度实现继续作为新架构基础；旧文档中的其他产品语义只有在本规范重新定义后才继续有效。
 
-### 1.3 规范性引用文件
+### 1.1 建设目标
 
-| 编号 | 标准/规范 | 名称 | 发布机构 |
-|------|----------|------|---------|
-| [1] | ISO/IEC TR 23090-27:2025 | Information technology — Coded representation of immersive media — Part 27: Media and architectures for render-based systems and applications | ISO/IEC JTC 1/SC 29 |
-| [2] | T/UWA 035-2025 | 基于双目视差的裸眼3D系统参考架构与通用技术要求 | 世界超高清视频产业联盟 |
-| [3] | OpenXR 1.1 | API Specification for XR Applications | Khronos Group |
-| [4] | SMPTE ST 2070 | Stereoscopic 3D in MXF | SMPTE |
-| [5] | ITU-R BT.2025 | 3DTV Program Production and Exchange | ITU-R |
+1. 使用 Vulkan 统一屏幕纹理、立体合成、后处理、三维场景渲染和 OpenXR 交换链。
+2. 使用 Filament Vulkan 后端渲染房间、虚拟屏幕、手柄和其他 glTF 2.0 场景资产。
+3. 使用 Vulkan Compute 完成 RGB 缩放、深度后处理、视差生成、双目变形、空洞修补、时域稳定和环境光效。
+4. 保留各 GPU 平台性能最优的 AI 推理后端，通过外部内存或一次 GPU 内拷贝接入 Vulkan。
+5. 采用 latest-frame 调度和有界帧上下文，保证负载升高时延迟不持续累积。
+6. 首先交付 Windows/Linux Vulkan + OpenXR，平台具备有效 OpenXR Vulkan Runtime 时再启用对应 XR 输出。
+7. 提供功能分级明确的 OpenGL Fallback，使老旧硬件、虚拟机、远程桌面和 MoltenVK 不可用环境仍可进行基本渲染。
 
+### 1.2 非目标
 
-## 2. 术语与定义
+- 不把 OpenGL Fallback 作为与 Vulkan 同等级的性能或功能主路径。
+- 不保留 D3D11 OpenXR Session、WGL 互操作、CUDA-GL PBO 或 GL texture uploader。
+- 不把已经验证的 Python Capture、Inference Provider 和 latest-frame 调度机械改写为 C++；迁移时保留有效实现，但不保留废弃类名、旧环境变量和旧配置字段的长期兼容适配层。
+- 不把 Vulkan Compute 当作神经网络推理框架；深度模型继续由平台推理后端执行。
+- 不在实时数据面中进行 CPU 图像回读、NumPy 往返或进程间原始帧复制。
+- 不承诺 macOS XR 输出；macOS Vulkan/MoltenVK 能力与具体 OpenXR Runtime 可用性必须分别验证。
+
+---
+
+## 2. 术语和系统边界
 
 | 术语 | 定义 |
 |------|------|
-| **视差（Disparity）** | 同一场景点在左右眼图像中的水平像素位置差异 |
-| **深度图（Depth Map）** | 本规范中的默认深度图为 normalized / relative depth，不等同于真实米制 Z-depth |
-| **DIBR** | Depth-Image-Based Rendering，基于深度图像的渲染 |
-| **捕获尺寸（capture_size）** | 输入源原始分辨率，来自显示器、窗口、文件或 API 帧 |
-| **渲染尺寸（render_size）** | 立体合成管线内部的唯一工作分辨率 |
-| **4K缩放档位（4K Scale Tier）** | 4K级输入按 4K/3K/2K/1K 稳定 scale 档位缩放，并保持输入宽高比的规则 |
-| **最大视差（max_disparity_px）** | 软件层面允许的左右眼总视差像素预算，用于控制立体感强度（非物理测量值） |
-| **视差预算（Parallax Budget）** | 根据 `render_size` 和用户强度档位解析出的名义 `max_disparity_px` 及其响应曲线 |
-| **深度强度（Depth Strength）** | 用户连续调节立体深度强弱的 gain，作用于实际视差位移，不参与旧 IPD 物理乘法链 |
-| **深度响应（depth_response）** | normalized depth 到相对视差权重的映射函数 |
-| **OpenXR** | Khronos Group发布的XR应用开放API标准 |
-| **时域稳定化** | 利用历史帧信息减少帧间闪烁和抖动的处理技术 |
+| `capture_size` | 输入源的原始像素尺寸。 |
+| `render_size` | 深度、视差、双目合成和时域状态使用的唯一工作尺寸。 |
+| `scene_size` | OpenXR Runtime 推荐的单眼交换链尺寸。 |
+| Relative Depth | 单目模型输出的归一化相对深度，不等同于米制距离。 |
+| Parallax Budget | 按 `render_size` 和用户档位计算的左右眼总视差像素预算。 |
+| Frame Context | 一帧独占的命令池、命令缓冲、描述符、查询和同步状态。 |
+| Latest Frame | 消费者只处理当前最新可用输入，过期输入允许被覆盖。 |
+| External Image | 由 Vulkan 导出并由 CUDA/HIP 等推理后端访问的 GPU 图像或缓冲。 |
+| Graphics Queue | 执行 Filament 场景渲染、图像合成和交换链写入的 Vulkan 队列。 |
+| Compute Queue | 执行立体合成与异步光效计算的 Vulkan 队列。 |
+| Graphics Backend | 启动阶段选定的 Vulkan 主后端或 OpenGL Fallback；运行中不可热切换。 |
+| Compatibility Mode | 用户显式启用 OpenGL Fallback 的运行模式。 |
 
-
-## 3. 总体架构与约束
-
-### 3.1 系统架构图
-
-```
-Capture Input → Resolve Render Size → Resize RGB To Render Size → Depth Estimation →
-Depth Postprocess → Resolve Parallax Budget → Disparity Field →
-Stereo Warp → Mask and Hole Fill → Temporal Stabilization → Output Pack / Viewer Upload
-```
-
-### 3.2 全局核心约束
-
-1. **工作坐标系一致性**：进入立体合成（Stereo Synthesis）后，`render_size` 是唯一工作坐标系。
-2. **数据对齐约束**：RGB、Depth、Disparity、Mask、Hole Fill、Temporal、Left/Right Eye 全部必须严格对齐 `render_size`。
-3. **视差控制约束**：`max_disparity_px` 必须按 `render_size` 解析，其值由软件层根据用户偏好和固定预算表计算，不受物理显示设备参数的直接影响。
-4. **Normalized-depth约束**：默认单目深度路径不得把 normalized / relative depth 当作真实米制 `Z` 代入物理 IPD 公式。
-5. **Render Scale约束**：`Render Scale` 只表示 4K级输入的固定 scale 档位选择；它不是任意连续滑杆，也不得改变输入宽高比。
-6. **坐标系规则**：所有图像坐标系采用**左上角为原点**（0,0），x轴向右，y轴向下。
-7. **输出分层约束**：运行目标、质量模式、合成方式、render size、transport、packing format 必须分层表达，不能互相替代。
-8. **实时调度约束**：实时 runtime 必须以 latest-frame / low-latency 为优先目标；当 GPU runtime 工作慢于捕获节奏时，必须丢弃旧帧或覆盖旧 raw frame，不得让后段 CUDA 工作无限异步排队并反压捕获链路。
-9. **GPU resident 边界约束**：capture、depth、synthesis、hole fill、temporal、pack 等算法内部阶段应尽量保持 CUDA / ROCm / MPS / XPU tensor 驻留；只有当结果离开算法管线进入本地窗口、OpenXR、Metal、D3D、Vulkan 或编码输出边界时，才允许转换为对应图形/编码资源。显示系统不得被设计为直接消费普通 CUDA tensor。
-
-### 3.3 工程分层定义
-
-完整运行时必须按以下层级解析，任何层级都不能替代其它层级：
+系统边界如下：
 
 ```text
-Capture Source
-→ Application Runtime Target
-→ Runtime Quality Mode
-→ Stereo Synthesis Mode
-→ Render Size / 4K Scale Tier
-→ Output Transport
-→ Output Packing Format
-→ Viewer / Device Presentation
+Desktop / Window / Video / API Frame
+                  |
+                  v
+        Capture and GPU Import
+                  |
+                  v
+       Vulkan Frame Processing Graph
+   Resize -> Inference Bridge -> Depth Postprocess
+   -> Parallax -> Stereo Warp -> Hole Fill -> Temporal
+                  |
+                  v
+         Vulkan Scene Composition
+  Filament scene + virtual screen + asynchronous effects
+                  |
+                  v
+        OpenXR Vulkan Swapchain / Vulkan Output
 ```
 
-核心原则：
+---
+
+## 3. 总体架构
+
+### 3.1 全 Vulkan 流程图
 
 ```text
-OpenXR 不是显示封装格式。
-half_sbs / full_sbs / TAB 不是运行模式。
-网络推流不是立体算法。
-3D 显示器不是 capture source。
+┌────────────────────────────────────────────────────────────────┐
+│                       推理层 (厂商专用)                          │
+│                                                                 │
+│  Windows NVIDIA: CUDA + TensorRT                                │
+│  Windows AMD:    ROCm + MIOpen (DirectML 备用)                  │
+│  Linux AMD:      ROCm + MIOpen                                  │
+│  macOS:          MPSGraph / CoreML                              │
+│                                                                 │
+│  输出：SBS 立体画面 (厂商私有纹理)                               │
+└───────────────────────┬────────────────────────────────────────┘
+                        │ external memory / 单次 GPU 拷贝
+                        ▼
+┌────────────────────────────────────────────────────────────────┐
+│                    Vulkan 统一渲染与计算层                        │
+│                                                                 │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │  Filament (Vulkan 后端)                                  │   │
+│  │  - 加载房间.glb / 手柄.glb                               │   │
+│  │  - 渲染 3D 场景 + 虚拟屏幕四边形                         │   │
+│  │  - 直接输出到 OpenXR Vulkan 交换链                       │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│                                                                 │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │  异步计算队列 (Vulkan 原生)                              │   │
+│  │  - 降采样 + 模糊 → Glow 纹理                            │   │
+│  │  - 取平均色 + 预计算掩码 → 墙面反射光斑纹理             │   │
+│  │  - 消费旧帧，零阻塞                                      │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│                                                                 │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │  OpenXR 提交                                             │   │
+│  │  - Projection Layer: 3D 场景 + 虚拟屏幕                 │   │
+│  │  - Quad Layer: Glow 特效 / 文字面板 / 虚拟键盘          │   │
+│  │  - xrEndFrame 直接提交 VkImage                          │   │
+│  └─────────────────────────────────────────────────────────┘   │
+└────────────────────────────────────────────────────────────────┘
 ```
 
-| 层级 | 规范值示例 | 说明 |
-|------|------------|------|
-| Capture Source | monitor_capture / window_capture / file_image / file_video / api_frame | 只负责提供 RGB frame 和 source metadata |
-| Application Runtime Target | local_display / network_stream / openxr / debug_export / headless_api / auto | 定义最终输出目标 |
-| Runtime Quality Mode | auto / movie / cinema / game / game_low_latency / image / debug | 定义延迟、质量、稳定性偏好 |
-| Stereo Synthesis Mode | rgb_depth_direct / full_synthesis_eyes / packed_synthesis | 定义左右眼如何生成 |
-| Output Transport | local_window / local_fullscreen / encoded_stream / openxr_swapchain / file_export / api_result | 定义结果送到哪里 |
-| Output Packing Format | mono / half_sbs / full_sbs / half_tab / full_tab / anaglyph / interleaved / leia / depth_map | 只定义 left/right eye 如何封装成一帧 |
-
-### 3.4 RuntimeSettingsSnapshot 与热更新边界
-
-GUI 或 API 必须生成不可变配置快照，并通过线程安全队列交给 runtime。所有用户可调立体参数只允许在帧边界应用。
+### 3.2 推荐的 Fallback 策略
 
 ```text
-GUI / API
-→ RuntimeSettingsSnapshot(version=N)
-→ settings_update_q
-→ RuntimePipelineLoop frame boundary
-→ active_settings
+主路径：Vulkan
+    ├── Windows: 原生 Vulkan
+    ├── Linux: 原生 Vulkan
+    └── macOS: MoltenVK (Vulkan → Metal)
+
+Fallback 路径：OpenGL
+    ├── Windows: 原生 OpenGL
+    ├── Linux: 原生 OpenGL
+    └── macOS: OpenGL 4.1 (功能受限，但可用于基本渲染)
 ```
 
-`RuntimeSettingsSnapshot` 必需字段：
+触发 Fallback 的条件：
+
+1. Vulkan 驱动不可用，例如老旧硬件、虚拟机或远程桌面环境。
+2. macOS 上 MoltenVK 初始化失败，或基准测试确认其性能不可接受。
+3. 用户显式选择兼容模式。
+
+Fallback 只能在启动探测阶段选择。Vulkan 已经创建 Device、OpenXR Session 或帧资源后发生错误时，不得在原进程内静默切换到 OpenGL；运行时应结束当前图形会话，向用户报告原因，并通过受控重启进入兼容模式。
+
+OpenGL Fallback 不承诺 Vulkan Compute、异步 Compute Queue、Timeline Semaphore、外部内存零拷贝和完整高级光效。macOS OpenGL 4.1 只保证基本场景与虚拟屏幕渲染。Fallback 若无法从推理/合成后端取得 GPU 驻留的 Left/Right Eye 或 SBS 结果，应明确失败，不得改走 CPU 实时像素链路。
+
+### 3.3 组件划分
+
+| 组件 | 职责 | 实现约束 |
+|------|------|----------|
+| D2S Host | 生命周期、配置、设备选择、状态与诊断 | Python；不得执行 CPU 逐像素计算 |
+| Capture Adapter | 捕获桌面、窗口、视频或 API 帧 | Python Adapter；优先复用现有 WindowsCaptureCUDA/ROCm 等实现，输出 GPU 资源和单调时间戳 |
+| Vulkan Device Context | Instance、Device、队列、内存、Pipeline Cache | 全进程唯一设备上下文 |
+| Inference Adapter | 运行深度模型并写入 Vulkan 可消费资源 | Python Provider；允许内部使用 GPU tensor，但不得把 CPU 像素往返带入实时主路径 |
+| Stereo Compute Graph | 深度后处理到双目时域输出 | Vulkan Compute Pipeline |
+| Scene Renderer | glTF 场景、虚拟屏幕、手柄和灯光 | Python 调用 Filament DLL Bridge；这是唯一允许的自有原生代码边界 |
+| Effects Compute Graph | Glow、平均色、墙面反射与色彩处理 | 异步 Compute，允许滞后 1 至 3 帧 |
+| OpenXR Presenter | 帧预测、视图、交换链和 Layer 提交 | 延续Python OpenXR实现/API；Vulkan Session为主，兼容模式可创建OpenGL Graphics Binding |
+| Control Plane | GUI/API、配置快照、日志和遥测 | Python；不读取逐帧像素 |
+
+### 3.4 进程与语言边界
+
+正式应用运行时以 Python 进程为主进程。Capture、Inference、Vulkan Compute、OpenXR Presenter、资源调度和控制面均由 Python 源码实现并在同一运行时内协作。WindowsCaptureCUDA/ROCm、PyTorch、TensorRT 和 OpenXR 延续当前 Python 包/API 的直接调用方式，不为它们新增项目自有绑定层。GPU 密集工作通过这些 Python API 和 SPIR-V Shader 提交，Python 不进行 CPU 逐像素循环。
+
+Filament DLL Bridge 是唯一允许由本项目维护的 C/C++ 原生桥接层。它与 Python 主进程同进程加载，只暴露场景创建、资产加载、状态更新、Vulkan Render Target 绑定和渲染提交所需的窄 C ABI。禁止为 Capture、Inference、Stereo、OpenXR 或 Output 再建立自有 C++ Runtime，也禁止通过 Filament 子进程或共享内存传递整帧图像。
+
+### 3.5 单一资源所有权
+
+- Vulkan Device Context 是所有可渲染图像的最终所有者。
+- 推理后端只在明确的 external-memory 生命周期内访问资源。
+- OpenXR 交换链图像由 Runtime 创建，应用 acquire 后临时取得写入权，release 后不得继续访问。
+- Filament 导入交换链或中间图像时，不得销毁其不拥有的 `VkImage`、内存或同步对象。
+
+---
+
+## 4. 平台和后端矩阵
+
+### 4.1 基线平台
+
+| 平台 | 图形与计算 | 深度推理 | 资源连接 |
+|------|------------|----------|----------|
+| Windows NVIDIA | Vulkan 1.3 | TensorRT/CUDA | Win32 external memory + external semaphore，目标为零拷贝 |
+| Linux NVIDIA | Vulkan 1.3 | TensorRT/CUDA | FD external memory + external semaphore，目标为零拷贝 |
+| Windows AMD | Vulkan 1.3 | ROCm/HIP | 优先 external memory；不可用时一次 GPU 内拷贝 |
+| Linux AMD | Vulkan 1.3 | ROCm/HIP | FD external memory；失败时一次 GPU 内拷贝 |
+| Windows 通用 | Vulkan 1.3 | ONNX Runtime/DirectML 可选适配器 | D3D12 resource 仅存在于推理适配器边界，导入 Vulkan 后不进入渲染架构 |
+| macOS Apple Silicon | Vulkan 1.2 via MoltenVK | CoreML/MPSGraph | 平台纹理桥或一次 GPU 拷贝；独立验收 |
+
+Intel 与其他 Vulkan 设备只有在对应推理适配器通过本规范的 GPU 驻留和性能验收后，才能列为受支持平台。
+
+OpenGL Fallback 的平台基线为：Windows/Linux 使用驱动可提供的原生 OpenGL，目标版本不低于 4.3；macOS 使用系统 OpenGL 4.1，仅启用基本图形能力。具体功能必须由 capability probe 决定，不能仅按版本字符串推断。
+
+### 4.2 Vulkan 最低能力
+
+正式运行时要求：
+
+- Vulkan 1.3，或 Vulkan 1.2 加等效扩展。
+- Timeline Semaphore。
+- Synchronization2。
+- Descriptor Indexing。
+- Dynamic Rendering，若 Filament 集成路径要求 Render Pass，则允许由 Filament 内部管理。
+- `VK_KHR_swapchain`，用于非 XR Vulkan 窗口输出。
+- 平台对应的 external memory 与 external semaphore 扩展，供零拷贝推理路径使用。
+- OpenXR 输出要求 `XR_KHR_vulkan_enable2` 及 Runtime 声明的 Vulkan 版本和扩展。
+
+缺失 Vulkan 必需能力时，默认启动必须给出缺失项。配置允许 Fallback 时，启动器可在尚未创建正式图形会话前选择 OpenGL；否则启动失败。任何情况下都不得静默切换到 D3D11 或 CPU 实时渲染。
+
+---
+
+## 5. Vulkan 设备与资源规格
+
+### 5.1 Instance 和 Device 创建
+
+1. OpenXR 模式必须先创建 `XrInstance`，再通过 `xrGetVulkanGraphicsRequirements2KHR` 获取要求。
+2. Vulkan Instance 与 Physical Device 必须满足 OpenXR Runtime 要求；OpenXR 指定设备时不得自行替换。
+3. Device 扩展集合由 OpenXR、Filament、外部内存和 D2S Compute Graph 合并生成。
+4. 正式构建启用 Vulkan validation 的开关必须可配置；开发和 CI 验证默认启用。
+5. Device UUID、驱动版本、队列族和扩展清单必须写入启动日志。
+
+### 5.2 队列模型
+
+系统至少申请一个 Graphics Queue。存在独立 Compute Queue 时必须启用异步光效；否则光效计算提交到 Graphics Queue，但仍维持独立依赖关系。
+
+优先队列拓扑：
 
 ```text
-version
-timestamp
-source
-application_runtime_target
-runtime_quality_mode
-stereo_synthesis_mode
-stereo_render_scale
-parallax_budget_preset
-max_disparity_px
-depth_response
-convergence
-hole_fill_mode
-edge_threshold
-edge_dilation
-mask_feather_radius
-temporal_enabled
-temporal_strength
-presentation_flags
-debug_flags
+Graphics Queue : scene render + virtual screen + OpenXR swapchain
+Compute Queue  : stereo synthesis + asynchronous effects
+Transfer Queue : capture upload / staging copy, only when useful
 ```
 
-参数变更分级：
+跨队列共享图像必须使用 Synchronization2 barrier。队列族不同则执行明确的 queue-family ownership transfer；禁止依赖隐式布局和隐式所有权变化。
 
-| 参数 | Hot Reload | Reset Temporal | Rebuild Resources | 说明 |
-|------|:----------:|:--------------:|:-----------------:|------|
-| `max_disparity_px` / `parallax_budget_preset` | 是 | 可选 | 否 | 预算档位突变时可 reset temporal |
-| `depth_strength` | 是 | 可选 | 否 | 用户连续调节实际视差强度，大幅变化建议 reset temporal |
-| `convergence` | 是 | 可选 | 否 | 调整零视差/汇聚平面，大幅变化建议 reset temporal |
-| `depth_response` | 是 | 是 | 否 | 曲线变化会改变全局视差分布 |
-| `hole_fill_mode` / mask 参数 | 是 | 否 | 否 | 影响 mask 与 hole fill 行为 |
-| `temporal_enabled` | 是 | 是 | 否 | 开关变化需要清理历史状态 |
-| `temporal_strength` | 是 | 否 | 否 | 0 可表示关闭效果 |
-| `cross_eyed` / `eye_order` | 是 | 否 | 否 | presentation 层修正 |
-| `output_packing_format` | 部分 | 否 | 可能 | 本地/推流可能需要重建输出缓冲 |
-| `stereo_render_scale` | 否 | 是 | 是 | 仅当 4K scale 档位变化并导致 `render_size` 变化时重建 |
-| `stereo_synthesis_mode` | 否 | 是 | 是 | direct/full synthesis 切换 |
-| `depth_backend` | 否 | 是 | 是 | provider/engine 变化 |
-| `capture_source` / `capture_target` | 否 | 是 | 是 | 重新捕捉和重建 source metadata |
-| `openxr_swapchain_format` | 否 | 是 | 是/重启 | OpenXR session 资源 |
-| `encoder_profile` | 否 | 否 | 是 | 网络推流编码器资源 |
+### 5.3 帧上下文
 
-每次 runtime result / OpenXR result / debug export 必须记录：
+默认使用 3 个 Frame Context，最大值由 `max_frames_in_flight` 限定为 2 至 4。每个上下文至少包含：
+
+- Graphics/Compute command pool 与 command buffer。
+- 每帧 descriptor allocator。
+- timestamp query pool 区间。
+- 推理完成值、合成完成值和呈现完成值。
+- 对应的输入、深度、左右眼、mask 和 temporal 索引。
+
+帧上下文重新使用前必须确认其 timeline 值已完成。系统不得无限创建 command buffer、CUDA work 或待提交帧。
+
+### 5.4 图像格式
+
+| 资源 | 推荐格式 | 必需用途 |
+|------|----------|----------|
+| Capture RGB | `VK_FORMAT_B8G8R8A8_UNORM` 或捕获原生格式 | sampled、transfer src/dst |
+| Linear RGB | `VK_FORMAT_R16G16B16A16_SFLOAT` | storage、sampled |
+| Relative Depth | `VK_FORMAT_R16_SFLOAT` | storage、sampled |
+| Disparity | `VK_FORMAT_R16_SFLOAT` 或 `R32_SFLOAT` | storage、sampled |
+| Occlusion Mask | `VK_FORMAT_R8_UNORM` | storage、sampled |
+| Left/Right Eye | `VK_FORMAT_R16G16B16A16_SFLOAT` | storage、sampled |
+| Packed SBS | `VK_FORMAT_R8G8B8A8_UNORM` | storage、sampled、transfer src |
+| OpenXR Color | Runtime 支持的 sRGB/UNORM 格式 | color attachment、sampled |
+| Glow/Reflection | `VK_FORMAT_R16G16B16A16_SFLOAT` | storage、sampled |
+
+格式不支持所需 usage 时，初始化失败或选择同语义的 Vulkan 格式。不得通过 CPU 格式转换规避设备格式能力。
+
+### 5.5 Descriptor 和 Pipeline
+
+- 使用固定 descriptor set layout 描述每个 Compute Pass 的输入、输出和常量。
+- 帧间图像采用数组描述符或按 Frame Context 分配的 descriptor set，禁止更新仍在 GPU 使用的 descriptor。
+- Compute pipeline 在启动或质量配置切换时创建，不得每帧编译 shader。
+- Pipeline Cache 必须按设备 UUID、驱动版本和 shader 版本持久化；不匹配时废弃重建。
+- Shader 使用离线编译的 SPIR-V，并在构建阶段执行反射和绑定校验。
+
+---
+
+## 6. 实时帧处理流程
+
+### 6.1 阶段 1：捕获和导入
+
+输入支持显示器、窗口、视频解码器和 API 图像。Capture Adapter 必须产生：
 
 ```text
-active_settings_version
-hot_reload_changed_fields
-hot_reload_class
-application_runtime_target
-runtime_quality_mode
-stereo_synthesis_mode
-render_size
-max_disparity_px
-depth_response
-convergence
-hole_fill_mode
-runtime_output_format
-packing_format
-transport
-provider_info
-timing
+CaptureFrame {
+  frame_id
+  timestamp_ns
+  width, height
+  pixel_format
+  color_space
+  gpu_resource
+}
 ```
 
+实时捕获队列容量为 1。新帧到达且旧帧未消费时覆盖旧帧并增加 `capture_overwrite_count`。不得为了不丢帧而扩大队列并累积延迟。
 
-## 4. 分步骤详细规范
+捕获资源进入 Vulkan 的优先级为：原生 Vulkan 图像、外部内存导入、GPU copy。CPU staging 只允许用于文件、测试图和明确标记的非实时输入。
 
-### 步骤 1：Capture Input（捕获输入）
+### 6.2 阶段 2：解析工作尺寸
 
-#### 4.1.1 输入/输出
+`render_size` 是立体合成的唯一工作坐标系。所有 Depth、Disparity、Mask、Left/Right Eye 和 Temporal 资源必须与其一致。
 
-| 项目 | 规格 |
-|------|------|
-| **输入** | 显示器/窗口/文件/API的RGB帧 |
-| **坐标系** | `capture_size`（原始捕获分辨率） |
-| **输出** | `source_rgb` + `capture_metadata`（含分辨率、色彩空间、时间戳、帧率） |
+固定缩放档位：
 
-#### 4.1.2 处理语义
+| 用户档位 | 内部比例 |
+|----------|----------|
+| 4K | 1.00 |
+| 3K | 0.85 |
+| 2K | 0.75 |
+| 1K | 0.50 |
 
-系统从多种来源（显示器捕获、窗口捕获、视频文件解码、图形API帧缓冲）获取RGB帧，同时采集元数据以供下游步骤使用。
+只有 4K 级输入应用缩放档位；其他输入默认保持原尺寸。4K 级判断为：长边不小于 3840 且短边不小于 1600，或像素数不小于 UHD 4K 的 85%、长边不小于 3200 且短边不小于 1600。
 
-#### 4.1.3 行业依据
+尺寸必须对齐 Compute Pipeline 的 workgroup 要求并保持输入宽高比。`render_size` 改变时，在帧边界停止接收新工作，等待在途 Frame Context，重建尺寸相关图像并清空时域状态。
 
-- **ISO/IEC TR 23090-27:2025**：定义了媒体直接交付给基于渲染的应用（如游戏引擎）的架构框架。
-- **T/UWA 035-2025**：规定了基于双目视差的裸眼3D系统内容层（3D视频采集、2D视频生成3D视频）的通用要求。
-- **SMPTE ST 2070**：提供了立体3D内容的通用规定。
+### 6.3 阶段 3：RGB 预处理
 
-#### 4.1.4 参考论文
+Vulkan Compute 完成格式转换、色彩空间线性化和尺寸调整，输出 `Linear RGB`。当输入尺寸和格式已满足要求时允许消除无意义 pass。
 
-- Cheng, Z. et al. "RTS-Mono: A Real-Time Self-Supervised Monocular Depth Estimation Method for Real-World Deployment." arXiv:2511.14107, 2025.
+HDR 输入必须依据捕获 metadata 执行明确的 transfer function 和 tone mapping。任何未知色彩空间必须记录告警，不得默认把 HDR 当作 sRGB。
 
-#### 4.1.5 前沿技术说明
+### 6.4 阶段 4：深度推理
 
-**选型方案**：采用统一捕获抽象层（Unified Capture Abstraction Layer），支持Windows DXGI/DirectCapture、Linux DRM/KMS、macOS ScreenCaptureKit等多后端。
-
-**淘汰方案对比**：
-
-| 淘汰方案 | 淘汰理由 |
-|---------|---------|
-| 单一平台捕获API（如仅Windows GDI） | 无法满足跨平台部署需求 |
-| 基于FFmpeg的软件解码直连 | 延迟高，缺乏与渲染管线的深度集成 |
-
-
-### 步骤 2：Resolve Render Size（解析渲染尺寸）
-
-#### 4.2.1 输入/输出
-
-| 项目 | 规格 |
-|------|------|
-| **输入** | `capture_size`、Application Runtime Target、Runtime Quality Mode、`Render Scale` / `stereo_render_scale` |
-| **输出** | `render_size`（宽度×高度） |
-
-#### 4.2.2 处理语义
-
-`render_size` 是 stereo synthesis、OpenXR upload、depth 对齐、mask、hole fill、temporal 的唯一工作尺寸。当前规范不向用户暴露 `native` / `fixed` / `dynamic` 策略选择；用户侧只暴露 `Render Scale` 作为 4K级输入的固定 scale 档位选择信号。4K级输入必须按档位 scale 乘以 `capture_size` 解析 `render_size`，并保持输入宽高比。
-
-| 输入条件 | 规则 | 用途 |
-|----------|------|------|
-| 非 4K级输入 | `render_size = align(capture_size)` | 避免普通 1080p/2K 输入被缩放，保持视差预算稳定 |
-| 4K级输入 | `render_size = align(capture_size × scale)` | 保持横屏、竖屏、16:10、DCI 4K、超宽输入比例，同时降低 OpenXR 上传量、网络码率、本地 GPU 压力 |
-
-4K级判断必须方向无关，并覆盖常见全屏和近 4K 窗口：3840x2160、2160x3840、4096x2160、3840x2400、3840x1600 属于 4K级；2560x1440、3440x1440、1080x1920、1000x3000 不属于 4K级。
+Inference Adapter 接收 GPU 驻留的 RGB 输入，输出 `Relative Depth`。适配器合同为：
 
 ```text
-short_side = min(capture_width, capture_height)
-long_side = max(capture_width, capture_height)
-pixels = capture_width * capture_height
-uhd_4k_pixels = 3840 * 2160
-
-is_4k_full_or_ultrawide = long_side >= 3840 and short_side >= 1600
-is_near_4k_window = pixels >= uhd_4k_pixels * 0.85 and long_side >= 3200 and short_side >= 1600
-is_4k_tier_input = is_4k_full_or_ultrawide or is_near_4k_window
-
-if not is_4k_tier_input:
-    render_size = align(capture_size)
-else:
-    scale = resolve_4k_scale_tier(stereo_render_scale)
-    render_size = align(capture_width * scale, capture_height * scale)
+submit(frame_id, input_resource, output_resource, wait_value, signal_value)
 ```
 
-`Render Scale` 的有效配置值只能是固定档位标签：
+约束如下：
+
+- 输出最终必须对齐 `render_size`；模型内部可使用独立尺寸。
+- 输出必须声明 near/far 方向、归一化范围、模型和后端版本。
+- CUDA/HIP 路径使用 Vulkan 导出的内存和 semaphore；推理完成后通过 external semaphore 交回 Vulkan。
+- 不支持可靠 external image 写入时，允许写入后端 GPU buffer，再执行一次 GPU 内拷贝。
+- 实时模式禁止 GPU 到 CPU 回读后再上传 Vulkan。
+- 推理失败不得复用无标记的陈旧深度；可在限定帧数内复用上一张深度，但必须设置 `depth_stale=true`。
+
+### 6.5 阶段 5：深度后处理
+
+深度后处理由 Vulkan Compute 完成，至少包括：
+
+1. near/far 方向规范化。
+2. 非有限值修复和范围裁剪。
+3. 对齐 `render_size` 的边缘感知上采样。
+4. 可选的轻量双边或引导滤波。
+5. 场景切换统计，输出时域重置信号。
+
+Relative Depth 不得作为真实米制 Z 值代入相机模型或 IPD 公式。
+
+### 6.6 阶段 6：视差预算
+
+`max_disparity_px` 表示左右眼总视差预算，不表示单眼位移。默认预算表：
+
+| 短边等级 | comfort | standard | strong | extreme |
+|----------|--------:|---------:|-------:|--------:|
+| 720 | 24 px | 36 px | 48 px | 64 px |
+| 1080 | 32 px | 48 px | 64 px | 80 px |
+| 1440 | 48 px | 64 px | 88 px | 112 px |
+| 2160 | 64 px | 96 px | 128 px | 160 px |
+
+短边位于等级之间时线性插值。最终宽高比超过 2:1 时应用：
 
 ```text
-4K / 100% -> scale = 1.0
-3K / 85%  -> scale = 0.85
-2K / 75%  -> scale = 0.75
-1K / 50%  -> scale = 0.5
-```
-
-示例：
-
-```text
-3840x2160 @ 75% -> 2880x1620
-3840x2400 @ 75% -> 2880x1800
-4096x2160 @ 75% -> 3072x1620
-3840x1600 @ 75% -> 2880x1200
-2160x3840 @ 75% -> 1620x2880
-```
-
-`1.0`、`0.85`、`0.75`、`0.5` 是内部 scale 值，不是用户输入字符串；runtime 不得接受任意连续数值，也不得保留 `0.92`、`0.58` 这类历史兼容阈值。
-
-#### 4.2.3 行业依据
-
-- **OpenXR 1.1规范**：定义了`XrViewConfigurationType`，包括`XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO`，提供了硬件无关的立体显示视图配置。
-- **ISO/IEC TR 23090-27:2025**：第8.3.1节涵盖单面板平面显示器的渲染分辨率管理。
-
-#### 4.2.4 参考论文
-
-- "Geometry-guided Online 3D Video Synthesis with Multi-View Temporal Consistency." arXiv e-prints, May 2025.
-
-#### 4.2.5 前沿技术说明
-
-**当前项目采用**：4K级输入固定 scale 档位解析。`Render Scale` 只在输入跨入 4K级条件后生效，非 4K 输入保持 `capture_size`；4K级输入按枚举 scale 缩放并保持输入宽高比。
-
-**未来候选**：动态分辨率稳帧率可以加入，但只能在 4K/3K/2K/1K 等稳定 scale 档位之间切换，不能每帧连续改变预算。
-
-**未采用/不适用**：
-
-| 方案 | 原因 |
-|------|------|
-| 任意用户输入连续缩放因子 | 会造成 `max_disparity_px` 预算随输入尺寸连续漂移，也会引发资源频繁重建 |
-| 固定输出分辨率档位 | 会改变 16:10、DCI 4K、超宽和竖屏输入比例，除非额外引入 crop / letterbox |
-| 用户可选 `native/fixed/dynamic` 策略 | 当前产品规范只保留固定 4K scale 档位选择 |
-| 每帧动态改 render size | 会导致 depth、mask、temporal、OpenXR texture 频繁重建 |
-
-
-### 步骤 3：Resize RGB To Render Size（RGB缩放至渲染尺寸）
-
-#### 4.3.1 输入/输出
-
-| 项目 | 规格 |
-|------|------|
-| **输入** | `source_rgb`（`capture_size`） |
-| **转换** | `capture_size` → `render_size` |
-| **输出** | `render_rgb`（`render_size`） |
-
-#### 4.3.2 处理语义
-
-将原始捕获的 RGB 图像转换到管线工作分辨率 `render_size`。若 `render_size == capture_size`，不得做无意义缩放；若 4K级输入按固定 scale 档位缩放，则 RGB 必须先缩放到 `render_size`，后续 depth、disparity、mask、hole fill、temporal、left/right eye 均以该尺寸为准。默认 `Render Scale` 路径必须保持输入宽高比；若未来引入 crop / letterbox，必须在 `render_size` 解析前明确 `aspect_policy`，否则 RGB 与 depth 会错位。
-
-#### 4.3.3 行业依据
-
-- **ITU-R BT.2025**：规定了3DTV节目制作与交换的数字图像系统标准。
-- **SMPTE标准体系**：为数字电影全流程提供技术规范。
-
-#### 4.3.4 参考论文
-
-- "NTIRE 2025 Challenge on HR Depth from Images of Specular and Transparent Surfaces." arXiv, 2025.
-
-#### 4.3.5 前沿技术说明
-
-**当前项目采用**：capture preprocess / runtime preprocess 负责把输入转为 RGB、float 0..1、CHW/BCHW tensor，并在需要时 resize 到 `render_size`。
-
-**未来候选**：质量优先路径可评估 Lanczos / Catmull-Rom；实时路径继续优先使用 GPU 友好的 bilinear / bicubic / area resize。
-
-**未采用/不适用**：不得在 depth provider 内隐式改变 runtime 工作坐标系；provider 内部 resize 后必须回到 `render_size`。
-
-**淘汰方案对比**：
-
-| 淘汰方案 | 淘汰理由 |
-|---------|---------|
-| Nearest-neighbor插值 | 锯齿严重，不适合立体合成 |
-| 仅Bilinear插值 | 高频细节保留不足，影响深度估计精度 |
-
-
-### 步骤 4：Depth Estimation（深度估计）
-
-#### 4.4.1 输入/输出
-
-| 项目 | 规格 |
-|------|------|
-| **输入** | `render_rgb`（`render_size`，RGB float 0..1，CHW/BCHW tensor） |
-| **处理** | Depth provider 内部可 resize 到模型输入尺寸，但最终必须回到 `render_size` |
-| **输出** | `depth_render`（`render_size`，normalized / relative depth，float tensor） |
-
-#### 4.4.2 处理语义
-
-从单目 RGB 图像估计每像素 normalized / relative depth。Depth provider 可以内部 resize 到 ONNX / TensorRT / PyTorch / MIGraphX / MPS / XPU 等后端要求的模型输入尺寸，但返回 runtime 前必须 upsample / align 到 `render_size`。
-
-Depth provider 必须满足以下契约：
-
-```text
-predict_profile(render_rgb) -> DepthProfileResult(depth, preprocess_ms, model_ms, postprocess_ms)
-depth.shape[-2:] == render_size
-depth range / near-far direction 必须可通过 provider_info / debug_info 追踪
-```
-
-默认 normalized-depth 路径不得把 provider 输出解释为真实米制 `Z`。只有明确进入 metric depth path，且具备真实相机内参与 metric depth 定义时，才允许使用物理 IPD 公式。
-
-#### 4.4.3 行业依据
-
-- **ITU/MPEG标准委员会**：正在定义虚拟视图系统的数据压缩（传输格式），并提供非规范性的深度估计和视图合成工具。
-- **T/UWA 035-2025**：2D视频生成3D视频是内容层的核心功能。
-
-#### 4.4.4 参考论文
-
-- Cheng, Z. et al. "RTS-Mono: A Real-Time Self-Supervised Monocular Depth Estimation Method for Real-World Deployment." arXiv:2511.14107, 2025.
-  - 可作为未来轻量级实时 provider 候选，不是当前项目默认 provider。
-- Cheng, J. et al. "MonSter++: Unified Stereo Matching, Multi-view Stereo, and Real-time Stereo with Monodepth Priors." CVPR 2025.
-  - 属于 stereo / multiview / stereo matching 与 monodepth prior 融合方向，可作为研究参考，不是当前单目 RGB depth provider 选型。
-- "CCNeXt: An Effective Self-Supervised Stereo Depth Estimation Approach." arXiv, 2025.
-  - 可作为未来自监督深度模型参考。
-
-#### 4.4.5 前沿技术说明
-
-**当前项目采用**：provider-agnostic 深度估计架构，而不是单一固定模型。当前 ModelRegistry 覆盖 Depth-Anything、Video-Depth-Anything、DA3、Metric Depth-Anything、InfiniDepth、Distill-Any-Depth、DPT、ZoeDepth、DepthPro 等模型族；Depth provider 后端覆盖 PyTorch CUDA、ONNX Runtime CUDA、TensorRT native、ORT TensorRT、PyTorch ROCm、MIGraphX、PyTorch MPS、PyTorch XPU。
-
-当前 provider 规则：
-
-```text
-ModelRegistry 解析模型 ID 和 family。
-provider 内部负责模型输入尺寸、normalize、artifact 加载、ONNX/TensorRT/MIGraphX 构建或加载。
-ONNX CUDA 必须实际启用 CUDAExecutionProvider，否则报错。
-TensorRT / MIGraphX / ONNX Runtime 等实时 provider 不得在主路径把输入先转 CPU numpy，或把 GPU 输出 `.numpy()` 后再 `torch.from_numpy()` 回 GPU；如因后端限制必须 CPU 回传，必须在控制台用红色 fallback 告警并记录 provider_info。
-TensorRT native / MIGraphX 等可记录 GPU event timing 的后端，必须区分真实 GPU preprocess/model/postprocess 时间与 CPU enqueue 时间；`rt_call` / `rt_total` 不得被解释为纯 GPU 模型耗时。
-MIGraphX ROCm7 构建优先尝试 FP8 autocast，失败再回退 FP16；明确 force-FP32 的模型不得进入 FP8/FP16 量化。
-IOBinding / DLPack / CUDA tensor / ROCm tensor / MPS / XPU 是后端优化，不改变 depth_render 合同。
-provider 输出必须回到 render_size。
-```
-
-**未来候选**：RTS-Mono 等轻量级实时单目深度模型可作为新增 provider 评估；Video Depth / temporal depth 模型可作为减少深度闪烁的候选，但必须保持 `depth_render` 对齐 `render_size` 的合同。
-
-**未采用/不适用**：
-
-| 方案 | 原因 |
-|------|------|
-| 把 RTS-Mono 写成当前主引擎 | 当前代码没有 RTS-Mono provider，不能作为正式实现描述 |
-| 把 MonSter++ 写成当前备用单目 provider | 其核心方向是 stereo / multiview / matching，不是当前单目 RGB runtime 的直接替换 |
-| 传统 SGM | 需要双目输入，不适用于当前单目 RGB 输入路径 |
-| 把 provider 输出当作 metric Z | 当前 normalized-depth 路径没有真实相机内参与米制深度合同 |
-
-
-### 步骤 5：Depth Postprocess（深度后处理）
-
-#### 4.5.1 输入/输出
-
-| 项目 | 规格 |
-|------|------|
-| **输入** | `depth_render`（`render_size`） |
-| **坐标系** | `render_size` |
-| **输出** | `depth_response_input`（`render_size`，归一化深度响应） |
-
-#### 4.5.2 处理语义
-
-对 provider 输出的 normalized / relative depth 进行合成前后处理，包括：
-- **范围归一化与方向确认**：明确 near/far 方向和归一化范围，并在 debug/provider metadata 中可追踪。
-- **render_size 对齐**：确保 `depth_render.shape[-2:] == render_size`。
-- **边缘与前景响应控制**：根据 runtime 参数应用 foreground scale、antialias / edge-aware upsample 等处理。
-- **状态边界**：深度后处理不得改变 `render_size`，也不得直接决定最终 `max_disparity_px`。
-
-#### 4.5.3 行业依据
-
-- **MPEG沉浸式视频标准**：定义了深度图的编码与传输格式。
-
-#### 4.5.4 参考论文
-
-- "Depth-guided Hole-filling Algorithm for View Synthesis." KCI, 2025.
-  - 利用局部深度信息生成方向向量图进行图像修补
-
-#### 4.5.5 前沿技术说明
-
-**当前项目采用**：provider 输出归一化、上采样到 `render_size`，并在 synthesis 阶段使用 `postprocess_depth()`、edge-aware upsample、foreground/antialias 等轻量处理。
-
-**未来候选**：Guided Filter / bilateral filter / temporal depth refinement 可以作为质量路径增强，但必须作为 depth postprocess 插件，不得改变 `depth_render` 坐标合同。
-
-**未采用/不适用**：不能把 depth postprocess 写成“绝对深度转 [0,1]”，因为当前默认路径本来就是 normalized / relative depth。
-
-**淘汰方案对比**：
-
-| 淘汰方案 | 淘汰理由 |
-|---------|---------|
-| 高斯滤波 | 过度平滑，深度边缘模糊，影响视差图质量 |
-| 仅裁剪+归一化 | 缺乏对深度估计噪声的抑制能力 |
-
-
-### 步骤 6：Resolve Parallax Budget（解析视差预算）
-
-#### 4.6.1 输入/输出
-
-| 项目 | 规格 |
-|------|------|
-| **输入** | `render_width`、`render_height`、`parallax_budget_preset`（comfort / standard / strong / extreme）、aspect protection rule |
-| **输出** | `max_disparity_px`（左右眼总视差预算，单位 pixel） |
-
-#### 4.6.2 处理语义
-
-本步骤根据 `render_size` 和用户选择的 Parallax Budget 档位解析名义 `max_disparity_px`。`max_disparity_px` 是左右眼总视差预算基准，不是单眼位移，也不是物理 IPD。用户连续调节立体深度强弱时使用 `depth_strength`，它在步骤7作用于实际视差位移，不改变本步骤的预算档位解析规则。
-
-推荐基础表：
-
-| 分辨率等级 | comfort | standard | strong | extreme |
-|------------|--------:|---------:|-------:|--------:|
-| 720p级 | 24px | 36px | 48px | 64px |
-| 1080p级 | 32px | 48px | 64px | 80px |
-| 1440p级 | 48px | 64px | 88px | 112px |
-| 2160p级 | 64px | 96px | 128px | 160px |
-
-分辨率等级由短边决定：
-
-```text
-short_side = min(render_width, render_height)
-base_budget = lookup_or_interpolate_budget(short_side, parallax_budget_preset)
-```
-
-宽高比保护属于 Parallax Budget 阶段，必须在 `render_size` 已解析之后执行。常规 4:3、16:10、16:9、9:16 不做修正；只有最终 `render_size` 超过 2:1 时才启用保护性降级：
-
-```text
-aspect = max(render_width, render_height) / min(render_width, render_height)
-
-if aspect <= 2.0:
-    aspect_factor = 1.0
-else:
-    aspect_factor = clamp(2.0 / aspect, 0.70, 1.0)
-
+aspect_factor = clamp(2.0 / aspect, 0.70, 1.0)
 max_disparity_px = base_budget * aspect_factor
 ```
 
-窗口捕捉的预算不得每帧重算。只有在用户切换质量档、OpenXR render scale 改变并导致 4K scale 档位变化、输入源跨入/离开 4K级判断条件、最终 `render_size` 短边变化超过 10%、最终 aspect 跨过 2.0 保护阈值或用户重新选择显示器/窗口时，才重新解析预算。
+视差预算只在尺寸、宽高比阈值或 preset 改变时重算，不得随每帧内容抖动。
 
-normalized-depth 路径不得使用下面的旧经验乘法链作为核心强度公式：
+### 6.7 阶段 7：视差场
+
+核心语义为：
 
 ```text
-IPD * stereo_scale * depth_strength * max_shift_ratio
-```
+disparity_px = depth_response(relative_depth, convergence)
+             * max_disparity_px
+             * depth_strength
 
-其中 `depth_strength` 只允许作为独立的用户强度 gain 使用，不能再和 `IPD`、`stereo_scale`、`max_shift_ratio` 组合成旧物理/经验强度链。
-
-#### 4.6.3 行业依据
-
-- **ISO/IEC TR 23090-27:2025**：支持渲染系统应用中的媒体自适应，允许根据应用场景调整渲染参数。
-- **T/UWA 035-2025**：定义了裸眼3D内容制作中视差控制的通用要求，强调内容自适应。
-- **OpenXR 1.1**：虽未强制指定视差控制方式，但提供了视图配置和合成层，允许应用自由决定视差幅度。
-
-#### 4.6.4 参考论文
-
-- Kim, S. et al. "Perceptual Disparity Limits for Stereoscopic 3D Content Based on Viewing Distance and Screen Size." IEEE Trans. on Visualization and Computer Graphics, vol. 28, no. 5, 2022.
-  - 提供了视差范围与感知舒适度的映射数据，可作为设定 `base_disparity` 和限幅的依据。
-- Wang, J. et al. "Content-adaptive Disparity Control for Stereoscopic Video." ACM Trans. on Graphics (Proc. SIGGRAPH), 2024.
-  - 提出基于场景语义的视差调节方法，可动态调整视差幅度。
-- "Real-time Disparity Control for Monocular Depth-based 3D Synthesis." IEEE VR 2025 Workshop, 2025.
-  - 展示了纯软件视差控制策略在实时管线中的应用。
-
-#### 4.6.5 前沿技术说明
-
-**当前项目采用**：`resolve_parallax_budget(render_width, render_height, preset)` 表驱动预算解析，支持 comfort / standard / strong / extreme、短边插值和超宽保护。
-
-**未来候选**：内容自适应、UI/人像/风景语义降预算可以作为上层 preset 选择器，但不得绕过 `max_disparity_px` 合同。
-
-**未采用/不适用**：不采用 `short_side × 0.035 × content_factor × perf_factor` 作为正式公式；该公式不等价于当前实现的固定预算表。
-
-**淘汰方案对比**：
-
-| 淘汰方案 | 淘汰理由 |
-|---------|---------|
-| IPD × stereo_scale × depth_strength × max_shift_ratio 公式 | 参数物理意义不清，且依赖不存在的物理测量值；该公式过度简化，缺乏对内容类型的考量。 |
-| 固定视差像素值（如30px） | 无法适应不同分辨率，在4K下立体感弱，在720p下易造成不适。 |
-| 完全依赖EDID等硬件信息 | 假设固定观看环境，不适合软件播放器和通用应用；且EDID信息在多数场景不可靠。 |
-
-
-### 步骤 7：Disparity Field（视差场生成）
-
-#### 4.7.1 输入/输出
-
-| 项目 | 规格 |
-|------|------|
-| **输入** | `depth_response_input`（归一化深度响应）、`convergence`（汇聚平面深度，软件可配置）、`max_disparity_px`（来自步骤6）、`depth_strength`（用户连续强度 gain） |
-| **输出** | `disparity_px` / `shift_px`（`render_size`，浮点视差图） |
-
-#### 4.7.2 处理语义
-
-**核心公式**：
-```text
-disparity_px = depth_response(depth, convergence) × max_disparity_px × depth_strength
-left_shift_px = +disparity_px / 2
+left_shift_px  = +disparity_px / 2
 right_shift_px = -disparity_px / 2
 ```
 
-其中 `depth_response(depth, convergence)` 将 normalized / relative depth 映射到相对视差权重，建议范围为 `[-1, 1]`，并在 convergence 附近接近 0。`depth_strength` 是用户连续调节立体深度强弱的 gain；`convergence` 只负责移动零视差/汇聚平面，不能替代 depth strength 当作全局强度滑杆。near/far 方向由 provider 输出约定和 depth_response 曲线共同决定，必须在 debug metadata 中可追踪，不得在下游阶段重新猜测。
+`depth_response` 输出建议限制在 `[-1, 1]`。`convergence` 只定义零视差平面，`depth_strength` 只定义连续强度增益，二者不得合并为旧式 IPD 经验乘法链。
 
-#### 4.7.3 行业依据
+Compute Shader 必须对 NaN、越界采样和极端视差进行限幅，并生成供 Warp 与 Hole Fill 使用的边缘风险数据。
 
-- **MPEG虚拟视图系统**：视差估计是虚拟视图系统的三大核心组件之一。
-- **T/UWA 035-2025**：定义了双目成像的三种视差关系。
+### 6.8 阶段 8：双目变形
 
-#### 4.7.4 参考论文
+Stereo Warp 使用反向采样生成 Left Eye 和 Right Eye，并写出原始 disocclusion mask。必须满足：
 
-- "DEFOM-Stereo: Depth Foundation Model Based Stereo Matching." arXiv, 2025.
-  - 在KITTI 2012、KITTI 2015、Middlebury、ETH3D基准上排名第一
-- "Trans embedded encoding volume for stereo matching." Applied Intelligence, 2025.
-  - 在SceneFlow数据集上EPE达0.42
+- 两眼使用同一份不可变视差场。
+- 位移单位为 `render_size` 坐标中的像素。
+- 边界采样策略显式定义，不得读取图像外内存。
+- 前后景冲突按深度优先级处理。
+- Warp 只负责几何变形，不以模糊掩盖超预算视差。
 
-#### 4.7.5 前沿技术说明
+### 6.9 阶段 9：遮挡与空洞修补
 
-**当前项目采用**：`depth_response(depth, convergence) * max_disparity_px * depth_strength` 的显式视差控制模型。当前默认响应曲线是可追踪的规范曲线名称，后续可替换为更复杂曲线，但输出仍必须是 `render_size` 对齐的 `disparity_px`。
+实时默认采用方向性、边缘感知的多轮 Compute Pass：mask 膨胀、背景方向搜索、候选颜色选择和羽化合成。修补不得跨越明确的前景深度边缘，也不得改变未被 mask 标记的有效区域。
 
-**未来候选**：非线性 depth response、场景自适应 convergence、前景保护曲线可以加入，但必须保持 Parallax Budget 负责档位预算、Depth Strength 负责用户连续强度 gain、Convergence 负责零视差平面的分层语义。
+大面积生成式补图不进入默认实时管线。若未来提供离线质量模式，必须使用独立产品模式和资源预算。
 
-**淘汰方案对比**：
+### 6.10 阶段 10：时域稳定
 
-| 淘汰方案 | 淘汰理由 |
-|---------|---------|
-| 线性深度-视差映射 | 缺乏对感知非线性的建模，立体感不足 |
-| 固定汇聚平面 | 无法适应不同场景的深度分布 |
+时域稳定以左右眼、深度、mask 和历史置信度为输入。静态区域增加历史权重，运动、遮挡和场景切换区域降低历史权重。
 
+以下事件必须清空历史资源：
 
-### 步骤 8：Stereo Warp（立体扭曲/视图合成）
+- `render_size` 改变。
+- 捕获源改变或时间戳回退。
+- 模型、depth direction 或 depth response 改变。
+- `temporal_enabled` 状态改变。
+- 场景切换检测触发。
+- Device lost 或交换链重建。
 
-#### 4.8.1 输入/输出
+时域处理不得修改 Parallax Budget 的定义，也不得因历史帧滞后扩大有效视差。
 
-| 项目 | 规格 |
-|------|------|
-| **输入** | `render_rgb`、`disparity_px`（`render_size`） |
-| **输出** | `left_eye`、`right_eye`（`render_size`）、原始遮挡/去遮挡区域掩码 |
-| **位移规则** | `left_shift_px = +disparity_px / 2`，`right_shift_px = -disparity_px / 2` |
+### 6.11 阶段 11：打包和场景合成
 
-#### 4.8.2 处理语义
+Stereo Compute Graph 的标准输出是完整分辨率 Left Eye 和 Right Eye。SBS 仅作为虚拟屏幕纹理或非 XR 输出的打包形式：
 
-基于 DIBR（Depth-Image-Based Rendering）技术生成左右眼：
-1. `left_shift_px = +disparity_px / 2`
-2. `right_shift_px = -disparity_px / 2`
-3. 所有 shift 都在 `render_size` 像素坐标系内表达。
-4. Warp 阶段只负责几何位移和 raw occlusion / disocclusion 区域暴露，不负责用补洞掩盖过大的视差预算。
+- Full-SBS：`2 * render_width` × `render_height`。
+- Half-SBS：`render_width` × `render_height`，每眼横向缩放为一半。
+- Eye Pair：两个独立 Vulkan Image，供 OpenXR 场景直接采样。
 
-#### 4.8.3 行业依据
+Filament Scene Renderer 必须：
 
-- **MPEG沉浸式视频标准**：支持通过多个真实或虚拟摄像机捕获的沉浸式视频内容的存储与分发。
-- **DIBR是虚拟视图合成的标准技术**。
+1. 加载 glTF/GLB 房间、手柄和场景资产。
+2. 使用 Left/Right Eye 或 SBS 对应区域更新虚拟屏幕材质。
+3. 按 OpenXR 每眼 pose 和 FOV 渲染 Projection Layer。
+4. 将 Glow、墙面反射和 UI Layer 作为 Vulkan 资源采样。
+5. 直接写入 acquire 的 OpenXR `VkImage`，不经过中间 D3D11/GL 交换链。
 
-#### 4.8.4 参考论文
+---
 
-- "GenStereo: Towards Open-World Generation of Stereo Images and Unsupervised Matching." arXiv, 2025.
-  - 基于扩散模型，将扩散过程条件化为视差感知坐标嵌入和扭曲输入图像
-  - 在11个立体数据集上训练，展现强泛化能力
-- "Novel view synthesis with wide-baseline stereo pairs based on local–global information." 2025.
-- "High efficiency depth image-based rendering with simplified inpainting-based hole filling." Springer.
+## 7. 异步光效计算
 
-#### 4.8.5 前沿技术说明
-
-**当前项目采用**：baseline / layered DIBR 合成路径。`fast` / `fast_plus` 使用 baseline shift，`quality_4k` / `hq_4k` 使用 layered synthesis；OpenXR RGB+depth direct 路径由 viewer shader 使用规范 uniform snapshot 现场生成双眼。
-
-**未来候选**：真实 3D warping、相机内参反投影、Z-buffer 或 mesh-based reprojection 可以作为 metric-depth / calibrated-camera 路径探索，但不属于当前 normalized-depth runtime 的默认实现。
-
-**未采用/不适用**：当前默认路径没有真实相机内参和 metric `Z`，因此不能把“3D反投影 + Z-buffer”写成已采用实现。
-
-**淘汰方案对比**：
-
-| 淘汰方案 | 淘汰理由 |
-|---------|---------|
-| 前向映射（Forward Mapping） | 产生大量空洞，后处理复杂 |
-| 简单像素复制平移 | 无遮挡处理，立体感差 |
-
-
-### 步骤 9：Mask and Hole Fill（掩码与空洞填充）
-
-#### 4.9.1 输入/输出
-
-| 项目 | 规格 |
-|------|------|
-| **输入** | `left_eye`、`right_eye`、`depth_render`、`disparity_px`、遮挡掩码 |
-| **输出** | `filled_left_eye`、`filled_right_eye`（`render_size`） |
-
-#### 4.9.2 处理语义
-
-1. **遮挡区域识别**：利用遮挡掩码标记在视图合成中暴露的背景区域
-2. **空洞填充策略**：根据 mask、depth_render、disparity_px / shift_px 对左右眼暴露区域进行修补。Mask 只负责标记风险区，不负责修复本身。Hole fill 不得承担“修复过大视差预算”的职责。
-
-#### 4.9.3 行业依据
-
-- **DIBR空洞填充是虚拟视图生成中最关键的问题**。
-
-#### 4.9.4 参考论文
-
-- "Depth-guided Hole-filling Algorithm for View Synthesis." KCI, 2025.
-  - 基于局部深度信息为每个空洞像素生成方向向量图进行图像修补
-- "AuraFusion360: Augmented Unseen Region Alignment for Reference-based 360° Unbounded Scene Inpainting." CVPR 2025.
-  - 深度感知不可见掩码生成与自适应引导深度扩散
-- "An efficient hole filling for depth image based rendering."
-
-#### 4.9.5 前沿技术说明
-
-**当前项目采用**：`edge_aware_fill` / `directional_edge_aware_fill`，并通过 `hole_fill_mode`、`hole_fill_radius`、`hole_fill_strength`、`mask_feather_radius`、`edge_threshold`、`edge_dilation` 等参数控制实时质量路径。OpenXR 实时默认推荐 balanced；静态图或导出可以使用 quality。
-
-**未来候选**：AI inpainting 可以作为离线/质量增强路径，但不得进入默认实时路径，也不得掩盖过大的 `max_disparity_px`。
-
-**未采用/不适用**：当前没有把大面积 AI 修补网络作为默认 runtime 依赖。
-
-**淘汰方案对比**：
-
-| 淘汰方案 | 淘汰理由 |
-|---------|---------|
-| 仅背景色填充 | 视觉质量差，产生明显伪影 |
-| 各向同性扩散填充 | 跨边缘扩散，产生模糊 |
-| 仅依赖单一策略 | 无法处理多样化的空洞形态 |
-
-
-### 步骤 10：Temporal Stabilization（时域稳定化）
-
-#### 4.10.1 输入/输出
-
-| 项目 | 规格 |
-|------|------|
-| **输入** | `filled_left_eye`、`filled_right_eye`、掩码、时域状态 |
-| **输出** | `stable_left_eye`、`stable_right_eye`（`render_size`） |
-| **重置条件** | `render_size`变化 / source target变化 / scene reset时重置时域状态 |
-
-#### 4.10.2 处理语义
-
-1. **时域滤波**：对左右眼输出与历史状态进行稳定化处理。
-2. **遮挡/掩码边界**：mask 区域可降低时域依赖，避免拖影。
-3. **状态重置**：scene reset、`render_size` 变化、source target 切换、temporal 关键设置变化时必须清空相关历史状态。
-4. **语义边界**：Temporal 只负责跨帧稳定，不得改变当前帧的 `max_disparity_px` 预算语义。
-
-#### 4.10.3 行业依据
-
-- **OpenXR规范**：定义了视图配置和合成层，时域稳定化是提升XR体验的关键技术。
-
-#### 4.10.4 参考论文
-
-- "StereoFG: Generating Stereo Frames from Centered Feature Stream." SIGGRAPH Asia 2025.
-  - 新颖循环网络将中心特征传播到下一帧以提升时域稳定性
-- "PPMStereo: Pick-and-Play Memory Construction for Consistent Dynamic Stereo Matching." NeurIPS 2025.
-  - 时域一致的深度估计，对AR等应用至关重要
-- "Stable Sample Caching for Interactive Stereoscopic Ray Tracing." 2025.
-  - 时域抗锯齿（TAA）与基于哈希的着色缓存
-
-#### 4.10.5 前沿技术说明
-
-**当前项目采用**：runtime temporal state + scene reset / render_size reset / source target reset 机制，使用 `temporal_enabled`、`temporal_strength`、`scene_reset_threshold` 等参数控制。
-
-**未来候选**：运动矢量、optical flow、temporal depth model 可以作为质量增强，但必须显式记录依赖和 reset 条件。
-
-**未采用/不适用**：当前默认实现不依赖 motion-vector 驱动的 MA-EMA，因此不能把运动矢量场写成已采用输入。
-
-**淘汰方案对比**：
-
-| 淘汰方案 | 淘汰理由 |
-|---------|---------|
-| 无时域处理 | 帧间闪烁严重，立体感不稳定 |
-| 固定系数EMA | 运动场景产生拖影，静态场景噪声抑制不足 |
-| 仅单帧处理 | 无法利用时域信息提升质量 |
-
-
-### 步骤 11：Output Pack / Viewer Upload（输出打包与视图上传）
-
-#### 4.11.1 输入/输出
-
-| 项目 | 规格 |
-|------|------|
-| **输入** | `stable_left_eye`、`stable_right_eye`（`render_size`） |
-| **输出** | 多种输出格式（见下文） |
-
-#### 4.11.2 处理语义
-
-**A. 本地/网络输出格式**：
-- **Mono**：单目（取左眼或平均）
-- **Half-SBS**：左右水平并排，每眼横向压缩 1/2，packed frame 总尺寸为 `render_width × render_height`
-- **Full-SBS**：左右水平并排，每眼保留完整宽度，packed frame 总尺寸为 `2 × render_width × render_height`
-- **Half-TAB**：左右上下排列，每眼纵向压缩 1/2，packed frame 总尺寸为 `render_width × render_height`
-- **Full-TAB**：左右上下排列，每眼保留完整高度，packed frame 总尺寸为 `render_width × 2 × render_height`
-- **Anaglyph**：红蓝/红青互补色
-- **Interleaved**：像素/行交错
-- **Leia**：Leia光场显示格式
-- **Depth Map**：RGB + 深度图输出
-
-**B. OpenXR Full Synthesis**：
-- runtime 应优先直接产出 OpenXR 可消费的 `uint8` / RGBA GPU tensor，避免 viewer 端重复执行 float clamp / multiply / uint8 转换。
-- Windows OpenXR 主路径应优先使用 D3D11 native：`CUDA tensor -> D3D11 texture -> OpenXR D3D11 swapchain / projection layer`。该路径用于绕开 OpenGL swapchain / CUDA-GL interop 的同步和格式限制。
-- OpenGL OpenXR 只作为兼容 fallback：`CUDA/HIP/ROCm tensor -> GL PBO / GL texture -> OpenXR OpenGL swapchain`。CUDA 后端可优先尝试 CUDA/GL image texture copy，失败后使用 PBO fallback；HIP/ROCm 默认使用共享 PBO 路径。
-- 任一 GPU upload 失败导致 CPU fallback 时，必须在控制台用红色标识，并记录失败原因。
-
-**C. OpenXR RGB+D Depth Direct**：
-- 输出 RGB + Depth，由 viewer shader 消费。
-- Viewer Shader 消费 RuntimeSettingsSnapshot 派生出的 shader uniform snapshot。该 snapshot 必须表达 `max_disparity_px`、`depth_strength`、`depth_response`、`convergence`、`render_size`、`screen_roll` 等规范语义；viewer 不得把 IPD、stereo_scale、max_shift_ratio 当作 normalized-depth 强度链重新解释。
-- RGB/depth 若仍停留在算法内部，应保持 GPU tensor；只有进入 OpenXR / 本地 viewer 显示边界时才上传到 D3D11 texture、GL texture、Metal texture 或其它图形资源。
-
-**D. Texture Upload 与 Present 分层**：
-- 可以统一的是“GPU tensor 到同类图形资源”的上传语义，不得把 OpenXR frame loop / `xr_wait` / `xr_submit`、local GUI loop / vsync / window present、capture/runtime pipeline 合并成同一层。
-- OpenGL 输出路径必须复用共享 GL texture uploader 语义：通用 RGB/depth 走 `GlTensorPboUploader`，CUDA RGBA image copy 走 `CudaGlTextureUploader`，避免 OpenXR 与本地窗口各自维护一套 GPU tensor -> GL texture 逻辑。
-- Windows OpenXR 长期主路径为 D3D11 native；OpenGL 保留为本地 viewer 和兼容 fallback。D3D11 native、Metal、Vulkan、RTMP/MJPEG 不得强行复用 OpenGL uploader。
-- `glGenerateMipmap` 只属于 OpenGL texture mipmap 生成，不是 CUDA 功能；实时 OpenXR/full-synthesis 上传路径默认不得每帧生成 mipmap，除非明确使用 mip level 采样并已证明收益大于 GPU 开销。
-
-#### 4.11.3 行业依据
-
-- **OpenXR 1.1规范**：
-  - `XrCompositionLayerProjection`：表示从每只眼的视点使用透视投影渲染的平面投影图像
-  - 支持 `XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO` 主立体显示配置
-  - Quad Layer Shape在所有OpenXR运行时上均受支持
-- **ISO/IEC TR 23090-27:2025**：定义了渲染系统应用的端到端互操作性用例
-- **SMPTE ST 2070**：立体3D在MXF中的存储格式
-- **ITU-R BT.2025**：3DTV节目制作与交换标准
-
-#### 4.11.4 前沿技术说明
-
-**选型方案**：采用**统一输出抽象层（Unified Output Abstraction Layer）** ，支持：
-1. 所有主流立体格式的动态切换
-2. OpenXR原生集成（Full Synthesis模式）
-3. 灵活扩展新格式（插件化架构）
-
-**淘汰方案对比**：
-
-| 淘汰方案 | 淘汰理由 |
-|---------|---------|
-| 仅单一输出格式（如仅SBS） | 缺乏灵活性，无法适配多种显示设备 |
-| 硬编码OpenXR输出 | 无法支持非XR应用场景（如裸眼3D屏） |
-| 无RGB+D Direct模式 | 无法利用Viewer端Shader的灵活性 |
-
-
-## 5. 整体约束与一致性规则
-
-### 5.1 分辨率一致性
-
-| 约束项 | 规则 |
-|--------|------|
-| 工作分辨率 | 所有中间产物必须对齐 `render_size` |
-| 输入分辨率 | `capture_size` 可任意，但进入合成前必须统一 |
-| 输出分辨率 | 按输出格式规范，左右眼各自为 `render_size` |
-
-### 5.2 数据类型一致性
-
-| 数据类型 | 规格 |
-|---------|------|
-| RGB | 8-bit per channel, sRGB |
-| Depth | float tensor，normalized / relative depth，range 与 near/far 方向必须可追踪 |
-| Disparity | 32-bit float 或等效 tensor，像素单位 |
-| Mask | boolean / float / 8-bit 均可，但语义必须是 occlusion / disocclusion 风险区 |
-| Temporal State | 与 left/right eye 或内部历史状态对齐，`render_size` 变化时必须重置 |
-
-### 5.3 坐标系一致性
-
-- **图像坐标**：左上角原点，(0,0)在左上角
-- **深度坐标**：near/far 方向由 depth provider 与 depth_response 约定，不得由下游阶段猜测。
-- **视差坐标**：`disparity_px` 是左右眼总视差预算下的像素位移场；展示层的正负方向必须通过 eye generation / presentation contract 明确。
-
-### 5.4 时序一致性
-
-- 帧序列必须保持时间戳单调递增
-- 时域状态在场景切换时必须重置
-- 分辨率变化时必须重置时域状态
-
-### 5.5 视差控制约束（新增）
-
-- `max_disparity_px` 完全由软件层按 `render_size` 和 Parallax Budget 档位解析，不依赖任何物理测量值。
-- normalized-depth 路径不得把 `IPD`、`stereo_scale`、`depth_strength`、`max_shift_ratio` 作为旧核心强度链。
-- `depth_strength` 保留为独立用户 gain，用于连续调节实际视差位移；它不得重新引入 IPD / Stereo Scale / Max Shift Ratio。
-- 应用层可根据具体显示设备特性选择不同 `parallax_budget_preset`，但管线内部不做硬件参数解析。
-
-### 5.6 实时调度与反压约束（新增）
-
-- 实时捕获到 runtime 的链路必须采用 latest-frame 语义：下游处理落后时保留最新帧、丢弃旧帧，不允许按捕获帧序无界排队。
-- CUDA runtime 路径不得把每帧 GPU work 无限制异步提交到默认流或后台流后继续消费下一帧；否则即使 capture handler 本身很快，也会因为 GPU 队列积压反压 WGC / CUDA interop，使高刷捕获退化到 50-60 FPS。
-- 默认策略为 `D2S_RUNTIME_SYNC_AFTER_FRAME=auto`：当 runtime 使用 CUDA 后端时，每个完整 runtime frame 结束后必须同步到 GPU 完成边界，再释放本帧并进入下一帧。`D2S_RUNTIME_SYNC_AFTER_FRAME=1` 可强制启用；`D2S_RUNTIME_SYNC_AFTER_FRAME=0` 仅用于诊断或明确接受更高延迟/反压风险的实验路径。
-- 该约束由 runtime 后段决定，不由 OpenXR、Local Viewer、3D Monitor、MJPEG/RTMP 等输出目标决定。只要进入同一个 CUDA runtime 合成/深度/输出后段，就必须遵守相同的反压控制语义。
-- 捕获统计中 `overwrite/drop` 是正常的 latest-frame 丢帧位置；`drain_drop=0` 不代表没有丢帧，只表示旧帧已经在 producer-side raw queue 被覆盖。测试和日志解释必须区分 capture FPS、runtime FPS、raw overwrite/drop 和 consumer drain drop。
-
-### 5.7 OpenXR 提交与诊断约束（新增）
-
-- OpenXR `xr_wait` / `xr_poll` / `xr_submit` / runtime present 时间属于设备运行时调度与显示提交，不得混同为 StereoRuntime depth/synthesis/SBS 生成耗时。
-- FPSBreakdown 必须分开记录并解释 `capture_fps`、`raw_fps`、`runtime_fps`、`viewer_fps`、`submit_fps`、`present_fps`、queue overwrite/drop；当 `StereoRuntime total_ms` 远低于显示帧间隔但 SBS/display FPS 低时，优先排查 viewer/upload/present/vsync/统计口径。
-- OpenXR 目标刷新率、头显实际刷新率、SSW/ASW/VDXR runtime 行为只影响 present 节奏与 deadline，不得用来解释 runtime 内部 3ms 级处理被“算成”20-30 FPS。
-- 所有运行模式的实时路径都必须对 CPU fallback 输出红色控制台告警，包括 OpenXR、本地窗口、网络/文件实时导出和 debug viewer；离线保存、报告生成、显式诊断导出可例外，但必须在日志中标明用途。
-- 任何 CUDA/GL image texture 上传失败都必须保留根因日志，不能直接静默禁用 image texture 后长期走 PBO 或 CPU fallback。允许 PBO 作为 GPU fallback，但要标记为 fallback，不得把它当成 image texture 成功。
-
-
-### 5.8 运行日志与用户可见状态规范（新增）
-
-实时 GUI、子进程 runtime、模型准备、OpenXR / viewer / upload 诊断必须统一进入 Python `logging` 管线，不得依赖散落的 `print()` 作为长期状态输出机制。日志系统同时服务三个目标：开发者可读的控制台诊断、可回溯的文件日志、普通用户可理解的 GUI 运行状态窗口。
-
-#### 5.8.1 日志输出通道
-
-运行时日志必须按以下三路输出：
-
-| 通道 | 实现 | 级别 | 规则 |
-|------|------|------|------|
-| CMD 控制台 | `logging.StreamHandler` | DEBUG+ | 用于开发者诊断；保持纯文本，避免 GUI / 文件日志与终端样式耦合 |
-| 文件日志 | `desktop2stereo.log` / `FileHandler` | DEBUG+ | 每次 GUI 启动使用 `w` 模式刷新；记录完整技术细节、logger name、级别和时间 |
-| GUI 日志窗口 | `GuiLogHandler` + Flet queue polling | DEBUG+，默认显示 ALL | 点击 Run 后在 GUI 右侧打开，展示实时运行状态、子进程输出、警告、错误和 Flet 原生进度控件 |
-
-GUI 日志窗口只能由 GUI 主线程轮询队列并更新控件；子线程、子进程 pump、logging handler 不得直接操作 Flet 控件。运行端输出必须保持纯文本或结构化进度事件，GUI 负责颜色、进度条和用户可见样式。
-
-#### 5.8.2 Logger 分层
-
-| Logger | 用途 | 语言 | GUI 样式 |
-|--------|------|------|---------|
-| `status` | 用户可见关键阶段，例如启动、下载模型、导出 ONNX、编译 TensorRT、运行中、停止、异常 | 必须使用当前 GUI locale 的 i18n 文案 | 粗体；INFO/WARNING/ERROR 可带状态 emoji 或图标 |
-| `child` | 子进程 stdout/stderr 原始输出 | 保留英文原文或子进程原始文本 | 普通日志；按内容自动映射 WARNING/ERROR |
-| `stdout` / `stderr` | 捕获漏网 `print()` / stream write | 原文 | 兜底通道，不应成为新代码主路径 |
-| `gui.*` / 模块 logger | GUI 操作、设备枚举、Flet client 准备、技术诊断 | 技术细节默认英文；必要用户提示可 i18n | 按级别着色 |
-
-新增 GUI 进程代码不得新增裸 `print()`。需要用户理解的阶段性状态必须走 `status_logger`；需要开发者排查的细节必须走模块级 `logger = logging.getLogger(__name__)`。子进程无法直接接入 GUI logging handler 时，必须由父进程 `_pump_child_output()` 按行捕获 stdout/stderr 后转发到 `child` logger。
-
-#### 5.8.3 子进程输出分级
-
-父进程读取子进程输出时必须保持行缓冲，不能因为 `read(4096)` 切断半行而生成残缺日志。分级规则如下：
+Effects Compute Graph 消费最近完成的屏幕颜色，但不得阻塞当前场景渲染。它包含：
 
 ```text
-包含 traceback / exception / error / failed / exited with code -> ERROR
-包含 warning / warn -> WARNING
-其余 -> INFO
+Screen Color N
+  -> Downsample
+  -> Separable Blur
+  -> Glow Texture N
+  -> Average Color / Histogram
+  -> Reflection Mask Composite
+  -> Reflection Texture N
 ```
 
-子进程的模型下载、ONNX 导出、TensorRT 编译、runtime preparation、capture start、shutdown 等关键阶段可以继续输出原始技术文本，但 GUI 面板必须能实时看到这些行。父进程不得再把子进程输出直接写回 stdout 作为唯一显示路径。
+场景渲染使用 `latest_effects_ready_index` 指向的最近完成纹理。没有新结果时继续使用上一结果。允许光效落后屏幕 1 至 3 帧；超过上限时丢弃最旧待处理任务。
 
-#### 5.8.4 GUI 运行状态窗口
+主图形队列不得等待光效 Compute Queue。只有资源首次创建、尺寸重建和关闭阶段允许全局等待。
 
-点击 Run 后，GUI 必须在主窗口右侧显示日志子窗口。该窗口至少包含：
+---
 
-- 动态标题：启动中、运行中、异常、已停止等状态。
-- 日志列表：自动滚动，保留最近日志，超过上限时裁剪旧行。
-- 级别过滤：ALL / DEBUG / INFO / WARNING / ERROR。
-- 清除功能：同时清空 ListView、handler cache 和 queue 中残留项。
-- 异常反馈按钮：出现 ERROR 后显示或高亮，点击后复制 bug report。
+## 8. OpenXR Vulkan 提交规格
 
-颜色规则：DEBUG 灰色，INFO 默认色，WARNING 橙色，ERROR 红色，模型下载 / 准备相关日志蓝色，完成 / cache hit 绿色。下载进度必须使用 Flet 原生 `ProgressBar`，旁边显示百分比、已下载/总量、速度和 ETA。`status` logger 的消息应比普通技术日志更醒目；但技术细节不得为了用户界面美化而丢失原文。
+### 8.1 Session 初始化
 
-#### 5.8.5 关键阶段 i18n
+OpenXR Presenter 必须使用 Vulkan Graphics Binding 创建 Session。禁止创建 D3D11 Session 后再桥接 Vulkan 图像。
 
-以下关键阶段属于用户可见状态，必须提供 EN / CN 文案，并通过 `status` logger 或等效用户状态通道显示：
-
-| 阶段 | 规范 key 示例 | 说明 |
-|------|---------------|------|
-| 首次运行环境准备 | `Preparing Flet package...` | 解压或准备 Flet desktop client |
-| 模型下载 | `Downloading model...` | 首次下载模型权重可能耗时较长 |
-| ONNX 导出 | `Exporting ONNX...` | 构建 ONNX artifact |
-| TensorRT 编译 | `Building TensorRT engine...` | 可能持续 5-30 分钟，必须持续显示进度或阶段 |
-| 启动采集 / runtime | `Starting Desktop2Stereo...` / `Starting capture...` | Run 后进入实际 runtime |
-| 运行中 | `Running` | 运行状态稳定后显示 |
-| 停止 | `Runtime stopped` / `Stopped` | 用户停止或进程退出 |
-| 异常 | `Error occurred` | 触发 GUI 错误标题和反馈按钮 |
-
-技术细节（provider 名称、CUDA/GL fallback 原因、TensorRT builder 输出、Python traceback、OpenXR runtime 诊断）应保留英文原文或底层原文，不强制翻译，避免丢失搜索和排障价值。
-
-#### 5.8.6 异常反馈内容
-
-GUI 日志窗口的“反馈异常”必须收集并复制以下内容：
+初始化顺序：
 
 ```text
-Desktop2Stereo version / report time
-OS / platform
-Computing device
-Run mode
-Depth model
-最近 200 条日志
-当前 GUI 配置 JSON
+xrCreateInstance
+-> xrGetSystem
+-> xrGetVulkanGraphicsRequirements2KHR
+-> create Vulkan instance/device for the XR system
+-> xrCreateSession with XrGraphicsBindingVulkan2KHR
+-> enumerate view configuration and swapchain formats
+-> create color swapchains
+-> xrBeginSession
 ```
 
-反馈内容不得包含硬编码 token、密码、用户私钥等敏感信息。若未来集成 GitHub Issue 或远程上传，必须在用户确认后执行；默认路径为复制到剪贴板，由用户自行粘贴到 QQ 群、GitHub Issues 或其它反馈渠道。
+### 8.2 帧循环
 
-#### 5.8.7 测试要求
+```text
+xrWaitFrame
+-> xrBeginFrame
+-> xrLocateViews
+-> acquire/wait swapchain image per view
+-> record Filament/Vulkan rendering
+-> submit graphics work
+-> wait only for required swapchain completion
+-> release swapchain images
+-> xrEndFrame
+```
 
-日志规范至少需要以下测试覆盖：
+每眼 Projection View 必须使用本帧 `xrLocateViews` 返回的 pose 和 FOV。场景相机 near/far clip 应由配置显式给出，并适配大型 glTF 场景；不得依赖旧查看器默认值。
 
-| 测试项 | 验证方法 |
-|--------|----------|
-| 控制台 logging 接入 | 静态检查 `_setup_console_logging()` 使用标准 `logging.StreamHandler` 且不依赖 `_TeeStream` |
-| 文件日志 | 检查 `FileHandler(LOG_FILE, mode="w", encoding="utf-8")` |
-| GUI 日志队列 | 检查 `GuiLogHandler`、queue polling、ListView 更新和自动裁剪 |
-| Flet 原生下载进度 | 检查结构化进度事件、`ft.ProgressBar`、百分比、速度、ETA 和完成态颜色 |
-| 右侧日志窗口 | 检查日志 panel 默认隐藏，Run 后显示 |
-| 子进程日志 | 检查 stdout/stderr pipe、行缓冲和 ERROR/WARNING 自动分级 |
-| GUI print 清理 | `src/gui` 新代码不得残留裸 `print()` |
-| Flet client 准备日志 | 使用 logging / caplog 验证缺包和准备包信息 |
-| i18n 状态文案 | EN / CN 均存在关键阶段文案 |
+### 8.3 Composition Layer
 
-## 6. 测试与验证建议
+- 主场景使用 `XrCompositionLayerProjection`。
+- 文本面板、虚拟键盘或确需独立采样率的 UI 可使用 Quad Layer。
+- Glow 和墙面反射默认合成在 Projection Layer 场景中；只有经过延迟和视觉验证后才拆为独立 Layer。
+- `xrEndFrame` 的 layer 列表只引用已完成并 release 的交换链图像。
 
-### 6.1 单元测试
+### 8.4 非 XR 输出
 
-| 测试项 | 验证方法 | 通过标准 |
-|--------|---------|---------|
-| 分辨率解析 | 输入各种capture_size，验证render_size输出 | 符合4.2节规则 |
-| 图像缩放 | 对比缩放前后分辨率 | 精确匹配render_size |
-| 深度估计 | 验证 provider 输出尺寸、dtype、range metadata、timing/provider_info | `depth_render.shape[-2:] == render_size`，并可追踪 provider 信息 |
-| GPU provider 零拷贝 | 检查 TensorRT / MIGraphX / ONNX realtime 路径是否出现 CPU numpy 往返 | 主路径无 CPU 回传；确有 fallback 时必须红色告警并记录原因 |
-| 视差预算计算 | 输入不同 `render_size` / preset / aspect，验证 `max_disparity_px` | 符合4.6.2节预算表、插值和超宽保护规则 |
-| 视差计算 | 验证公式 `disparity_px = depth_response × max_disparity_px × depth_strength` | 数值误差 < 0.01px |
-| 立体扭曲 | 验证左右眼位移方向与幅度 | left_shift = +d/2, right_shift = -d/2 |
+非 XR 桌面预览使用 Vulkan Swapchain；无窗口输出使用 Vulkan Image 导出给编码器或 API Consumer。两者复用 Stereo Compute Graph，但不复用 OpenXR 帧循环。
 
-### 6.2 集成测试
+非 XR 输出默认使用 Vulkan。兼容模式使用独立 OpenGL Presenter，但不得加载旧 viewer 模块或共享 Vulkan 资源所有权。
 
-| 测试项 | 验证方法 | 通过标准 |
-|--------|---------|---------|
-| 端到端延迟 | 从capture到输出的总耗时 | < 33ms（30 FPS）/ < 16ms（60 FPS） |
-| 分辨率一致性 | 检查所有中间buffer | 全部为render_size |
-| 格式兼容性 | 测试所有输出格式 | 所有格式正常输出 |
-| OpenXR兼容性 | 在主流OpenXR运行时测试 | 正常显示立体图像 |
-| OpenXR上传路径 | 强制测试 CUDA/GL image texture、PBO fallback、CPU fallback 告警 | image texture 优先；PBO/CPU fallback 有明确日志，CPU fallback 红色提示 |
-| Parallax Budget 可调性 | 调整 `parallax_budget_preset`，观察视差变化 | `max_disparity_px` 随 preset 单调变化 |
+---
 
-### 6.3 主观质量评估
+## 9. 配置与热更新
 
-| 评估维度 | 方法 | 参考标准 |
-|---------|------|---------|
-| 立体感 | 用户评分（1-5分） | 平均分 > 3.5 |
-| 空洞伪影 | 专家评审 | 无明显可见空洞 |
-| 时域稳定性 | 视频回放评审 | 无明显闪烁/抖动 |
-| 视觉舒适度 | 用户舒适度问卷 | 无不适报告率 > 90% |
-| Parallax Budget 偏好 | 用户偏好测试 | 多数用户选择 comfort / standard / strong 中的稳定档位 |
+控制面向运行时提交不可变 `RuntimeConfigSnapshot`：
 
-### 6.4 性能基准
+```text
+RuntimeConfigSnapshot {
+  version
+  graphics_backend
+  capture_source
+  output_target
+  render_scale_tier
+  depth_backend
+  depth_model
+  parallax_preset
+  depth_strength
+  convergence
+  depth_response
+  hole_fill_quality
+  temporal_enabled
+  temporal_strength
+  scene_asset
+  scene_near_clip
+  scene_far_clip
+  color_space
+  debug_flags
+}
+```
 
-| 平台 | 目标分辨率 | 目标帧率 | 测试条件 |
-|------|-----------|---------|---------|
-| 桌面端（RTX 4060 或同级） | 1080p/1440p/4K scale 档位 | 以实际 depth backend 和 synthesis mode 记录 | 本地 / OpenXR / stream 分路径测试 |
-| 高端桌面端（RTX 4080/4090 或同级） | 4K / 3K / 2K scale 档位 | 以实际 headset / viewer / stream 目标记录 | OpenXR full synthesis 与 RGB+depth direct 分开测试；同时记录 capture/runtime/viewer/submit/present 分段 FPS |
-| 移动/边缘端 | 1080p 或更低稳定档位 | 只在对应 provider 实现后声明 | 不得引用未接入 provider 的论文 FPS 作为项目性能指标 |
+| 参数组 | 应用方式 | 资源动作 |
+|--------|----------|----------|
+| Graphics Backend (`auto/vulkan/opengl`) | 不可热更新 | 返回 restart-required，重启后重新探测并创建图形会话 |
+| 视差、汇聚、时域强度 | 下一帧边界热更新 | 更新 uniform；必要时 reset temporal |
+| Hole Fill 参数 | 下一帧边界热更新 | 更新 uniform |
+| Render Scale | 受控重配置 | drain Frame Context、重建尺寸资源 |
+| Depth Model/Backend | 受控重配置 | 停止提交、重建 Inference Adapter、reset temporal |
+| Capture Source | 受控重配置 | 重建 Capture Adapter 和尺寸资源 |
+| Scene Asset | 异步加载后切换 | 创建当前 Backend 的新场景资产，帧边界交换 |
+| OpenXR Swapchain Format | Session 重建 | 重建 OpenXR Session 或 Swapchain |
 
-### 6.5 标准符合性验证
+旧配置字段不得在运行时静默映射。遇到已删除字段时，配置加载应报告明确错误和新字段名称，由配置迁移工具一次性转换文件，而不是在核心运行时长期兼容。
 
-- **ISO/IEC TR 23090-27:2025**：验证渲染系统媒体架构的符合性
-- **OpenXR 1.1**：使用OpenXR Conformance Test Suite验证
-- **T/UWA 035-2025**：验证裸眼3D系统参考架构的符合性
+---
 
+## 10. 调度、同步与延迟
 
-## 7. 参考文献
+### 10.1 Timeline 约定
 
-### 7.1 标准与规范
+每个帧使用单调递增的 timeline 值表达依赖：
 
-1. ISO/IEC TR 23090-27:2025. Information technology — Coded representation of immersive media — Part 27: Media and architectures for render-based systems and applications. ISO/IEC JTC 1/SC 29, 2025.
-2. T/UWA 035-2025. 基于双目视差的裸眼3D系统参考架构与通用技术要求. 世界超高清视频产业联盟, 2025.
-3. Khronos OpenXR 1.1 Specification. The Khronos Group Inc.
-4. SMPTE ST 2070-1. Stereoscopic 3D in MXF — Common Provisions. SMPTE.
-5. ITU-R BT.2025. 1280 × 720 digital image systems for the production and international exchange of 3DTV programs for broadcasting. ITU-R.
+```text
+capture_ready(frame_id)
+-> inference_done(frame_id)
+-> stereo_done(frame_id)
+-> scene_done(frame_id)
+-> present_released(frame_id)
+```
 
-### 7.2 学术论文
+Vulkan 内部同步优先使用 Timeline Semaphore + Synchronization2。与 CUDA/HIP 交界使用平台支持的 external semaphore。只在无法表达 timeline 的外部 API 上使用 binary semaphore。
 
-6. Cheng, Z., et al. "RTS-Mono: A Real-Time Self-Supervised Monocular Depth Estimation Method for Real-World Deployment." arXiv:2511.14107, 2025.
-7. Cheng, J., et al. "MonSter++: Unified Stereo Matching, Multi-view Stereo, and Real-time Stereo with Monodepth Priors." CVPR 2025.
-8. "StereoFG: Generating Stereo Frames from Centered Feature Stream." SIGGRAPH Asia 2025.
-9. "PPMStereo: Pick-and-Play Memory Construction for Consistent Dynamic Stereo Matching." NeurIPS 2025.
-10. "GenStereo: Towards Open-World Generation of Stereo Images and Unsupervised Matching." arXiv, 2025.
-11. "DEFOM-Stereo: Depth Foundation Model Based Stereo Matching." arXiv, 2025.
-12. "Depth-guided Hole-filling Algorithm for View Synthesis." KCI, 2025.
-13. "AuraFusion360: Augmented Unseen Region Alignment for Reference-based 360° Unbounded Scene Inpainting." CVPR 2025.
-14. "CCNeXt: An Effective Self-Supervised Stereo Depth Estimation Approach." arXiv, 2025.
-15. "Geometry-guided Online 3D Video Synthesis with Multi-View Temporal Consistency." arXiv e-prints, May 2025.
-16. "Glasses-free 3D display with ultrawide viewing range using deep learning." Nature, 2025.
-17. Kim, S. et al. "Perceptual Disparity Limits for Stereoscopic 3D Content Based on Viewing Distance and Screen Size." IEEE Trans. on Visualization and Computer Graphics, vol. 28, no. 5, 2022.
-18. Wang, J. et al. "Content-adaptive Disparity Control for Stereoscopic Video." ACM Trans. on Graphics (Proc. SIGGRAPH), 2024.
-19. "Real-time Disparity Control for Monocular Depth-based 3D Synthesis." IEEE VR 2025 Workshop, 2025.
+禁止在正常帧循环中调用 `vkDeviceWaitIdle`、`vkQueueWaitIdle` 或等价的全设备同步。
 
+### 10.2 反压策略
 
-## 附录A：缩略语表
+- Capture Queue：容量 1，覆盖旧帧。
+- Inference：最多 1 个当前任务和 1 个候选最新帧。
+- Stereo/Scene：受 `max_frames_in_flight` 限制。
+- Effects：最多保留 1 个待处理任务，旧任务可被覆盖。
+- Presenter：严格跟随 OpenXR `xrWaitFrame`，不得把预测帧无限排队。
+
+GPU 落后时优先丢弃未开始处理的旧输入，不取消已提交 GPU 工作，不继续提交无界任务。
+
+### 10.3 帧时间预算
+
+90 Hz XR 目标的参考预算：
+
+| 阶段 | 目标时间 |
+|------|---------:|
+| Capture import + RGB preprocess | <= 0.8 ms |
+| Depth inference | <= 5.0 ms |
+| Depth postprocess + stereo synthesis | <= 2.5 ms |
+| Filament scene render | <= 2.5 ms |
+| Queue/synchronization/application overhead | <= 0.8 ms |
+| 总应用 GPU 关键路径 | <= 10.0 ms |
+
+光效计算不计入主关键路径，但必须在平均 3 帧内产出。不同硬件和模型应分别记录 P50、P95、P99，不能用 CPU enqueue 时间代替 GPU 时间。
+
+---
+
+## 11. 错误处理与恢复
+
+| 故障 | 处理要求 |
+|------|----------|
+| Vulkan 初始化失败 | 输出缺失版本、扩展、格式或队列能力；满足 Fallback 条件时请求以 OpenGL 兼容模式受控重启，否则退出 |
+| External memory 导入失败 | 当前平台规范允许时切到一次 GPU copy，并永久标记本次会话路径；不切 CPU |
+| 推理提交失败 | 丢弃当前帧；在限定次数内重试，连续失败则停止运行时 |
+| Shader/Pipeline 创建失败 | 输出 shader hash、stage 和 validation 信息并停止启动 |
+| OpenXR Session loss | 停止提交、释放 Session 资源并按 Runtime 状态重建 |
+| Swapchain out of date | 在安全帧边界重建对应资源 |
+| `VK_ERROR_DEVICE_LOST` | 收集 device fault/validation 信息，终止当前 Device；不得在未知状态继续渲染 |
+| glTF 资产失败 | 阻止场景切换并保留当前有效场景；首次场景失败则停止启动 |
+
+所有降级必须是本规范明确定义的 Vulkan/GPU 路径。禁止以“保证能显示”为由静默启用旧 API 或 CPU 像素链路。
+
+---
+
+## 12. 可观测性
+
+### 12.1 每帧指标
+
+运行时至少记录：
+
+```text
+frame_id
+capture_timestamp_ns
+capture_to_present_ms
+capture_overwrite_count
+depth_stale
+gpu_preprocess_ms
+gpu_inference_ms
+gpu_stereo_ms
+gpu_scene_ms
+gpu_effects_ms
+xr_wait_ms
+xr_submit_ms
+present_interval_ms
+frames_in_flight
+active_config_version
+```
+
+GPU 阶段时间必须来自 Vulkan timestamp query 或推理后端 GPU event。`xr_wait_ms`、`xr_submit_ms` 和显示间隔必须与算法 GPU 时间分开统计。
+
+### 12.2 启动报告
+
+启动日志必须包含：
+
+- OS、CPU、GPU、驱动和 Vulkan API 版本。
+- Device UUID、队列族和启用扩展。
+- OpenXR Runtime、System、交换链尺寸和格式。
+- 推理模型、后端、精度和互操作模式。
+- Scene Renderer 版本、选定 Graphics Backend 和 Fallback 原因。
+- Shader/Pipeline Cache 命中状态。
+- 最终 `render_size`、`scene_size` 和帧上下文数量。
+
+### 12.3 用户可见状态
+
+GUI显示启动、模型准备、运行、重配置、Session恢复和失败状态。技术日志通过Python Runtime的结构化事件传给控制面；GUI不解析任意stdout文本来推断运行状态。
+
+---
+
+## 13. 测试与验收
+
+### 13.1 Vulkan 正确性
+
+| 测试 | 通过标准 |
+|------|----------|
+| Validation 全流程 | 30 分钟压力运行无 error；warning 有明确豁免记录 |
+| Resource lifetime | 无提前释放、重复释放、在途 descriptor 更新 |
+| Image layout | 每个 pass 的读写布局和 barrier 可由 capture 验证 |
+| Queue ownership | 独立 Compute/Transfer 队列设备上无 ownership 错误 |
+| Device lost 注入 | 运行时停止并生成完整诊断，不继续提交 |
+
+### 13.2 算法正确性
+
+| 测试 | 通过标准 |
+|------|----------|
+| 尺寸一致性 | 所有合成中间图像严格等于 `render_size` |
+| 深度方向 | 测试场景近景和远景视差方向符合 metadata |
+| 视差公式 | GPU 结果与参考实现误差 <= 0.01 px 或 FP16 合理误差 |
+| 双眼对称性 | `left_shift = +d/2`，`right_shift = -d/2` |
+| 空洞填充 | 未越过强深度边缘，无未初始化像素 |
+| Temporal reset | 所有规定事件后历史状态被清空 |
+| 色彩一致性 | sRGB/HDR 测试图在场景和输出端无重复 gamma |
+
+### 13.3 OpenXR 验收
+
+- 使用至少两个 Windows OpenXR Runtime 完成启动、运行、Session loss 和退出测试。
+- 左右眼 pose、FOV、eye order 和虚拟屏幕采样区域正确。
+- 交换链 acquire/wait/release 顺序符合规范。
+- 大型 glTF 场景 near/far clip 正确，无截断或深度精度明显异常。
+- 90 Hz 目标下 30 分钟无持续帧队列增长，P95 capture-to-present 满足产品阈值。
+
+### 13.4 性能验收
+
+| 项目 | 通过标准 |
+|------|----------|
+| CPU readback | 正式实时路径为 0 次/帧 |
+| Vulkan 主路径 API 隔离 | D3D11/OpenGL/WGL 调用为 0 |
+| 主路径 GPU copy | NVIDIA 零拷贝；其他平台不超过一次明确 GPU 内拷贝 |
+| Frame Context | 数量固定，无运行时持续增长 |
+| Capture queue | 始终有界，丢帧发生在 latest-frame 覆盖点 |
+| Effects | 不阻塞 Graphics Queue，平均滞后 <= 3 帧 |
+| Pipeline creation | 稳态帧循环中为 0 次 |
+
+OpenGL Fallback 必须单独验收，证明会话内没有 Vulkan/D3D11/WGL 混合调用、没有 CPU 实时像素回读，并正确标记受限功能。
+
+### 13.5 画质与舒适度
+
+- 标准测试集覆盖 UI、字幕、人物、快速运动、细线条、透明和镜面场景。
+- 专家评审不得出现持续双影、明显左右眼不一致、空洞闪烁和边缘撕裂。
+- 用户舒适性测试中无不适报告率目标不低于 90%。
+- comfort、standard、strong、extreme 的实际视差必须单调递增并保持限幅。
+
+---
+
+## 14. 交付阶段
+
+### 阶段 A：Vulkan/OpenXR 骨架
+
+- 建立 OpenXR Vulkan Session、交换链和每眼清屏提交。
+- 建立 Device Context、Frame Context、Timeline 和 GPU timing。
+- Filament Vulkan 后端渲染最小 glTF 场景到 OpenXR 交换链。
+
+退出条件：Validation 无 error，头显中稳定显示正确双眼场景。
+
+### 阶段 B：立体 Compute Graph
+
+- 完成 RGB preprocess、Depth postprocess、Parallax、Warp、Hole Fill 和 Temporal shader。
+- 建立固定资源图、descriptor 和 pipeline cache。
+- 使用离线/测试深度输入验证左右眼结果。
+
+退出条件：算法正确性测试和 Vulkan resource 测试全部通过。
+
+### 阶段 C：推理互操作
+
+- 接入 NVIDIA CUDA/TensorRT external memory 路径。
+- 接入 AMD ROCm/HIP 路径及一次 GPU copy 方案。
+- 建立 backend capability probe 和明确错误报告。
+
+退出条件：正式实时路径无 CPU readback，互操作稳定性和性能达标。
+
+### 阶段 D：场景与光效
+
+- 接入正式房间、手柄、虚拟屏幕材质。
+- 完成异步 Glow、平均色和墙面反射。
+- 验证 compute 滞后不影响主队列帧节奏。
+
+退出条件：完整场景和光效连续运行 30 分钟无资源与同步错误。
+
+### 阶段 E：产品化
+
+- 接入控制面、配置快照、结构化日志和故障报告。
+- 完成 OpenXR Runtime、GPU、分辨率和画质矩阵测试。
+- 完成 Vulkan 主路径与 OpenGL Fallback 的启动探测、功能分级和独立发布验证。
+- 删除旧运行时代码、旧桥接依赖和废弃配置字段。
+
+退出条件：本规范全部验收项通过；发布包只包含 Vulkan 主路径和本规范定义的隔离 OpenGL Fallback，不包含旧图形桥接后端。
+
+---
+
+## 15. 架构清理要求
+
+Vulkan 主路径和新 OpenGL Fallback 进入正式主线前，必须从运行时和构建系统中移除：
+
+- 与新 `GraphicsBackend` 接口无关的旧 OpenGL viewer、场景渲染和资源封装。
+- D3D11 OpenXR Graphics Binding 和交换链实现。
+- WGL_NV_DX_interop2、CUDA-GL interop、PBO uploader 和 GL mipmap 实时逻辑。
+- 旧 OpenGL/D3D11/CPU fallback 分支及其配置开关；只保留本规范定义的新 OpenGL 兼容模式。
+- 旧 viewer shader 对 IPD、stereo scale、max shift ratio 的强度解释。
+- CPU NumPy/PIL 逐帧 RGB、Depth、SBS 往返路径；Python 中的 GPU tensor、GPU handle 和 Vulkan绑定调用属于正式路径。
+- 仅为旧模块名、旧类接口和旧环境变量存在的适配器。
+
+删除应通过代码、依赖、构建产物和配置 schema 四个层面完成。文档或注释不得继续把已删除路径描述为可用方案，也不得把归档中的 OpenGL 旧架构等同于新 Fallback。
+
+---
+
+## 16. 规范性引用
+
+1. Khronos Vulkan 1.3 Specification。
+2. Khronos OpenXR 1.1 Specification。
+3. `XR_KHR_vulkan_enable2` Extension Specification。
+4. Vulkan Synchronization2、Timeline Semaphore、External Memory 与 External Semaphore 相关扩展规范。
+5. glTF 2.0 Specification。
+6. Filament Documentation and Native API Reference。
+7. ISO/IEC TR 23090-27:2025, render-based immersive media architectures。
+8. T/UWA 035-2025，基于双目视差的裸眼 3D 系统参考架构与通用技术要求。
+
+---
+
+## 附录 A：缩略语
 
 | 缩略语 | 全称 |
 |--------|------|
+| D2S | Desktop to Stereo |
 | DIBR | Depth-Image-Based Rendering |
-| FPS | Frames Per Second |
-| HMD | Head-Mounted Display |
-| MDE | Monocular Depth Estimation |
-| MPEG | Moving Picture Experts Group |
-| SBS | Side-By-Side |
-| SMPTE | Society of Motion Picture and Television Engineers |
-| SOTA | State-of-the-Art |
-| TAB | Top-And-Bottom |
-| TAA | Temporal Anti-Aliasing |
-| UWA | Ultra High-Definition Video Industry Alliance |
+| SBS | Side-by-Side |
 | XR | Extended Reality |
+| GPU | Graphics Processing Unit |
+| SPIR-V | Standard Portable Intermediate Representation - V |
+| GLB | Binary glTF |
+| HDR | High Dynamic Range |
+| P50/P95/P99 | 延迟或帧时间分位数 |
 
 ---
+
+本规格自 Vulkan 主线开发启动之日起生效。任何与本规范冲突的旧运行时设计，不再作为新架构的实现依据。
