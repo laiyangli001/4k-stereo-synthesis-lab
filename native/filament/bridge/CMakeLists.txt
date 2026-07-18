@@ -33,7 +33,15 @@ elseif(APPLE)
     set(_filament_lib_dir "${FILAMENT_SDK_ROOT}/lib/${_filament_arch}")
     find_library(COCOA_FRAMEWORK Cocoa REQUIRED)
     find_library(OPENGL_FRAMEWORK OpenGL REQUIRED)
-    target_link_libraries(filament_bridge PRIVATE ${COCOA_FRAMEWORK} ${OPENGL_FRAMEWORK})
+    find_library(COREVIDEO_FRAMEWORK CoreVideo REQUIRED)
+    find_library(METAL_FRAMEWORK Metal REQUIRED)
+    find_library(QUARTZCORE_FRAMEWORK QuartzCore REQUIRED)
+    target_link_libraries(filament_bridge PRIVATE
+        ${COCOA_FRAMEWORK}
+        ${OPENGL_FRAMEWORK}
+        ${COREVIDEO_FRAMEWORK}
+        ${METAL_FRAMEWORK}
+        ${QUARTZCORE_FRAMEWORK})
 elseif(UNIX)
     set(_filament_lib_dir "${FILAMENT_SDK_ROOT}/lib/${_filament_arch}")
     find_package(OpenGL REQUIRED)
