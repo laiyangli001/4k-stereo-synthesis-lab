@@ -17,7 +17,8 @@ permissions:
 jobs:
   build-windows:
     name: Windows x86_64
-    runs-on: windows-latest
+    # The bridge uses the Visual Studio 2022 CMake generator explicitly.
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
 
