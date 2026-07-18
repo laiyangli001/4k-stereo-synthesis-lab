@@ -1,0 +1,72 @@
+name: Build Filament Bridge
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'native/filament/bridge/**'
+      - '.github/workflows/filament-bridge.yml'
+  pull_request:
+    paths:
+      - 'native/filament/bridge/**'
+      - '.github/workflows/filament-bridge.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64
+            runner: ubuntu-latest
+            asset: filament-v1.74.0-linux.tgz
+            sha256: 47020e876fa9b9a22ba6ce3e0ebd45ed2595a41b87f2a18098f2b8f595a7e117
+            output: libfilament_bridge.so
+            needs_opengl_dev: true
+          - name: macOS arm64
+            runner: macos-14
+            asset: filament-v1.74.0-mac.tgz
+            sha256: f606f776ad0ac53eb5ed6f266cd7c3f37f18e160bc5cfa7ea291ffd12182f092
+            output: libfilament_bridge.dylib
+            needs_opengl_dev: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux OpenGL development files
+        if: matrix.needs_opengl_dev
+        run: sudo apt-get update && sudo apt-get install --yes libgl1-mesa-dev
+
+      - name: Download and verify Filament SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/${{ matrix.asset }}"
+          curl --fail --location --retry 3 \
+            "https://github.com/google/filament/releases/download/v1.74.0/${{ matrix.asset }}" \
+            --output "$archive"
+          actual="$(shasum -a 256 "$archive" | awk '{print $1}')"
+          test "$actual" = "${{ matrix.sha256 }}"
+          mkdir -p "$RUNNER_TEMP/filament-sdk"
+          tar -xzf "$archive" -C "$RUNNER_TEMP/filament-sdk"
+
+      - name: Configure and build bridge
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S native/filament/bridge -B native/filament/build/ci \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DFILAMENT_SDK_ROOT="$RUNNER_TEMP/filament-sdk/filament"
+          cmake --build native/filament/build/ci --config Release --parallel 2
+          test -f "src/xr_viewer/native/${{ matrix.output }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: filament-bridge-${{ matrix.runner }}
+          path: src/xr_viewer/native/${{ matrix.output }}
+          if-no-files-found: error
